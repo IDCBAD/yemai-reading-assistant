@@ -1,0 +1,290 @@
+import { isValidElement, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
+import { KoboyoIcon } from './KoboyoIcon';
+
+interface MessageListProps {
+  messages: ChatMessage[];
+  onUseStarter: (value: string) => void;
+  onRetry: (message: ChatMessage) => void;
+  onBranch: (message: ChatMessage) => void;
+}
+
+const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
+
+function CodeBlock({ children }: { children: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(children);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  };
+
+  return (
+    <div className="code-block">
+      <button className="code-copy pressable" type="button" onClick={copy} aria-label="复制代码">
+        <KoboyoIcon name={copied ? 'solid-checkmark' : 'copy'} size={13} />
+        {copied ? '已复制' : '复制'}
+      </button>
+      <pre>
+        <code>{children}</code>
+      </pre>
+    </div>
+  );
+}
+
+const ACTIVITY_STATUS_COPY: Record<RunActivityStatus, string> = {
+  pending: '等待运行',
+  running: '正在运行',
+  completed: '已完成',
+  failed: '运行失败',
+  stopped: '已停止',
+};
+
+function formatDuration(activity: RunActivity) {
+  if (!activity.startedAt || !activity.completedAt) return null;
+  const duration = Math.max(0, activity.completedAt - activity.startedAt);
+  if (duration < 1000) return `${Math.round(duration)} ms`;
+  return `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)} 秒`;
+}
+
+function ActivityStatusIcon({ status }: { status: RunActivityStatus }) {
+  if (status === 'running') return <span className="activity-spinner" aria-hidden="true" />;
+  if (status === 'pending') return <span className="activity-pending-dot" aria-hidden="true" />;
+  if (status === 'completed') return <KoboyoIcon name="solid-checkmark" size={12} />;
+  if (status === 'failed') return <KoboyoIcon name="cross" size={12} />;
+  return <KoboyoIcon name="stop-generating-square" size={12} />;
+}
+
+function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
+  const [expanded, setExpanded] = useState(true);
+  const activeCount = activities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
+  const failedCount = activities.filter((activity) => activity.status === 'failed').length;
+  const summary = activeCount > 0
+    ? `正在运行 ${activities.length} 个工具`
+    : failedCount > 0
+      ? `${activities.length} 个工具中有 ${failedCount} 个失败`
+      : `运行了 ${activities.length} 个工具`;
+
+  return (
+    <section className="run-activity" aria-label="Agent 运行过程">
+      <button
+        className="run-activity-toggle pressable"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className={`disclosure-caret${expanded ? ' is-open' : ''}`} aria-hidden="true" />
+        <KoboyoIcon name="file" size={13} />
+        <span>{summary}</span>
+      </button>
+      {expanded && (
+        <div className="run-activity-list">
+          {activities.map((activity) => {
+            const duration = formatDuration(activity);
+            return (
+              <div className={`run-activity-item is-${activity.status}`} key={activity.id}>
+                <span className="activity-status-icon" aria-label={ACTIVITY_STATUS_COPY[activity.status]}>
+                  <ActivityStatusIcon status={activity.status} />
+                </span>
+                <span className="activity-title">{activity.title}</span>
+                {duration && <span className="activity-duration">{duration}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function getRunNote(message: ChatMessage) {
+  if (message.status === 'queued') return { kind: 'queued', copy: '排队中' } as const;
+  if (message.status === 'stopped' && !message.content) return { kind: 'stopped', copy: '已停止' } as const;
+  if (message.status === 'failed' && !message.content) {
+    return { kind: 'failed', copy: message.errorMessage ?? '运行失败' } as const;
+  }
+  if (message.status === 'running') {
+    const copy = message.stage === 'reading-page'
+      ? '正在读取当前页面…'
+      : message.stage === 'creating-conversation'
+        ? '正在创建 WorkOS 会话…'
+        : 'Agent 正在处理…';
+    return { kind: 'running', copy } as const;
+  }
+  return null;
+}
+
+function AssistantMessage({
+  message,
+  onRetry,
+  onBranch,
+}: {
+  message: ChatMessage;
+  onRetry: () => void;
+  onBranch: () => void;
+}) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const runNote = getRunNote(message);
+  const copyMarkdown = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1400);
+    } catch {
+      setCopyState('failed');
+      window.setTimeout(() => setCopyState('idle'), 1800);
+    }
+  };
+  const actionsAvailable = Boolean(message.content) && message.status !== 'streaming';
+  const footerAvailable = actionsAvailable || message.status === 'failed';
+
+  return (
+    <article className="message message--assistant">
+      <div className="assistant-rail" aria-hidden="true">
+        <span className="assistant-mark">
+          <KoboyoIcon name="bot" size={14} />
+        </span>
+        <span className="assistant-line" />
+      </div>
+      <div className="message-content">
+        {message.activities && message.activities.length > 0 && <RunActivityPanel activities={message.activities} />}
+        <div className="markdown-body">
+          {!message.content && runNote && (
+            <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
+              {runNote.copy}
+            </div>
+          )}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              pre({ children }) {
+                const child = isValidElement<{ children?: unknown }>(children) ? children : null;
+                const value = String(child?.props.children ?? '').replace(/\n$/, '');
+                return <CodeBlock>{value}</CodeBlock>;
+              },
+              code({ children }) {
+                return <code className="inline-code">{children}</code>;
+              },
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+          {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
+        </div>
+        {footerAvailable && (
+          <div className="assistant-footer" aria-label="回答操作">
+            {message.status === 'failed' && (
+              <button
+                className="assistant-action pressable"
+                type="button"
+                onClick={onRetry}
+                aria-label={message.content ? '重试回答' : '重新发送'}
+                title={message.content ? '重试回答' : '重新发送'}
+              >
+                <KoboyoIcon name="cycle" size={13} />
+              </button>
+            )}
+            {actionsAvailable && (
+              <>
+                <button
+                  className="assistant-action pressable"
+                  type="button"
+                  onClick={copyMarkdown}
+                  aria-label={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
+                  title={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
+                >
+                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={13} />
+                </button>
+                <button
+                  className="assistant-action pressable"
+                  type="button"
+                  onClick={onBranch}
+                  aria-label="从这条回答创建会话分支"
+                  title="从这条回答创建会话分支"
+                >
+                  <KoboyoIcon name="message-square-plus" size={13} />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function UserMessage({ message }: { message: ChatMessage }) {
+  return (
+    <article className="message message--user">
+      <div className="user-message-card">
+        {message.references?.map((reference) => (
+          <blockquote className="sent-reference" key={reference.id}>
+            <KoboyoIcon name="quote" size={13} />
+            <span>{reference.text}</span>
+          </blockquote>
+        ))}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="sent-attachments">
+            {message.attachments.map((attachment) => (
+              <span key={attachment.id}>
+                <KoboyoIcon name="file" size={13} />
+                {attachment.filename}
+              </span>
+            ))}
+          </div>
+        )}
+        {message.content && <p>{message.content}</p>}
+      </div>
+    </article>
+  );
+}
+
+export function MessageList({ messages, onUseStarter, onRetry, onBranch }: MessageListProps) {
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages]);
+
+  if (messages.length === 0) {
+    return (
+      <main className="messages messages--empty">
+        <div className="empty-state">
+          <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
+          <span className="empty-kicker">阅读工作页</span>
+          <h2>从当前页面开始</h2>
+          <p>当前 Tab 对应一条独立会话，问题、引用、草稿和 Agent 记忆都只属于这里。</p>
+          <div className="starter-list">
+            {STARTERS.map((starter) => (
+              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter)} key={starter}>
+                {starter}
+              </button>
+            ))}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="messages" aria-live="polite">
+      <div className="conversation-date">今天 · 当前工作页</div>
+      {messages.map((message) =>
+        message.role === 'assistant' ? (
+          <AssistantMessage
+            message={message}
+            onRetry={() => onRetry(message)}
+            onBranch={() => onBranch(message)}
+            key={message.id}
+          />
+        ) : (
+          <UserMessage message={message} key={message.id} />
+        ),
+      )}
+      <div ref={endRef} />
+    </main>
+  );
+}
