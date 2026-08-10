@@ -1,3 +1,5 @@
+import type { PageManifest, YuemaiAccessHint, YuemaiPageType } from '../shared/yuemaiContext';
+
 export type PageStatus = 'not-read' | 'reading' | 'ready' | 'read' | 'changed';
 
 export interface PageContext {
@@ -7,10 +9,14 @@ export interface PageContext {
   status: PageStatus;
   browserTabId?: number;
   pageId?: string;
+  sourceId?: string;
   contentHash?: string;
   extractedAt?: number;
   sentAt?: number;
   version?: number;
+  pageType?: YuemaiPageType;
+  accessHint?: YuemaiAccessHint;
+  manifest?: PageManifest;
   quality?: 'high' | 'partial' | 'fallback';
   truncated?: boolean;
 }
@@ -76,6 +82,8 @@ export interface ChatMessage {
   references?: QuoteReference[];
   attachments?: DraftAttachment[];
   pageContext?: PageContext;
+  pageContextMode?: 'manifest' | 'reuse' | 'snapshot';
+  pageContextDelivery?: 'introduce' | 'update' | 'reuse';
   pageContextIssue?: string;
 }
 

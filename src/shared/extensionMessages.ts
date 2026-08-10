@@ -2,6 +2,7 @@ import type { PageContext, QuoteReference } from '../sidepanel/types';
 
 export interface PageSnapshot extends PageContext {
   pageId: string;
+  sourceId: string;
   markdown: string;
   contentHash: string;
   extractedAt: number;

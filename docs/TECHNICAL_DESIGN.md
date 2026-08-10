@@ -323,7 +323,8 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 3. 使用 Turndown 转成 Markdown。
 4. 清理脚本、样式、导航和重复空白。
 5. 保留标题、列表、引用和代码块。
-6. 计算稳定哈希并返回质量等级。
+6. 生成 Page Manifest，包括有限概览、H1-H3 结构和相关入口。
+7. 对规范化 URL 生成稳定来源 ID，对完整清洗正文生成内容版本哈希。
 
 ### X / Twitter
 
@@ -335,29 +336,20 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 ## 10. 上下文组装
 
-```text
-<untrusted_page_context
-  page_id="..."
-  title="..."
-  url="..."
-  captured_at="...">
-页面 Markdown
-</untrusted_page_context>
+插件内部使用 `yuemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
 
-<quoted_references>
-带来源的引用
-</quoted_references>
+当前页交付模式包括：
 
-<user_question>
-用户问题
-</user_question>
-```
+- `manifest`：首次引用或页面更新时发送有限页面清单。
+- `reuse`：相同来源和内容版本在同一 WorkOS 会话中已经成功发送。
+- `selection`：发送用户明确选择的文本及其独立来源。
+- `snapshot`：Agent 无法访问浏览器页面时发送最多 12,000 字符的正文快照。
 
-页面正文超过安全长度时不能无限拼接。实现阶段需要设置明确硬上限，并向用户显示“内容已截断”；后续版本再考虑分段或附件化。
+交付模式在排队请求真正执行时根据最新会话来源账本决定，避免连续排队的问题重复引入同一页面。只有请求成功完成后才更新 `sentAt` 和版本记录；失败请求不会让本地错误地认为 Agent 已获得页面。
 
-当前普通网页实现将 Markdown 硬限制为 40,000 字符，超出部分在请求中追加截断标记。页面正文只保留在单次请求准备过程，不写入 `chrome.storage.local`；本地只保存 URL、标题、哈希、质量、版本和发送时间。
+页面抽取仍将完整 Markdown 硬限制为 40,000 字符，但默认 Manifest 只包含 300 字符说明、12 个标题、800 字符开头和 10 个相关入口。完整 Markdown 只存在于请求准备内存，工作区持久化会显式清除 `markdown`；本地可以保存有限 Manifest、URL、哈希、质量、版本和发送时间。
 
-页面、引用和问题中的控制标签会在组装时中和，避免网页文本伪造 `untrusted_page_context / quoted_references / user_question` 边界。该处理不能替代 Agent 端的提示注入防护，二者需要同时存在。
+页面、引用和问题中的协议边界标记会在 Markdown 渲染时中和。该处理不能替代 Agent 端的提示注入防护，二者需要同时存在。
 
 ## 11. Manifest 权限
 

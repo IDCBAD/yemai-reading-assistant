@@ -229,7 +229,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
             <KoboyoIcon name="globe" size={12} />
             <span>
               {message.pageContextIssue
-                ? '当前页未能加入本次问题'
+                ? '当前页仅以链接加入'
                 : `${message.pageContext.title} · ${message.pageContext.site}`}
             </span>
             {message.pageContext.status === 'reading' && <i aria-label="正在准备当前页" />}

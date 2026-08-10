@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
-import { buildAgentContent } from '../services/buildAgentContent';
+import {
+  buildAgentContent,
+  preparePageReference,
+  WORKOS_AGENT_CAPABILITIES,
+} from '../services/buildAgentContent';
 import { buildBranchContext, prependBranchContext } from '../services/buildBranchContext';
+import { decideCurrentPageDelivery, type CurrentPageDeliveryDecision } from '../services/contextDeliveryPolicy';
 import { loadWorkosToken, removeWorkosToken, saveWorkosToken } from '../services/tokenStorage';
 import { createWorkosConversation, executeWorkosStream, uploadWorkosFile, WorkosApiError } from '../services/workosClient';
 import type { WorkosToolActivity } from '../services/workosSse';
@@ -31,7 +36,7 @@ import {
   includedPageReference,
   isPageReferenceIncluded,
   setPageReferenceIncluded,
-  shouldAttachPageSnapshot,
+  shouldPreparePageReference,
 } from './pageReference';
 import type {
   ChatMessage,
@@ -84,9 +89,13 @@ function createConversation(currentPage: PageContext = CURRENT_PAGE): Conversati
   };
 }
 
-function sentPageContext(snapshot: PageSnapshot, sentAt: number, version: number): PageContext {
+function pageContextFromSnapshot(snapshot: PageSnapshot, status: PageContext['status'] = 'ready'): PageContext {
   const { markdown: _markdown, ...page } = snapshot;
-  return { ...page, status: 'read', sentAt, version };
+  return { ...page, status };
+}
+
+function sentPageContext(snapshot: PageSnapshot, sentAt: number, version: number): PageContext {
+  return { ...pageContextFromSnapshot(snapshot, 'read'), sentAt, version };
 }
 
 function createOpenTab(conversationId: string): OpenConversationTab {
@@ -178,7 +187,9 @@ export default function App() {
   const displayedPage = useMemo(() => {
     if (currentPage.status === 'reading') return currentPage;
     const pendingPage = pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, currentPage.url));
-    if (pendingPage?.url === currentPage.url) return { ...currentPage, ...pendingPage, status: 'ready' as const };
+    if (pendingPage?.url === currentPage.url) {
+      return { ...currentPage, ...pageContextFromSnapshot(pendingPage, 'ready') };
+    }
     const sentPage = activeConversation.pages.find((page) => page.url === currentPage.url && page.sentAt);
     return sentPage
       ? { ...currentPage, ...sentPage, title: currentPage.title, site: currentPage.site, status: 'read' as const }
@@ -273,15 +284,14 @@ export default function App() {
 
   const updateConversation = useCallback(
     (conversationId: string, updater: (conversation: Conversation) => Conversation) => {
-      setWorkspace((current) => {
-        const next = {
-          ...current,
-          conversations: current.conversations.map((conversation) =>
-            conversation.id === conversationId ? updater(conversation) : conversation),
-        };
-        workspaceRef.current = next;
-        return next;
-      });
+      const current = workspaceRef.current;
+      const next = {
+        ...current,
+        conversations: current.conversations.map((conversation) =>
+          conversation.id === conversationId ? updater(conversation) : conversation),
+      };
+      workspaceRef.current = next;
+      setWorkspace(next);
     },
     [],
   );
@@ -621,7 +631,7 @@ export default function App() {
       const snapshot = response.page as PageSnapshot;
       pendingPageSnapshotsRef.current.set(key, snapshot);
       setCurrentPage((current) => current.url === snapshot.url
-        ? { ...snapshot, status: 'ready' }
+        ? pageContextFromSnapshot(snapshot, 'ready')
         : current);
       if (currentPageRef.current.url === snapshot.url) setPageIssue(null);
       return { snapshot };
@@ -663,42 +673,56 @@ export default function App() {
     const preparation = await waitForAbortable(request.pageSnapshotPromise, signal);
     if (signal.aborted) return;
     const pageSnapshot = preparation?.snapshot;
+    const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
+    const pendingBranchContext = currentConversation?.pendingBranchContext;
+    const preparedPage = userMessage.pageContext
+      ? preparePageReference(pageSnapshot ?? userMessage.pageContext)
+      : undefined;
+    const previousPage = currentConversation?.remoteUuid && preparedPage
+      ? currentConversation.pages.find((page) =>
+          (page.sourceId && page.sourceId === preparedPage.source.source_id)
+          || page.url === preparedPage.source.url)
+      : undefined;
+    const pageDecision: CurrentPageDeliveryDecision = decideCurrentPageDelivery({
+      included: Boolean(userMessage.pageContext),
+      prepared: preparedPage,
+      previous: previousPage
+        ? {
+            source_id: previousPage.sourceId ?? preparedPage!.source.source_id,
+            revision_id: previousPage.contentHash,
+            delivered_at: previousPage.sentAt ? new Date(previousPage.sentAt).toISOString() : undefined,
+          }
+        : undefined,
+      agent: WORKOS_AGENT_CAPABILITIES,
+    });
+    const pageContextMode = pageDecision.mode === 'none' ? undefined : pageDecision.mode;
+    const pageContextDelivery = pageDecision.mode === 'none'
+      ? undefined
+      : pageDecision.mode === 'reuse'
+        ? 'reuse' as const
+        : pageDecision.delivery;
 
     if (pageSnapshot) {
-      const sentAt = Date.now();
-      const sentContext = sentPageContext(pageSnapshot, sentAt, 1);
       updateMessage(conversationId, userMessage.id, {
-        pageContext: sentContext,
+        pageContext: pageContextFromSnapshot(pageSnapshot, 'ready'),
+        pageContextMode,
+        pageContextDelivery,
         pageContextIssue: undefined,
       });
-      updateConversation(conversationId, (conversation) => {
-        const existing = conversation.pages.find((page) => page.url === pageSnapshot.url);
-        const sentPage = sentPageContext(pageSnapshot, sentAt, (existing?.version ?? 0) + 1);
-        const pages = existing
-          ? conversation.pages.map((page) => page.url === sentPage.url ? sentPage : page)
-          : [...conversation.pages, sentPage];
-        return {
-          ...conversation,
-          page: sentPage,
-          pages,
-          subtitle: conversation.branch
-            ? `分支 ${conversation.branch.ordinal} · 刚刚`
-            : `${pages.length} 个页面 · 刚刚`,
-        };
-      });
-      setCurrentPage((page) => page.url === pageSnapshot.url
-        ? sentPageContext(pageSnapshot, sentAt, 1)
-        : page);
     } else if (needsPageRead && userMessage.pageContext) {
       updateMessage(conversationId, userMessage.id, {
         pageContext: { ...userMessage.pageContext, status: 'not-read' },
-        pageContextIssue: preparation?.error ?? '当前页未能加入本次问题。',
+        pageContextMode,
+        pageContextDelivery,
+        pageContextIssue: preparation?.error ?? '当前页仅以链接加入，正文未能读取。',
       });
     }
 
-    const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
-    const pendingBranchContext = currentConversation?.pendingBranchContext;
-    const content = buildAgentContent(userMessage.content, userMessage.references ?? [], pageSnapshot);
+    const content = buildAgentContent({
+      question: userMessage.content,
+      quotes: userMessage.references ?? [],
+      ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
+    });
     const consumeBranchContext = () => {
       if (!pendingBranchContext || branchContextConsumed) return;
       branchContextConsumed = true;
@@ -745,6 +769,64 @@ export default function App() {
       consumeBranchContext();
       if (terminalError) throw new WorkosApiError(terminalError);
       if (!receivedText) throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的文本。');
+      if (preparedPage && pageDecision.mode !== 'none' && userMessage.pageContext) {
+        const deliveredAt = Date.now();
+        updateConversation(conversationId, (conversation) => {
+          const existing = conversation.pages.find((page) =>
+            (page.sourceId && page.sourceId === preparedPage.source.source_id)
+            || page.url === preparedPage.source.url);
+          const basePage = pageSnapshot
+            ? sentPageContext(pageSnapshot, deliveredAt, pageDecision.mode === 'reuse'
+                ? existing?.version ?? 1
+                : (existing?.version ?? 0) + 1)
+            : {
+                ...userMessage.pageContext!,
+                sourceId: preparedPage.source.source_id,
+                manifest: preparedPage.manifest,
+                status: 'read' as const,
+                sentAt: deliveredAt,
+                version: pageDecision.mode === 'reuse'
+                  ? existing?.version ?? 1
+                  : (existing?.version ?? 0) + 1,
+              };
+          const deliveredPage = {
+            ...basePage,
+            sourceId: preparedPage.source.source_id,
+            manifest: preparedPage.manifest,
+          };
+          const pages = existing
+            ? conversation.pages.map((page) => page === existing
+                ? pageDecision.mode === 'reuse'
+                  ? { ...page, sourceId: deliveredPage.sourceId, manifest: deliveredPage.manifest }
+                  : deliveredPage
+                : page)
+            : [...conversation.pages, deliveredPage];
+          return {
+            ...conversation,
+            page: deliveredPage,
+            pages,
+            subtitle: conversation.branch
+              ? `分支 ${conversation.branch.ordinal} · 刚刚`
+              : `${pages.length} 个页面 · 刚刚`,
+          };
+        });
+        updateMessage(conversationId, userMessage.id, {
+          pageContext: {
+            ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : userMessage.pageContext),
+            sentAt: deliveredAt,
+          },
+          pageContextMode,
+          pageContextDelivery,
+          pageContextIssue: pageSnapshot ? undefined : preparation?.error,
+        });
+        setCurrentPage((page) => page.url === preparedPage.source.url
+          ? {
+              ...page,
+              ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : {}),
+              sentAt: deliveredAt,
+            }
+          : page);
+      }
       updateMessage(conversationId, messageId, {
         status: 'complete',
         stage: undefined,
@@ -791,7 +873,7 @@ export default function App() {
     const now = Date.now();
     const conversationAtSend = activeConversation;
     const pageAtSend = displayedPage;
-    const includeCurrentPage = shouldAttachPageSnapshot(pageReferenceIncluded, pageAtSend);
+    const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
     const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
     const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
     const needsPageRead = includeCurrentPage;
@@ -829,7 +911,7 @@ export default function App() {
       draftInput: '',
       draftQuotes: [],
       draftAttachments: conversation.draftAttachments.filter((attachment) => attachment.status !== 'ready'),
-      draftPageReference: includedPageReference(pageAtSend),
+      draftPageReference: conversationAtSend.draftPageReference,
     }));
 
     const pageSnapshotPromise = queuedSnapshot
@@ -859,12 +941,21 @@ export default function App() {
       errorMessage: undefined,
       activities: [],
     });
+    const retryPage = userMessage.pageContext;
+    const cachedSnapshot = retryPage
+      ? pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, retryPage.url))
+      : undefined;
+    const pageSnapshotPromise = cachedSnapshot
+      ? Promise.resolve<PagePreparationResult>({ snapshot: cachedSnapshot })
+      : retryPage
+        ? preparePageContext(activeConversation.id, retryPage)
+        : Promise.resolve<PagePreparationResult>({});
     requestCoordinatorRef.current?.enqueue({
       conversationId: activeConversation.id,
       messageId: message.id,
       userMessage,
-      needsPageRead: false,
-      pageSnapshotPromise: Promise.resolve({}),
+      needsPageRead: Boolean(retryPage),
+      pageSnapshotPromise,
     });
   };
 

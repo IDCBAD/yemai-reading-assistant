@@ -12,6 +12,20 @@ describe('buildBranchContext', () => {
         createdAt: 1,
         status: 'complete',
         references: [{ id: 'quote-1', text: '引用正文', pageTitle: '文章', pageUrl: 'https://example.com', createdAt: 1 }],
+        pageContext: {
+          title: '文章',
+          site: 'example.com',
+          url: 'https://example.com',
+          status: 'read',
+          sourceId: 'src-article',
+          contentHash: 'rev-1',
+          manifest: {
+            description: '文章概览',
+            outline: [],
+            relevant_links: [],
+            truncated: false,
+          },
+        },
       },
       {
         id: 'assistant-1',
@@ -27,6 +41,9 @@ describe('buildBranchContext', () => {
     const context = buildBranchContext(messages);
     expect(context).toContain('## 回答\\n\\n- 第一项');
     expect(context).toContain('引用正文');
+    expect(context).toContain('src-article');
+    expect(context).toContain('https://example.com');
+    expect(context).toContain('文章概览');
     expect(context).not.toContain('私密工具');
     expect(context).not.toContain('debug detail');
   });

@@ -2,6 +2,7 @@ import type {
   PageManifest,
   PageManifestHeading,
   PageManifestLink,
+  YuemaiAccessHint,
   YuemaiPageType,
 } from '../shared/yuemaiContext';
 
@@ -66,6 +67,38 @@ export function normalizeSourceUrl(value: string) {
   }
 }
 
+export function createStableSourceId(value: string) {
+  const normalized = normalizeSourceUrl(value);
+  let first = 0xdeadbeef;
+  let second = 0x41c6ce57;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    first = Math.imul(first ^ code, 2654435761);
+    second = Math.imul(second ^ code, 1597334677);
+  }
+  first = Math.imul(first ^ (first >>> 16), 2246822507) ^ Math.imul(second ^ (second >>> 13), 3266489909);
+  second = Math.imul(second ^ (second >>> 16), 2246822507) ^ Math.imul(first ^ (first >>> 13), 3266489909);
+  return `src_${(second >>> 0).toString(16).padStart(8, '0')}${(first >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+export function inferAccessHint(value: string): YuemaiAccessHint {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'file:') return 'local_document';
+    if (!['http:', 'https:'].includes(url.protocol)) return 'browser_only';
+    const host = url.hostname.toLowerCase();
+    const privateIpv4 = /^10\./u.test(host)
+      || /^192\.168\./u.test(host)
+      || /^172\.(?:1[6-9]|2\d|3[01])\./u.test(host);
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local') || privateIpv4) {
+      return 'browser_only';
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export function inferPageType(input: PageManifestInput): YuemaiPageType {
   let url: URL | null = null;
   try {
@@ -88,8 +121,8 @@ export function inferPageType(input: PageManifestInput): YuemaiPageType {
   if (/\/(?:docs?|documentation|guide|manual|reference|book|modules?|chapters?|api)(?:\/|$)/u.test(path)) {
     return 'documentation';
   }
+  if ((input.links?.length ?? 0) >= 8 && (input.mainTextLength ?? 0) < 5_000) return 'index';
   if (input.hasArticle || (input.mainTextLength ?? 0) >= 1_000) return 'article';
-  if ((input.links?.length ?? 0) >= 8 && (input.mainTextLength ?? 0) < 1_000) return 'index';
   if ((input.mainTextLength ?? 0) > 0) return 'application';
   return 'unknown';
 }

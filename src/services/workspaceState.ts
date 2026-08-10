@@ -9,7 +9,7 @@ import type {
   WorkspaceState,
 } from '../sidepanel/types';
 
-export const WORKSPACE_STATE_VERSION = 3;
+export const WORKSPACE_STATE_VERSION = 4;
 export const MAX_OPEN_TABS = 10;
 
 export interface WorkspaceSnapshot extends WorkspaceState {
@@ -44,13 +44,48 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isManifestHeading(value: unknown) {
+  return isRecord(value)
+    && (value.level === 1 || value.level === 2 || value.level === 3)
+    && typeof value.text === 'string';
+}
+
+function isManifestLink(value: unknown) {
+  return isRecord(value)
+    && typeof value.title === 'string'
+    && typeof value.url === 'string'
+    && ['chapter', 'next', 'previous', 'reference', 'unknown'].includes(value.relation as string);
+}
+
+function isPageManifest(value: unknown) {
+  return isRecord(value)
+    && (value.description === undefined || typeof value.description === 'string')
+    && Array.isArray(value.outline)
+    && value.outline.every(isManifestHeading)
+    && (value.leading_excerpt === undefined || typeof value.leading_excerpt === 'string')
+    && Array.isArray(value.relevant_links)
+    && value.relevant_links.every(isManifestLink)
+    && typeof value.truncated === 'boolean';
+}
+
 function isPage(value: unknown): value is PageContext {
   return isRecord(value)
     && typeof value.title === 'string'
     && typeof value.site === 'string'
     && typeof value.url === 'string'
     && typeof value.status === 'string'
-    && (value.browserTabId === undefined || typeof value.browserTabId === 'number');
+    && (value.browserTabId === undefined || typeof value.browserTabId === 'number')
+    && (value.pageId === undefined || typeof value.pageId === 'string')
+    && (value.sourceId === undefined || typeof value.sourceId === 'string')
+    && (value.contentHash === undefined || typeof value.contentHash === 'string')
+    && (value.extractedAt === undefined || typeof value.extractedAt === 'number')
+    && (value.sentAt === undefined || typeof value.sentAt === 'number')
+    && (value.version === undefined || typeof value.version === 'number')
+    && (value.pageType === undefined || ['article', 'documentation', 'index', 'search', 'discussion', 'application', 'unknown'].includes(value.pageType as string))
+    && (value.accessHint === undefined || ['public_web', 'authenticated_web', 'browser_only', 'local_document', 'unknown'].includes(value.accessHint as string))
+    && (value.manifest === undefined || isPageManifest(value.manifest))
+    && (value.quality === undefined || typeof value.quality === 'string')
+    && (value.truncated === undefined || typeof value.truncated === 'boolean');
 }
 
 function isDraftPageReference(value: unknown) {
@@ -100,6 +135,8 @@ function isMessage(value: unknown): value is ChatMessage {
     && typeof value.createdAt === 'number'
     && typeof value.status === 'string'
     && (value.pageContext === undefined || isPage(value.pageContext))
+    && (value.pageContextMode === undefined || ['manifest', 'reuse', 'snapshot'].includes(value.pageContextMode as string))
+    && (value.pageContextDelivery === undefined || ['introduce', 'update', 'reuse'].includes(value.pageContextDelivery as string))
     && (value.pageContextIssue === undefined || typeof value.pageContextIssue === 'string')
     && (value.activities === undefined || (Array.isArray(value.activities) && value.activities.every(isActivity)))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isQuote)))
@@ -305,12 +342,42 @@ function migrateLegacyConversations(legacyConversations: LegacyConversation[]) {
 }
 
 export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Date.now()): WorkspaceSnapshot {
+  const conversations = workspace.conversations.map((conversation) => ({
+    ...conversation,
+    page: cleanPageContext(conversation.page),
+    pages: conversation.pages.map(cleanPageContext),
+    messages: conversation.messages.map((message) => ({
+      ...message,
+      pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
+    })),
+  }));
   return {
     version: WORKSPACE_STATE_VERSION,
-    conversations: workspace.conversations,
+    conversations,
     openTabs: workspace.openTabs,
     activeOpenTabId: workspace.activeOpenTabId,
     savedAt,
+  };
+}
+
+function cleanPageContext(page: PageContext): PageContext {
+  return {
+    title: page.title,
+    site: page.site,
+    url: page.url,
+    status: page.status,
+    ...(page.browserTabId !== undefined ? { browserTabId: page.browserTabId } : {}),
+    ...(page.pageId ? { pageId: page.pageId } : {}),
+    ...(page.sourceId ? { sourceId: page.sourceId } : {}),
+    ...(page.contentHash ? { contentHash: page.contentHash } : {}),
+    ...(page.extractedAt !== undefined ? { extractedAt: page.extractedAt } : {}),
+    ...(page.sentAt !== undefined ? { sentAt: page.sentAt } : {}),
+    ...(page.version !== undefined ? { version: page.version } : {}),
+    ...(page.pageType ? { pageType: page.pageType } : {}),
+    ...(page.accessHint ? { accessHint: page.accessHint } : {}),
+    ...(page.manifest ? { manifest: page.manifest } : {}),
+    ...(page.quality ? { quality: page.quality } : {}),
+    ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
   };
 }
 
@@ -333,6 +400,8 @@ function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
     .map((conversation) => migrate(conversation))
     .map((conversation) => ({
       ...conversation,
+      page: cleanPageContext(conversation.page),
+      pages: conversation.pages.map(cleanPageContext),
       messages: conversation.messages.map((message) => recoverMessage(message, recoveredAt)),
       draftAttachments: conversation.draftAttachments.map(recoverAttachment),
     }));
@@ -353,6 +422,10 @@ function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
     : conversation);
 
   return createWorkspaceSnapshot({ conversations: normalizedConversations, openTabs, activeOpenTabId }, value.savedAt);
+}
+
+function normalizeV4(value: UnknownRecord, recoveredAt: number) {
+  return normalizeWorkspace(value, recoveredAt, isConversation, (conversation) => conversation as Conversation);
 }
 
 function normalizeV3(value: UnknownRecord, recoveredAt: number) {
@@ -396,7 +469,8 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
 
 export function normalizeWorkspaceSnapshot(value: unknown, recoveredAt = Date.now()): WorkspaceSnapshot | null {
   if (!isRecord(value)) return null;
-  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV3(value, recoveredAt);
+  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV4(value, recoveredAt);
+  if (value.version === 3) return normalizeV3(value, recoveredAt);
   if (value.version === 2) return normalizeV2(value, recoveredAt);
   if (value.version === 1) return normalizeV1(value, recoveredAt);
   return null;

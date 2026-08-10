@@ -16,6 +16,6 @@ export function setPageReferenceIncluded(
   return { url: page.url, mode: included ? 'included' : 'excluded' };
 }
 
-export function shouldAttachPageSnapshot(included: boolean, page: Pick<PageContext, 'url' | 'sentAt'>) {
+export function shouldPreparePageReference(included: boolean, page: Pick<PageContext, 'url'>) {
   return included && Boolean(page.url);
 }

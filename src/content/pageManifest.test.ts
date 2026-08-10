@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildPageManifest, inferPageType, normalizeSourceUrl, PAGE_MANIFEST_LIMITS } from './pageManifest';
+import {
+  buildPageManifest,
+  createStableSourceId,
+  inferAccessHint,
+  inferPageType,
+  normalizeSourceUrl,
+  PAGE_MANIFEST_LIMITS,
+} from './pageManifest';
 
 describe('page manifest', () => {
   it('removes known tracking parameters without collapsing meaningful routes', () => {
@@ -8,6 +15,9 @@ describe('page manifest', () => {
     );
     expect(normalizeSourceUrl('https://example.com/#/article/12')).toBe('https://example.com/#/article/12');
     expect(normalizeSourceUrl('https://example.com/a#:~:text=hello')).toBe('https://example.com/a');
+    expect(createStableSourceId('https://example.com/a?utm_source=one')).toBe(
+      createStableSourceId('https://example.com/a?utm_source=two'),
+    );
   });
 
   it('builds a bounded, deduplicated manifest', () => {
@@ -41,5 +51,18 @@ describe('page manifest', () => {
     expect(inferPageType({ title: 'Docs', url: 'https://example.com/docs/start' })).toBe('documentation');
     expect(inferPageType({ title: 'Search', url: 'https://example.com/?q=agent' })).toBe('search');
     expect(inferPageType({ title: 'Post', url: 'https://example.com/post', hasArticle: true })).toBe('article');
+    expect(inferPageType({
+      title: 'Book index',
+      url: 'https://example.com/',
+      hasArticle: true,
+      mainTextLength: 2_000,
+      links: Array.from({ length: 10 }, (_, index) => ({ title: `Chapter ${index}`, url: `https://example.com/${index}` })),
+    })).toBe('index');
+  });
+
+  it('marks local and private-network pages as browser-only', () => {
+    expect(inferAccessHint('http://localhost:3000/docs')).toBe('browser_only');
+    expect(inferAccessHint('https://192.168.1.8/wiki')).toBe('browser_only');
+    expect(inferAccessHint('https://example.com/private')).toBe('unknown');
   });
 });

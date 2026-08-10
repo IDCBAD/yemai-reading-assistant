@@ -37,7 +37,7 @@ function workspace(): WorkspaceState {
   };
 }
 
-describe('workspace state v3', () => {
+describe('workspace state v4', () => {
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
     const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(workspace(), 100), 200);
 
@@ -72,6 +72,28 @@ describe('workspace state v3', () => {
     const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(stored));
 
     expect(restored?.conversations.find((item) => item.id === 'conversation-archived')?.archivedAt).toBe(88);
+  });
+
+  it('persists compact manifests but strips accidental full page snapshots', () => {
+    const stored = workspace();
+    const runtimePage = {
+      ...page,
+      sourceId: 'src-1',
+      manifest: {
+        description: '页面概览',
+        outline: [],
+        relevant_links: [],
+        truncated: false,
+      },
+      markdown: '不应写入本地存储的完整正文',
+    };
+    stored.conversations[0]!.page = runtimePage;
+    stored.conversations[0]!.pages = [runtimePage];
+
+    const snapshot = createWorkspaceSnapshot(stored);
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).toContain('页面概览');
+    expect(serialized).not.toContain('不应写入本地存储的完整正文');
   });
 
   it('rejects malformed or unsupported snapshots', () => {
@@ -115,7 +137,7 @@ describe('v1 migration', () => {
     const main = restored?.conversations.find((item) => item.id === 'legacy-1');
     const migratedDraft = restored?.conversations.find((item) => item.id === 'legacy-1-draft-legacy-tab-1');
 
-    expect(restored?.version).toBe(3);
+    expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
     expect(restored?.openTabs).toEqual([{ id: 'open-legacy-1', conversationId: 'legacy-1', openedAt: 100 }]);
     expect(main?.remoteUuid).toBe('remote-legacy');
     expect(main?.draftInput).toBe('当前草稿');
@@ -186,10 +208,22 @@ describe('v2 migration', () => {
 
     const restored = normalizeWorkspaceSnapshot(stored);
 
-    expect(restored?.version).toBe(3);
+    expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
     expect(restored?.conversations[0]?.draftPageReference).toEqual({
       url: 'https://example.com',
       mode: 'included',
     });
+  });
+});
+
+describe('v3 migration', () => {
+  it('upgrades the snapshot while preserving the existing source ledger', () => {
+    const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
+    stored.version = 3;
+    const restored = normalizeWorkspaceSnapshot(stored);
+
+    expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
+    expect(restored?.conversations[0]?.pages[0]?.url).toBe('https://example.com');
+    expect(restored?.conversations[0]?.remoteUuid).toBe('remote-1');
   });
 });

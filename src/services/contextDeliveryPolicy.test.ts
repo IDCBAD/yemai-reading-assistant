@@ -82,4 +82,16 @@ describe('context delivery policy', () => {
       reason: 'agent_requires_snapshot',
     });
   });
+
+  it('does not reuse context for a stateless agent', () => {
+    expect(decideCurrentPageDelivery({
+      included: true,
+      prepared,
+      agent: { ...agent, memory_scope: 'none' },
+      previous: { source_id: 'src-1', revision_id: 'rev-1', delivered_at: '2026-08-10T00:01:00.000Z' },
+    })).toMatchObject({
+      mode: 'manifest',
+      delivery: 'introduce',
+    });
+  });
 });

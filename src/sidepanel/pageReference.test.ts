@@ -3,7 +3,7 @@ import {
   includedPageReference,
   isPageReferenceIncluded,
   setPageReferenceIncluded,
-  shouldAttachPageSnapshot,
+  shouldPreparePageReference,
 } from './pageReference';
 
 describe('draft page reference', () => {
@@ -22,8 +22,8 @@ describe('draft page reference', () => {
     expect(isPageReferenceIncluded(includedPageReference({ url: '' }), { url: '' })).toBe(false);
   });
 
-  it('attaches a previously sent page again on follow-up questions', () => {
-    expect(shouldAttachPageSnapshot(true, { url: 'https://example.com/a', sentAt: 123 })).toBe(true);
-    expect(shouldAttachPageSnapshot(false, { url: 'https://example.com/a' })).toBe(false);
+  it('prepares an included page while leaving delivery mode to the context policy', () => {
+    expect(shouldPreparePageReference(true, { url: 'https://example.com/a' })).toBe(true);
+    expect(shouldPreparePageReference(false, { url: 'https://example.com/a' })).toBe(false);
   });
 });
