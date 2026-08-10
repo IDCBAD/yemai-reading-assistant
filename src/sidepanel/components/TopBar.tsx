@@ -1,24 +1,19 @@
 import { KoboyoIcon } from './KoboyoIcon';
+import { YuemaiMark } from './YuemaiMark';
 
 interface TopBarProps {
-  conversationTitle: string;
   tabCount: number;
   onOpenSettings: () => void;
 }
 
-export function TopBar({ conversationTitle, tabCount, onOpenSettings }: TopBarProps) {
+export function TopBar({ tabCount, onOpenSettings }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
-          页
+          <YuemaiMark />
         </span>
-        <span className="brand-copy">
-          <h1 className="brand-name">页边</h1>
-          <span className="brand-context" title={conversationTitle}>
-            {conversationTitle}
-          </span>
-        </span>
+        <h1 className="brand-name" translate="no">页脉</h1>
       </div>
 
       <div className="topbar-meta">

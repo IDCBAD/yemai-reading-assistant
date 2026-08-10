@@ -37,6 +37,7 @@ const INITIAL_CONVERSATION: Conversation = {
   draftInput: '',
   draftQuotes: [],
   draftAttachments: [],
+  draftPageReference: { url: CURRENT_PAGE.url, mode: 'included' },
 };
 
 export const INITIAL_WORKSPACE: WorkspaceState = {

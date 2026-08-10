@@ -13,8 +13,8 @@ export type ExtensionRequest =
   | { type: 'panel:status' }
   | { type: 'selection:commit'; quote: QuoteReference; openPanel: boolean }
   | { type: 'selection:consume' }
-  | { type: 'page:get-active-metadata' }
-  | { type: 'page:extract-active' };
+  | { type: 'page:get-active-metadata'; tabId?: number }
+  | { type: 'page:extract-active'; tabId?: number; expectedUrl?: string };
 
 export type ContentRequest =
   | { type: 'page:get-metadata' }

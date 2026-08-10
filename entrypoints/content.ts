@@ -44,7 +44,7 @@ export default defineContentScript({
     `;
     const button = document.createElement('button');
     button.type = 'button';
-    button.setAttribute('aria-label', '引用所选文字到页边');
+    button.setAttribute('aria-label', '引用所选文字到页脉');
     button.innerHTML = '<span class="mark">“</span><span>引用</span>';
     shadow.append(style, button);
     document.documentElement.append(host);

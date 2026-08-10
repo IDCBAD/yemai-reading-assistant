@@ -10,6 +10,8 @@ export type KoboyoIconName =
   | 'eye-off'
   | 'file'
   | 'globe'
+  | 'link'
+  | 'link-off'
   | 'message-square-plus'
   | 'paperclip'
   | 'plus'

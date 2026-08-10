@@ -5,6 +5,7 @@ export interface PageContext {
   site: string;
   url: string;
   status: PageStatus;
+  browserTabId?: number;
   pageId?: string;
   contentHash?: string;
   extractedAt?: number;
@@ -12,6 +13,13 @@ export interface PageContext {
   version?: number;
   quality?: 'high' | 'partial' | 'fallback';
   truncated?: boolean;
+}
+
+export type DraftPageReferenceMode = 'included' | 'excluded';
+
+export interface DraftPageReference {
+  url: string;
+  mode: DraftPageReferenceMode;
 }
 
 export interface QuoteReference {
@@ -29,6 +37,8 @@ export interface DraftAttachment {
   filename: string;
   sizeLabel: string;
   status: AttachmentStatus;
+  url?: string;
+  errorMessage?: string;
 }
 
 export type MessageStatus = 'queued' | 'running' | 'streaming' | 'complete' | 'stopped' | 'failed';
@@ -66,6 +76,7 @@ export interface ChatMessage {
   references?: QuoteReference[];
   attachments?: DraftAttachment[];
   pageContext?: PageContext;
+  pageContextIssue?: string;
 }
 
 export interface ConversationBranch {
@@ -91,6 +102,7 @@ export interface Conversation {
   draftInput: string;
   draftQuotes: QuoteReference[];
   draftAttachments: DraftAttachment[];
+  draftPageReference: DraftPageReference;
 }
 
 export interface OpenConversationTab {

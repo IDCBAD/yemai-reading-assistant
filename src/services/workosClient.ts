@@ -59,6 +59,37 @@ export async function createWorkosConversation(token: string, signal?: AbortSign
   return uuid;
 }
 
+export async function uploadWorkosFile(token: string, file: File, signal?: AbortSignal) {
+  const body = new FormData();
+  body.append('file', file, file.name);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_ORIGIN}/oapi/power/v1/file/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body,
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new WorkosApiError('附件上传失败，请检查网络后重试。');
+  }
+
+  if (!response.ok) throw new WorkosApiError(await responseError(response), response.status);
+  let responseBody: { data?: { fileReadUrl?: unknown } };
+  try {
+    responseBody = (await response.json()) as { data?: { fileReadUrl?: unknown } };
+  } catch {
+    throw new WorkosApiError('附件上传成功，但服务返回了无法识别的数据。');
+  }
+  const fileReadUrl = responseBody.data?.fileReadUrl;
+  if (typeof fileReadUrl !== 'string' || !fileReadUrl) {
+    throw new WorkosApiError('附件上传成功，但服务没有返回可读取的文件地址。');
+  }
+  return { fileReadUrl };
+}
+
 export async function executeWorkosStream(
   token: string,
   conversationUuid: string,

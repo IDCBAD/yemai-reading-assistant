@@ -3,7 +3,7 @@ import { browser } from 'wxt/browser';
 import { buildAgentContent } from '../services/buildAgentContent';
 import { buildBranchContext, prependBranchContext } from '../services/buildBranchContext';
 import { loadWorkosToken, removeWorkosToken, saveWorkosToken } from '../services/tokenStorage';
-import { createWorkosConversation, executeWorkosStream, WorkosApiError } from '../services/workosClient';
+import { createWorkosConversation, executeWorkosStream, uploadWorkosFile, WorkosApiError } from '../services/workosClient';
 import type { WorkosToolActivity } from '../services/workosSse';
 import { loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -24,9 +24,15 @@ import {
 import { Composer } from './components/Composer';
 import { MessageList } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
-import { SourceBar } from './components/SourceBar';
 import { TopBar } from './components/TopBar';
 import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
+import { shouldRefreshPageMetadataForTab, type BrowserTabChange } from './pageMetadataSync';
+import {
+  includedPageReference,
+  isPageReferenceIncluded,
+  setPageReferenceIncluded,
+  shouldAttachPageSnapshot,
+} from './pageReference';
 import type {
   ChatMessage,
   Conversation,
@@ -39,6 +45,25 @@ import type {
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_DRAFT_ATTACHMENTS = 5;
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function attachmentValidationError(file: File) {
+  if (file.size > MAX_ATTACHMENT_BYTES) return '单个附件不能超过 20 MB。';
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const supportedDocument = ['pdf', 'doc', 'docx', 'txt', 'md'].includes(extension);
+  if (!supportedDocument && !file.type.startsWith('image/')) {
+    return '仅支持 PDF、Word、TXT、Markdown 和常见图片。';
+  }
+  return null;
 }
 
 function createConversation(currentPage: PageContext = CURRENT_PAGE): Conversation {
@@ -55,6 +80,7 @@ function createConversation(currentPage: PageContext = CURRENT_PAGE): Conversati
     draftInput: '',
     draftQuotes: [],
     draftAttachments: [],
+    draftPageReference: includedPageReference(page),
   };
 }
 
@@ -89,7 +115,16 @@ interface QueuedAgentRequest {
   messageId: string;
   userMessage: ChatMessage;
   needsPageRead: boolean;
-  pageSnapshotPromise: Promise<PageSnapshot | undefined>;
+  pageSnapshotPromise: Promise<PagePreparationResult>;
+}
+
+interface PagePreparationResult {
+  snapshot?: PageSnapshot;
+  error?: string;
+}
+
+function pageSnapshotKey(conversationId: string, url: string) {
+  return `${conversationId}\n${url}`;
 }
 
 function isAbortError(error: unknown) {
@@ -106,9 +141,14 @@ export default function App() {
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
+  const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
+  const currentPageRef = useRef<PageContext>(CURRENT_PAGE);
+  const activeBrowserTabIdRef = useRef<number | undefined>(undefined);
+  const pageMetadataRequestRef = useRef(0);
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
+  const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
   const requestRunnerRef = useRef<(request: QueuedAgentRequest, signal: AbortSignal) => Promise<void>>(
     async () => undefined,
   );
@@ -137,13 +177,30 @@ export default function App() {
   );
   const displayedPage = useMemo(() => {
     if (currentPage.status === 'reading') return currentPage;
-    const pendingPage = pendingPageSnapshotsRef.current.get(activeConversation.id);
+    const pendingPage = pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, currentPage.url));
     if (pendingPage?.url === currentPage.url) return { ...currentPage, ...pendingPage, status: 'ready' as const };
     const sentPage = activeConversation.pages.find((page) => page.url === currentPage.url && page.sentAt);
     return sentPage
       ? { ...currentPage, ...sentPage, title: currentPage.title, site: currentPage.site, status: 'read' as const }
       : { ...currentPage, status: currentPage.status === 'changed' ? 'changed' as const : 'not-read' as const };
   }, [activeConversation.pages, currentPage]);
+  const pageReferenceIncluded = useMemo(
+    () => isPageReferenceIncluded(activeConversation.draftPageReference, currentPage),
+    [activeConversation.draftPageReference, currentPage],
+  );
+  currentPageRef.current = currentPage;
+
+  useEffect(() => {
+    if (!workspaceHydrated || !currentPage.url) return;
+    setWorkspace((current) => ({
+      ...current,
+      conversations: current.conversations.map((conversation) => {
+        if (conversation.id !== activeConversation.id
+          || conversation.draftPageReference.url === currentPage.url) return conversation;
+        return { ...conversation, draftPageReference: includedPageReference(currentPage) };
+      }),
+    }));
+  }, [activeConversation.id, currentPage.url, workspaceHydrated]);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -305,16 +362,24 @@ export default function App() {
     }));
   }, []);
 
-  const refreshPageMetadata = useCallback(async () => {
-    const request: ExtensionRequest = { type: 'page:get-active-metadata' };
+  const refreshPageMetadata = useCallback(async (invalidateSnapshot = false, tabId?: number) => {
+    const requestId = ++pageMetadataRequestRef.current;
+    const request: ExtensionRequest = { type: 'page:get-active-metadata', tabId };
     const response = await browser.runtime.sendMessage(request).catch(() => null) as PageResponse | null;
+    if (requestId !== pageMetadataRequestRef.current) return;
     if (response?.page) {
+      activeBrowserTabIdRef.current = response.page.browserTabId ?? tabId;
+      if (invalidateSnapshot) {
+        pendingPageSnapshotsRef.current.delete(pageSnapshotKey(activeConversation.id, response.page.url));
+        setPageMetadataRevision((revision) => revision + 1);
+      }
       setCurrentPage({ ...response.page, status: 'not-read' });
       setPageIssue(null);
     } else {
+      setCurrentPage({ title: '当前页面', site: '', url: '', status: 'not-read' });
       setPageIssue(response?.error ?? '无法连接当前网页，请刷新后重试。');
     }
-  }, []);
+  }, [activeConversation.id]);
 
   const consumePendingQuotes = useCallback(async () => {
     const request: ExtensionRequest = { type: 'selection:consume' };
@@ -346,18 +411,24 @@ export default function App() {
   }, [consumePendingQuotes, workspaceHydrated]);
 
   useEffect(() => {
-    const onActivated = () => void refreshPageMetadata();
-    const onUpdated = (_tabId: number, changeInfo: { status?: string; url?: string }) => {
-      if (changeInfo.status === 'complete' || changeInfo.url) void refreshPageMetadata();
+    const onActivated = (activeInfo: { tabId: number }) => {
+      activeBrowserTabIdRef.current = activeInfo.tabId;
+      void refreshPageMetadata(false, activeInfo.tabId);
     };
+    const onUpdated = (tabId: number, changeInfo: BrowserTabChange) => {
+      if (shouldRefreshPageMetadataForTab(tabId, activeBrowserTabIdRef.current, changeInfo)) {
+        void refreshPageMetadata(true, tabId);
+      }
+    };
+    const onWindowFocus = () => void refreshPageMetadata(false, activeBrowserTabIdRef.current);
     browser.tabs.onActivated.addListener(onActivated);
     browser.tabs.onUpdated.addListener(onUpdated);
-    window.addEventListener('focus', onActivated);
+    window.addEventListener('focus', onWindowFocus);
     void refreshPageMetadata();
     return () => {
       browser.tabs.onActivated.removeListener(onActivated);
       browser.tabs.onUpdated.removeListener(onUpdated);
-      window.removeEventListener('focus', onActivated);
+      window.removeEventListener('focus', onWindowFocus);
     };
   }, [refreshPageMetadata]);
 
@@ -504,6 +575,7 @@ export default function App() {
       draftInput: '',
       draftQuotes: [],
       draftAttachments: [],
+      draftPageReference: includedPageReference(activeConversation.page),
       pendingBranchContext: buildBranchContext(sourceMessages),
     };
     const canOpenNewTab = workspace.openTabs.length < MAX_OPEN_TABS;
@@ -520,21 +592,61 @@ export default function App() {
     setHistoryOpen(false);
   };
 
-  const refreshPageContext = async () => {
-    if (displayedPage.status === 'reading') return;
-    setCurrentPage((page) => ({ ...page, status: 'reading' }));
-    const request: ExtensionRequest = { type: 'page:extract-active' };
-    const response = await browser.runtime.sendMessage(request).catch(() => null) as PageResponse | null;
-    if (!response?.page || !('markdown' in response.page)) {
-      setCurrentPage((page) => ({ ...page, status: 'not-read' }));
-      setPageIssue(response?.error ?? '当前页面正文读取失败。');
-      return;
-    }
-    const snapshot = response.page as PageSnapshot;
-    pendingPageSnapshotsRef.current.set(activeConversation.id, snapshot);
-    setCurrentPage({ ...snapshot, status: 'ready' });
-    setPageIssue(null);
-  };
+  const preparePageContext = useCallback((conversationId: string, page: PageContext) => {
+    if (!page.url) return Promise.resolve<PagePreparationResult>({ error: '当前页面不支持读取。' });
+    const key = pageSnapshotKey(conversationId, page.url);
+    const cached = pendingPageSnapshotsRef.current.get(key);
+    if (cached) return Promise.resolve<PagePreparationResult>({ snapshot: cached });
+    const pending = pendingPagePreparationsRef.current.get(key);
+    if (pending) return pending;
+
+    setCurrentPage((current) => current.url === page.url
+      ? { ...current, status: 'reading' }
+      : current);
+    const request: ExtensionRequest = {
+      type: 'page:extract-active',
+      tabId: page.browserTabId,
+      expectedUrl: page.url,
+    };
+    const preparation = (async (): Promise<PagePreparationResult> => {
+      const response = await browser.runtime.sendMessage(request).catch(() => null) as PageResponse | null;
+      if (!response?.page || !('markdown' in response.page)) {
+        const error = response?.error ?? '当前页面正文读取失败。';
+        setCurrentPage((current) => current.url === page.url
+          ? { ...current, status: 'not-read' }
+          : current);
+        if (currentPageRef.current.url === page.url) setPageIssue(error);
+        return { error };
+      }
+      const snapshot = response.page as PageSnapshot;
+      pendingPageSnapshotsRef.current.set(key, snapshot);
+      setCurrentPage((current) => current.url === snapshot.url
+        ? { ...snapshot, status: 'ready' }
+        : current);
+      if (currentPageRef.current.url === snapshot.url) setPageIssue(null);
+      return { snapshot };
+    })().finally(() => {
+      pendingPagePreparationsRef.current.delete(key);
+    });
+    pendingPagePreparationsRef.current.set(key, preparation);
+    return preparation;
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !currentPage.url) return;
+    const timer = window.setTimeout(() => {
+      void preparePageContext(activeConversation.id, currentPage);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeConversation.id,
+    currentPage.browserTabId,
+    currentPage.title,
+    currentPage.url,
+    pageMetadataRevision,
+    preparePageContext,
+    workspaceHydrated,
+  ]);
 
   const runAgentRequest = async (request: QueuedAgentRequest, signal: AbortSignal) => {
     const token = workosToken;
@@ -548,11 +660,17 @@ export default function App() {
     let receivedText = false;
     let terminalError: string | null = null;
     let branchContextConsumed = false;
-    const pageSnapshot = await waitForAbortable(request.pageSnapshotPromise, signal);
+    const preparation = await waitForAbortable(request.pageSnapshotPromise, signal);
     if (signal.aborted) return;
+    const pageSnapshot = preparation?.snapshot;
 
     if (pageSnapshot) {
       const sentAt = Date.now();
+      const sentContext = sentPageContext(pageSnapshot, sentAt, 1);
+      updateMessage(conversationId, userMessage.id, {
+        pageContext: sentContext,
+        pageContextIssue: undefined,
+      });
       updateConversation(conversationId, (conversation) => {
         const existing = conversation.pages.find((page) => page.url === pageSnapshot.url);
         const sentPage = sentPageContext(pageSnapshot, sentAt, (existing?.version ?? 0) + 1);
@@ -571,6 +689,11 @@ export default function App() {
       setCurrentPage((page) => page.url === pageSnapshot.url
         ? sentPageContext(pageSnapshot, sentAt, 1)
         : page);
+    } else if (needsPageRead && userMessage.pageContext) {
+      updateMessage(conversationId, userMessage.id, {
+        pageContext: { ...userMessage.pageContext, status: 'not-read' },
+        pageContextIssue: preparation?.error ?? '当前页未能加入本次问题。',
+      });
     }
 
     const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
@@ -593,7 +716,12 @@ export default function App() {
       await executeWorkosStream(
         token,
         remoteUuid,
-        { content: prependBranchContext(pendingBranchContext, content), attachments: [] },
+        {
+          content: prependBranchContext(pendingBranchContext, content),
+          attachments: (userMessage.attachments ?? [])
+            .filter((attachment) => attachment.status === 'ready' && attachment.url)
+            .map((attachment) => ({ url: attachment.url!, filename: attachment.filename })),
+        },
         {
           onText: (text) => {
             consumeBranchContext();
@@ -648,15 +776,25 @@ export default function App() {
       setSettingsOpen(true);
       return;
     }
-    const hasContent = activeConversation.draftInput.trim() || activeConversation.draftQuotes.length > 0;
+    if (activeConversation.draftAttachments.some((attachment) => attachment.status === 'uploading')) {
+      setConnectionIssue('附件仍在上传，请等待完成后再发送。');
+      return;
+    }
+    const readyAttachments = activeConversation.draftAttachments.filter(
+      (attachment) => attachment.status === 'ready' && attachment.url,
+    );
+    const hasContent = activeConversation.draftInput.trim()
+      || activeConversation.draftQuotes.length > 0
+      || readyAttachments.length > 0;
     if (!hasContent) return;
 
     const now = Date.now();
     const conversationAtSend = activeConversation;
     const pageAtSend = displayedPage;
-    const queuedSnapshot = pendingPageSnapshotsRef.current.get(conversationAtSend.id);
-    const pageAlreadySent = conversationAtSend.pages.some((page) => page.url === pageAtSend.url && page.sentAt);
-    const needsPageRead = Boolean(queuedSnapshot) || !pageAlreadySent;
+    const includeCurrentPage = shouldAttachPageSnapshot(pageReferenceIncluded, pageAtSend);
+    const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
+    const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
+    const needsPageRead = includeCurrentPage;
     const userMessage: ChatMessage = {
       id: makeId('message'),
       role: 'user',
@@ -664,7 +802,10 @@ export default function App() {
       createdAt: now,
       status: 'complete',
       references: activeConversation.draftQuotes,
-      pageContext: { ...pageAtSend },
+      attachments: readyAttachments,
+      pageContext: includeCurrentPage
+        ? { ...pageAtSend, status: needsPageRead ? 'reading' : 'read' }
+        : undefined,
     };
     const assistantMessage: ChatMessage = {
       id: makeId('message'),
@@ -674,7 +815,6 @@ export default function App() {
       status: 'queued',
       stage: 'queued',
       activities: [],
-      pageContext: { ...pageAtSend },
     };
 
     updateConversation(conversationAtSend.id, (conversation) => ({
@@ -688,18 +828,15 @@ export default function App() {
       messages: [...conversation.messages, userMessage, assistantMessage],
       draftInput: '',
       draftQuotes: [],
+      draftAttachments: conversation.draftAttachments.filter((attachment) => attachment.status !== 'ready'),
+      draftPageReference: includedPageReference(pageAtSend),
     }));
 
-    if (queuedSnapshot) pendingPageSnapshotsRef.current.delete(conversationAtSend.id);
-    const pageSnapshotPromise = (async () => {
-      if (queuedSnapshot) return queuedSnapshot;
-      if (!needsPageRead) return undefined;
-      const request: ExtensionRequest = { type: 'page:extract-active' };
-      const response = await browser.runtime.sendMessage(request).catch(() => null) as PageResponse | null;
-      if (response?.page && 'markdown' in response.page) return response.page as PageSnapshot;
-      setPageIssue(response?.error ?? '页面正文未能读取，本次将仅发送问题与引用。');
-      return undefined;
-    })();
+    const pageSnapshotPromise = queuedSnapshot
+      ? Promise.resolve<PagePreparationResult>({ snapshot: queuedSnapshot })
+      : needsPageRead
+        ? preparePageContext(conversationAtSend.id, pageAtSend)
+        : Promise.resolve<PagePreparationResult>({});
 
     requestCoordinatorRef.current?.enqueue({
       conversationId: conversationAtSend.id,
@@ -727,7 +864,74 @@ export default function App() {
       messageId: message.id,
       userMessage,
       needsPageRead: false,
-      pageSnapshotPromise: Promise.resolve(undefined),
+      pageSnapshotPromise: Promise.resolve({}),
+    });
+  };
+
+  const addAttachments = (files: FileList | null) => {
+    const selectedFiles = Array.from(files ?? []);
+    if (!selectedFiles.length) return;
+    if (!workspaceHydrated || workosToken === null) {
+      setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
+      return;
+    }
+    if (!workosToken) {
+      setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+      setSettingsOpen(true);
+      return;
+    }
+
+    const conversationId = activeConversation.id;
+    const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - activeConversation.draftAttachments.length);
+    const filesToAdd = selectedFiles.slice(0, availableSlots);
+    if (!filesToAdd.length) {
+      setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件。`);
+      return;
+    }
+    if (filesToAdd.length < selectedFiles.length) {
+      setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件，已忽略多余文件。`);
+    }
+
+    const uploads = filesToAdd.map((file) => {
+      const errorMessage = attachmentValidationError(file);
+      return {
+        file,
+        attachment: {
+          id: makeId('attachment'),
+          filename: file.name,
+          sizeLabel: formatFileSize(file.size),
+          status: errorMessage ? 'failed' as const : 'uploading' as const,
+          errorMessage: errorMessage ?? undefined,
+        },
+      };
+    });
+
+    updateConversation(conversationId, (conversation) => ({
+      ...conversation,
+      draftAttachments: [...conversation.draftAttachments, ...uploads.map(({ attachment }) => attachment)],
+    }));
+
+    uploads.forEach(({ file, attachment }) => {
+      if (attachment.status === 'failed') return;
+      void uploadWorkosFile(workosToken, file)
+        .then(({ fileReadUrl }) => {
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
+              ? { ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }
+              : item),
+          }));
+        })
+        .catch((error: unknown) => {
+          const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
+              ? { ...item, status: 'failed', errorMessage }
+              : item),
+          }));
+          setConnectionIssue(errorMessage);
+        });
     });
   };
 
@@ -761,10 +965,16 @@ export default function App() {
     setSettingsOpen(false);
   };
 
+  const changeCurrentPageReference = (included: boolean) => {
+    if (!currentPage.url) return;
+    patchActiveConversation({
+      draftPageReference: setPageReferenceIncluded(currentPage, included),
+    });
+  };
+
   return (
     <div className="app-shell">
-      <TopBar conversationTitle={activeConversation.title} tabCount={workspace.openTabs.length} onOpenSettings={() => setSettingsOpen(true)} />
-      <SourceBar page={displayedPage} pageReadEnabled issue={pageIssue} onRefresh={() => void refreshPageContext()} />
+      <TopBar tabCount={workspace.openTabs.length} onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
         messages={activeConversation.messages}
         onUseStarter={(value) => patchActiveConversation({ draftInput: value })}
@@ -778,11 +988,14 @@ export default function App() {
         input={activeConversation.draftInput}
         quotes={activeConversation.draftQuotes}
         attachments={activeConversation.draftAttachments}
+        currentPage={displayedPage}
+        currentPageIncluded={pageReferenceIncluded}
+        currentPageIssue={pageIssue}
         activeConversationIds={activeConversationIds}
         runSummary={runSummary}
         historyOpen={historyOpen}
         tokenState={!workspaceHydrated || workosToken === null ? 'loading' : workosToken ? 'configured' : 'missing'}
-        fileUploadEnabled={false}
+        fileUploadEnabled={Boolean(workosToken)}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
         onAddTab={addTab}
@@ -796,7 +1009,16 @@ export default function App() {
         onRemoveAttachment={(id) => patchActiveConversation({
           draftAttachments: activeConversation.draftAttachments.filter((attachment) => attachment.id !== id),
         })}
-        onFilesSelected={() => undefined}
+        onCurrentPageIncludedChange={changeCurrentPageReference}
+        onFilesSelected={addAttachments}
+        onAttachmentUnavailable={() => {
+          if (workosToken === null) {
+            setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
+            return;
+          }
+          setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+          setSettingsOpen(true);
+        }}
         onSend={sendMessage}
         onStop={() => {
           if (runSummary) stopRequest(activeConversation.id, runSummary.activeMessageId);

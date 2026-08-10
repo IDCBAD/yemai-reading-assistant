@@ -25,6 +25,7 @@ function conversation(): Conversation {
     draftInput: '尚未发送的草稿',
     draftQuotes: [],
     draftAttachments: [],
+    draftPageReference: { url: page.url, mode: 'included' },
   };
 }
 
@@ -36,7 +37,7 @@ function workspace(): WorkspaceState {
   };
 }
 
-describe('workspace state v2', () => {
+describe('workspace state v3', () => {
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
     const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(workspace(), 100), 200);
 
@@ -114,13 +115,14 @@ describe('v1 migration', () => {
     const main = restored?.conversations.find((item) => item.id === 'legacy-1');
     const migratedDraft = restored?.conversations.find((item) => item.id === 'legacy-1-draft-legacy-tab-1');
 
-    expect(restored?.version).toBe(2);
+    expect(restored?.version).toBe(3);
     expect(restored?.openTabs).toEqual([{ id: 'open-legacy-1', conversationId: 'legacy-1', openedAt: 100 }]);
     expect(main?.remoteUuid).toBe('remote-legacy');
     expect(main?.draftInput).toBe('当前草稿');
     expect(main?.messages.map((message) => message.id)).toEqual(['m1', 'm2']);
     expect(main?.messages[0]?.pageContext?.url).toBe('https://example.com/2');
     expect(main?.pages).toHaveLength(2);
+    expect(main?.draftPageReference).toEqual({ url: 'https://example.com/2', mode: 'included' });
     expect(migratedDraft?.draftInput).toBe('另一个页面的草稿');
     expect(migratedDraft?.remoteUuid).toBeUndefined();
   });
@@ -173,5 +175,21 @@ describe('v1 migration', () => {
     });
 
     expect(restored?.conversations.map((item) => item.branch)).toEqual([undefined, undefined]);
+  });
+});
+
+describe('v2 migration', () => {
+  it('adds the default current-page reference to stored conversations', () => {
+    const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
+    stored.version = 2;
+    stored.conversations = (stored.conversations as Conversation[]).map(({ draftPageReference: _reference, ...item }) => item);
+
+    const restored = normalizeWorkspaceSnapshot(stored);
+
+    expect(restored?.version).toBe(3);
+    expect(restored?.conversations[0]?.draftPageReference).toEqual({
+      url: 'https://example.com',
+      mode: 'included',
+    });
   });
 });

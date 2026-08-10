@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
 import { KoboyoIcon } from './KoboyoIcon';
+import { YuemaiMark } from './YuemaiMark';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -59,7 +60,7 @@ function ActivityStatusIcon({ status }: { status: RunActivityStatus }) {
 }
 
 function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const activeCount = activities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
   const failedCount = activities.filter((activity) => activity.status === 'failed').length;
   const summary = activeCount > 0
@@ -145,7 +146,7 @@ function AssistantMessage({
     <article className="message message--assistant">
       <div className="assistant-rail" aria-hidden="true">
         <span className="assistant-mark">
-          <KoboyoIcon name="bot" size={14} />
+          <YuemaiMark />
         </span>
         <span className="assistant-line" />
       </div>
@@ -219,7 +220,22 @@ function AssistantMessage({
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <article className="message message--user">
-      <div className="user-message-card">
+      <div className="user-message-stack">
+        {message.pageContext && (
+          <div
+            className={`sent-page-context sent-page-context--${message.pageContext.status}${message.pageContextIssue ? ' has-issue' : ''}`}
+            title={message.pageContextIssue ?? message.pageContext.url}
+          >
+            <KoboyoIcon name="globe" size={12} />
+            <span>
+              {message.pageContextIssue
+                ? '当前页未能加入本次问题'
+                : `${message.pageContext.title} · ${message.pageContext.site}`}
+            </span>
+            {message.pageContext.status === 'reading' && <i aria-label="正在准备当前页" />}
+          </div>
+        )}
+        <div className="user-message-card">
         {message.references?.map((reference) => (
           <blockquote className="sent-reference" key={reference.id}>
             <KoboyoIcon name="quote" size={13} />
@@ -237,6 +253,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
           </div>
         )}
         {message.content && <p>{message.content}</p>}
+        </div>
       </div>
     </article>
   );
@@ -254,7 +271,7 @@ export function MessageList({ messages, onUseStarter, onRetry, onBranch }: Messa
       <main className="messages messages--empty">
         <div className="empty-state">
           <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
-          <span className="empty-kicker">阅读工作页</span>
+          <span className="empty-kicker">读过的，终会连起来。</span>
           <h2>从当前页面开始</h2>
           <p>当前 Tab 对应一条独立会话，问题、引用、草稿和 Agent 记忆都只属于这里。</p>
           <div className="starter-list">

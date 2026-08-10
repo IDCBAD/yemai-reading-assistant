@@ -9,7 +9,7 @@ import type {
   WorkspaceState,
 } from '../sidepanel/types';
 
-export const WORKSPACE_STATE_VERSION = 2;
+export const WORKSPACE_STATE_VERSION = 3;
 export const MAX_OPEN_TABS = 10;
 
 export interface WorkspaceSnapshot extends WorkspaceState {
@@ -49,7 +49,14 @@ function isPage(value: unknown): value is PageContext {
     && typeof value.title === 'string'
     && typeof value.site === 'string'
     && typeof value.url === 'string'
-    && typeof value.status === 'string';
+    && typeof value.status === 'string'
+    && (value.browserTabId === undefined || typeof value.browserTabId === 'number');
+}
+
+function isDraftPageReference(value: unknown) {
+  return isRecord(value)
+    && typeof value.url === 'string'
+    && (value.mode === 'included' || value.mode === 'excluded');
 }
 
 function isQuote(value: unknown): value is QuoteReference {
@@ -66,7 +73,15 @@ function isAttachment(value: unknown): value is DraftAttachment {
     && typeof value.id === 'string'
     && typeof value.filename === 'string'
     && typeof value.sizeLabel === 'string'
-    && typeof value.status === 'string';
+    && typeof value.status === 'string'
+    && (value.url === undefined || typeof value.url === 'string')
+    && (value.errorMessage === undefined || typeof value.errorMessage === 'string');
+}
+
+function recoverAttachment(attachment: DraftAttachment): DraftAttachment {
+  return attachment.status === 'uploading'
+    ? { ...attachment, status: 'failed', errorMessage: '上传在浏览器关闭前未完成，请删除后重新添加。' }
+    : attachment;
 }
 
 function isActivity(value: unknown): value is RunActivity {
@@ -85,6 +100,7 @@ function isMessage(value: unknown): value is ChatMessage {
     && typeof value.createdAt === 'number'
     && typeof value.status === 'string'
     && (value.pageContext === undefined || isPage(value.pageContext))
+    && (value.pageContextIssue === undefined || typeof value.pageContextIssue === 'string')
     && (value.activities === undefined || (Array.isArray(value.activities) && value.activities.every(isActivity)))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isQuote)))
     && (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment)));
@@ -98,7 +114,7 @@ function isBranch(value: unknown) {
     && typeof value.ordinal === 'number';
 }
 
-function isConversation(value: unknown): value is Conversation {
+function isConversationV2(value: unknown): value is Omit<Conversation, 'draftPageReference'> {
   return isRecord(value)
     && typeof value.id === 'string'
     && typeof value.title === 'string'
@@ -117,6 +133,11 @@ function isConversation(value: unknown): value is Conversation {
     && value.draftQuotes.every(isQuote)
     && Array.isArray(value.draftAttachments)
     && value.draftAttachments.every(isAttachment);
+}
+
+function isConversation(value: unknown): value is Conversation {
+  return isConversationV2(value)
+    && isDraftPageReference((value as unknown as UnknownRecord).draftPageReference);
 }
 
 function isOpenTab(value: unknown): value is OpenConversationTab {
@@ -219,6 +240,7 @@ function migrateLegacyConversations(legacyConversations: LegacyConversation[]) {
       draftInput: activeTab.draftInput,
       draftQuotes: activeTab.draftQuotes,
       draftAttachments: activeTab.draftAttachments,
+      draftPageReference: { url: activeTab.page.url, mode: 'included' },
     };
     return { conversation, baseTitle: title.baseTitle, depth: title.depth };
   });
@@ -275,6 +297,7 @@ function migrateLegacyConversations(legacyConversations: LegacyConversation[]) {
         draftInput: tab.draftInput,
         draftQuotes: tab.draftQuotes,
         draftAttachments: tab.draftAttachments,
+        draftPageReference: { url: tab.page.url, mode: 'included' },
       }));
   });
 
@@ -291,10 +314,15 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Dat
   };
 }
 
-function normalizeV2(value: UnknownRecord, recoveredAt: number): WorkspaceSnapshot | null {
+function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
+  value: UnknownRecord,
+  recoveredAt: number,
+  validator: (conversation: unknown) => conversation is T,
+  migrate: (conversation: T) => Conversation,
+): WorkspaceSnapshot | null {
   if (!Array.isArray(value.conversations)
     || value.conversations.length === 0
-    || !value.conversations.every(isConversation)
+    || !value.conversations.every(validator)
     || !Array.isArray(value.openTabs)
     || !value.openTabs.every(isOpenTab)
     || typeof value.activeOpenTabId !== 'string'
@@ -302,9 +330,11 @@ function normalizeV2(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
 
   const conversations = value.conversations
     .filter((conversation, index, items) => items.findIndex((item) => item.id === conversation.id) === index)
+    .map((conversation) => migrate(conversation))
     .map((conversation) => ({
       ...conversation,
       messages: conversation.messages.map((message) => recoverMessage(message, recoveredAt)),
+      draftAttachments: conversation.draftAttachments.map(recoverAttachment),
     }));
   const conversationIds = new Set(conversations.map((conversation) => conversation.id));
   const openConversationIds = new Set<string>();
@@ -325,6 +355,17 @@ function normalizeV2(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
   return createWorkspaceSnapshot({ conversations: normalizedConversations, openTabs, activeOpenTabId }, value.savedAt);
 }
 
+function normalizeV3(value: UnknownRecord, recoveredAt: number) {
+  return normalizeWorkspace(value, recoveredAt, isConversation, (conversation) => conversation as Conversation);
+}
+
+function normalizeV2(value: UnknownRecord, recoveredAt: number) {
+  return normalizeWorkspace(value, recoveredAt, isConversationV2, (conversation) => ({
+    ...conversation,
+    draftPageReference: { url: conversation.page.url, mode: 'included' },
+  }));
+}
+
 function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapshot | null {
   if (!Array.isArray(value.conversations)
     || value.conversations.length === 0
@@ -336,6 +377,7 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
   const conversations = migrateLegacyConversations(legacyConversations).map((conversation) => ({
     ...conversation,
     messages: conversation.messages.map((message) => recoverMessage(message, recoveredAt)),
+    draftAttachments: conversation.draftAttachments.map(recoverAttachment),
   }));
   const activeConversationId = conversations.some((conversation) => conversation.id === value.activeConversationId)
     ? value.activeConversationId
@@ -354,7 +396,8 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
 
 export function normalizeWorkspaceSnapshot(value: unknown, recoveredAt = Date.now()): WorkspaceSnapshot | null {
   if (!isRecord(value)) return null;
-  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV2(value, recoveredAt);
+  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV3(value, recoveredAt);
+  if (value.version === 2) return normalizeV2(value, recoveredAt);
   if (value.version === 1) return normalizeV1(value, recoveredAt);
   return null;
 }

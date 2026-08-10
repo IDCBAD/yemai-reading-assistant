@@ -8,6 +8,7 @@ import type {
   SelectionConsumeResponse,
 } from '../src/shared/extensionMessages';
 import type { QuoteReference } from '../src/sidepanel/types';
+import { hasDefiniteUrlMismatch, isDefinitelyUnsupportedPage } from '../src/shared/tabTarget';
 
 const PENDING_QUOTES_KEY = 'pendingSelectionQuotes';
 const SELECTION_BUBBLE_KEY = 'selectionBubbleEnabled';
@@ -58,16 +59,43 @@ export default defineBackground(() => {
     return { quotes };
   };
 
-  const sendToActiveTab = async (message: ContentRequest): Promise<PageResponse> => {
-    const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+  const sendToTab = async (
+    message: ContentRequest,
+    target?: { tabId?: number; expectedUrl?: string },
+  ): Promise<PageResponse> => {
+    const tab = target?.tabId === undefined
+      ? (await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0]
+      : await browser.tabs.get(target.tabId).catch(() => undefined);
     if (tab?.id === undefined) {
       return { page: null, error: '当前页面不支持读取。' };
     }
-    try {
-      return await browser.tabs.sendMessage(tab.id, message) as PageResponse;
-    } catch {
-      return { page: null, error: '无法连接当前网页，请刷新页面后重试。' };
+    if (isDefinitelyUnsupportedPage(tab.url)) {
+      return { page: null, error: '当前页面不支持读取。' };
     }
+    if (hasDefiniteUrlMismatch(tab.url, target?.expectedUrl)) {
+      return { page: null, error: '页面已切换，本次没有读取旧页面。' };
+    }
+
+    for (const delay of [0, 150, 350]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      const latestTab = await browser.tabs.get(tab.id).catch(() => undefined);
+      if (!latestTab) return { page: null, error: '页面已关闭，本次没有继续读取。' };
+      if (hasDefiniteUrlMismatch(latestTab.url, target?.expectedUrl)) {
+        return { page: null, error: '页面已切换，本次没有读取旧页面。' };
+      }
+      try {
+        const response = await browser.tabs.sendMessage(tab.id, message) as PageResponse;
+        if (response.page && target?.expectedUrl && response.page.url !== target.expectedUrl) {
+          return { page: null, error: '页面已切换，本次没有读取旧页面。' };
+        }
+        return response.page
+          ? { ...response, page: { ...response.page, browserTabId: tab.id } }
+          : response;
+      } catch {
+        // A freshly reloaded tab can finish loading just before its content script is ready.
+      }
+    }
+    return { page: null, error: '无法连接当前网页，请刷新页面后重试。' };
   };
 
   browser.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse) => {
@@ -89,9 +117,12 @@ export default defineBackground(() => {
     const responsePromise = isSelectionConsume
       ? consumeQuotes()
       : message.type === 'page:get-active-metadata'
-        ? sendToActiveTab({ type: 'page:get-metadata' })
+        ? sendToTab({ type: 'page:get-metadata' }, { tabId: message.tabId })
         : message.type === 'page:extract-active'
-          ? sendToActiveTab({ type: 'page:extract' })
+          ? sendToTab(
+              { type: 'page:extract' },
+              { tabId: message.tabId, expectedUrl: message.expectedUrl },
+            )
           : null;
     if (!responsePromise) return false;
     void responsePromise
