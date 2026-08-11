@@ -9,6 +9,7 @@ export type KoboyoIconName =
   | 'eye'
   | 'eye-off'
   | 'file'
+  | 'fork'
   | 'globe'
   | 'link'
   | 'link-off'

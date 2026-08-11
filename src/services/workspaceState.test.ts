@@ -18,6 +18,7 @@ function conversation(): Conversation {
       role: 'assistant',
       content: '未完成回答',
       createdAt: 11,
+      respondedAt: 13,
       status: 'streaming',
       stage: 'streaming',
       activities: [{ id: 'tool-1', kind: 'tool', title: '搜索', status: 'running', startedAt: 12 }],
@@ -46,6 +47,7 @@ describe('workspace state v4', () => {
     expect(restored?.openTabs[0]?.conversationId).toBe('conversation-1');
     expect(restored?.conversations[0]?.remoteUuid).toBe('remote-1');
     expect(restored?.conversations[0]?.draftInput).toBe('尚未发送的草稿');
+    expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });
 
   it('marks interrupted streams and tools as stopped after reload', () => {

@@ -2,6 +2,7 @@ import { isValidElement, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
+import { formatMessageTimestamp } from '../messageTimestamp';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { YemaiMark } from './YemaiMark';
@@ -14,6 +15,28 @@ interface MessageListProps {
 }
 
 const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
+
+function MessageTime({
+  timestamp,
+  label,
+  className = '',
+}: {
+  timestamp: number;
+  label: string;
+  className?: string;
+}) {
+  const formatted = formatMessageTimestamp(timestamp);
+  return (
+    <time
+      className={`message-time${className ? ` ${className}` : ''}`}
+      dateTime={formatted.dateTime}
+      title={formatted.fullLabel}
+      aria-label={`${label}${formatted.fullLabel}`}
+    >
+      {formatted.label}
+    </time>
+  );
+}
 
 function CodeBlock({ children }: { children: string }) {
   const [copied, setCopied] = useState(false);
@@ -204,12 +227,19 @@ function AssistantMessage({
                   className="assistant-action pressable"
                   type="button"
                   onClick={onBranch}
-                  aria-label="从这条回答创建会话分支"
-                  title="从这条回答创建会话分支"
+                  aria-label="从这里分支"
+                  title="从这里分支"
                 >
-                  <KoboyoIcon name="message-square-plus" size={13} />
+                  <KoboyoIcon name="fork" size={14} />
                 </button>
               </>
+            )}
+            {(message.respondedAt || message.content) && (
+              <MessageTime
+                timestamp={message.respondedAt ?? message.createdAt}
+                label="Agent 回答于"
+                className="message-time--assistant"
+              />
             )}
           </div>
         )}
@@ -260,6 +290,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
         )}
         {message.content && <p>{message.content}</p>}
         </div>
+        <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
       </div>
     </article>
   );

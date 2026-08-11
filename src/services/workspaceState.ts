@@ -133,6 +133,7 @@ function isMessage(value: unknown): value is ChatMessage {
     && (value.role === 'user' || value.role === 'assistant')
     && typeof value.content === 'string'
     && typeof value.createdAt === 'number'
+    && (value.respondedAt === undefined || typeof value.respondedAt === 'number')
     && typeof value.status === 'string'
     && (value.pageContext === undefined || isPage(value.pageContext))
     && (value.pageContextMode === undefined || ['manifest', 'reuse', 'snapshot'].includes(value.pageContextMode as string))

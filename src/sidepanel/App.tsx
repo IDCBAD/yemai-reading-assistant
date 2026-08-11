@@ -749,11 +749,13 @@ export default function App() {
         {
           onText: (text) => {
             consumeBranchContext();
+            const respondedAt = !receivedText && text.length > 0 ? Date.now() : undefined;
             receivedText = receivedText || text.length > 0;
             updateMessage(conversationId, messageId, {
               content: text,
               stage: 'streaming',
               status: 'streaming',
+              ...(respondedAt ? { respondedAt } : {}),
             });
           },
           onActivity: (activity) => {
@@ -936,6 +938,7 @@ export default function App() {
     if (!userMessage) return;
     updateMessage(activeConversation.id, message.id, {
       content: '',
+      respondedAt: undefined,
       status: 'queued',
       stage: 'queued',
       errorMessage: undefined,

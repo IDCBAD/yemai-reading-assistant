@@ -75,6 +75,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  respondedAt?: number;
   status: MessageStatus;
   stage?: MessageStage;
   errorMessage?: string;

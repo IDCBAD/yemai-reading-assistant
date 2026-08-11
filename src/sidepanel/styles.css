@@ -205,15 +205,36 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
-.message { width: 100%; }
+.message { position: relative; width: 100%; }
 .message + .message { margin-top: 27px; }
 .message--user { display: flex; justify-content: flex-end; }
 
 .user-message-stack {
+  position: relative;
   display: grid;
   width: min(89%, 560px);
   justify-items: end;
   gap: 6px;
+}
+
+.message-time {
+  color: var(--muted-light);
+  font-size: 8.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 120ms ease;
+}
+
+.message:focus-within .message-time { opacity: 1; }
+
+.message-time--user {
+  position: absolute;
+  right: calc(100% + 9px);
+  bottom: 8px;
 }
 
 .sent-page-context {
@@ -789,6 +810,8 @@ textarea:focus-visible {
   background: rgba(238, 244, 255, 0.9);
   box-shadow: inset 0 0 0 1px rgba(92, 118, 166, 0.12);
 }
+
+.message-time--assistant { margin-left: 5px; }
 
 .page-favicon img {
   display: block;
@@ -1612,6 +1635,13 @@ textarea:focus-visible {
   }
 }
 
+@media (max-width: 640px) {
+  .message-time--user {
+    right: 2px;
+    bottom: -15px;
+  }
+}
+
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   .topbar,
   .composer,
@@ -1630,6 +1660,7 @@ textarea:focus-visible {
 
 @media (hover: hover) and (pointer: fine) {
   .pressable:hover:not(:disabled) { will-change: transform; }
+  .message:hover .message-time { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
