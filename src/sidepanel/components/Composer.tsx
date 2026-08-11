@@ -4,6 +4,7 @@ import { BorderBeam } from 'border-beam';
 import type { AgentRunSummary, Conversation, DraftAttachment, OpenConversationTab, PageContext, QuoteReference } from '../types';
 import { AgentRunStatus } from './AgentRunStatus';
 import { KoboyoIcon } from './KoboyoIcon';
+import { PageFavicon } from './PageFavicon';
 
 interface ComposerProps {
   tabs: OpenConversationTab[];
@@ -236,7 +237,12 @@ export function Composer({
             aria-label={currentPageIncluded ? '本次提问引用的当前页面' : '当前页面未加入本次提问'}
             aria-live="polite"
           >
-            <KoboyoIcon name="globe" size={14} />
+            <PageFavicon
+              url={currentPage.url}
+              title={currentPage.title}
+              site={currentPage.site}
+              size={16}
+            />
             <span className="current-page-copy">
               <small>{!currentPageIncluded ? '未引用' : currentPageIssue ? '当前页未能读取' : currentPage.status === 'reading' ? '正在准备当前页' : '当前页'}</small>
               <strong title={`${currentPage.title} · ${currentPage.site}`}>{currentPage.title}</strong>

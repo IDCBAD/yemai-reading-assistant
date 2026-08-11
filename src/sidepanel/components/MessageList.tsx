@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
 import { KoboyoIcon } from './KoboyoIcon';
+import { PageFavicon } from './PageFavicon';
 import { YemaiMark } from './YemaiMark';
 
 interface MessageListProps {
@@ -226,7 +227,12 @@ function UserMessage({ message }: { message: ChatMessage }) {
             className={`sent-page-context sent-page-context--${message.pageContext.status}${message.pageContextIssue ? ' has-issue' : ''}`}
             title={message.pageContextIssue ?? message.pageContext.url}
           >
-            <KoboyoIcon name="globe" size={12} />
+            <PageFavicon
+              url={message.pageContext.url}
+              title={message.pageContext.title}
+              site={message.pageContext.site}
+              size={14}
+            />
             <span>
               {message.pageContextIssue
                 ? '当前页仅以链接加入'

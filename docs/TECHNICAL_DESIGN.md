@@ -359,6 +359,7 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 permissions:
 - sidePanel
 - storage
+- favicon
 
 host_permissions:
 - https://power-api.yingdao.com/*
@@ -368,7 +369,7 @@ content_scripts.matches:
 - https://*/*
 ```
 
-不申请 cookies、history、downloads、webRequest 或任意 HTTP API 权限。
+`favicon` 仅用于读取 Chrome 已缓存的网站图标，在当前页来源栏中识别站点；不访问第三方 favicon 服务。除此之外，不申请 cookies、history、downloads、webRequest 或任意 HTTP API 权限。
 
 ## 12. 安全边界
 
