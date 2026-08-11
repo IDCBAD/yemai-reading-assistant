@@ -209,7 +209,7 @@ function AssistantMessage({
                 aria-label={message.content ? '重试回答' : '重新发送'}
                 title={message.content ? '重试回答' : '重新发送'}
               >
-                <KoboyoIcon name="cycle" size={13} />
+                <KoboyoIcon name="cycle" size={14} />
               </button>
             )}
             {actionsAvailable && (
@@ -221,7 +221,7 @@ function AssistantMessage({
                   aria-label={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
                   title={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
                 >
-                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={13} />
+                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
                 </button>
                 <button
                   className="assistant-action pressable"
