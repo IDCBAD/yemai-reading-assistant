@@ -1,4 +1,6 @@
-# Web Reading Assistant
+# 页脉 Yemai
+
+读过的，终会连起来。
 
 一个面向个人使用的 Chrome 侧边栏 AI 阅读助手。插件通过影刀 WorkOS Agent API 提供连续对话、当前网页上下文、划词引用和文件问答能力。
 
