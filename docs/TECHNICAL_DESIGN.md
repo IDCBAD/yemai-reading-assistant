@@ -338,6 +338,8 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 插件内部使用 `yuemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
 
+内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。
+
 当前页交付模式包括：
 
 - `manifest`：首次引用或页面更新时发送有限页面清单。
@@ -349,7 +351,7 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 页面抽取仍将完整 Markdown 硬限制为 40,000 字符，但默认 Manifest 只包含 300 字符说明、12 个标题、800 字符开头和 10 个相关入口。完整 Markdown 只存在于请求准备内存，工作区持久化会显式清除 `markdown`；本地可以保存有限 Manifest、URL、哈希、质量、版本和发送时间。
 
-页面、引用和问题中的协议边界标记会在 Markdown 渲染时中和。该处理不能替代 Agent 端的提示注入防护，二者需要同时存在。
+页面、引用和问题中的协议边界标记会在 Markdown 渲染时中和。该处理不能替代 Agent 端固定配置的提示注入防护，二者需要同时存在。插件仓库中的 Agent 协议文档只有在真正安装到 WorkOS Agent 配置后才会生效，不能作为普通用户消息临时附带。
 
 ## 11. Manifest 权限
 

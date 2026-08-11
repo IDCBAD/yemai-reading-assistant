@@ -54,7 +54,7 @@ describe('buildAgentContent', () => {
       createdAt: '2026-08-10T00:00:00.000Z',
     });
 
-    expect(content).toContain('标题：页面 A');
+    expect(content).toContain('来源：页面 A');
     expect(content).toContain('> 第一段引用');
     expect(content).toContain('网址：https://example.com/b');
     expect(content).toContain('> 第二段引用');
@@ -72,7 +72,7 @@ describe('buildAgentContent', () => {
       createdAt: '2026-08-10T00:00:00.000Z',
     });
 
-    expect(content).toContain('沿用本会话中已提供的相同内容版本');
+    expect(content).toContain('复用本会话中已经建立的页面上下文');
     expect(content).not.toContain('一本源码精读笔记。');
     expect(content).not.toContain('完整内容');
   });
