@@ -4,19 +4,19 @@ import type {
   ReuseReference,
   SelectionReference,
   SnapshotReference,
-  YuemaiContextEnvelope,
-  YuemaiReference,
-} from '../shared/yuemaiContext';
+  YemaiContextEnvelope,
+  YemaiReference,
+} from '../shared/yemaiContext';
 
-const START_MARKER = '[YUEMAI_CONTEXT_V1]';
-const END_MARKER = '[END_YUEMAI_CONTEXT]';
+const START_MARKER = '[YEMAI_CONTEXT_V1]';
+const END_MARKER = '[END_YEMAI_CONTEXT]';
 
 type ContentHeading = '##' | '###';
 
 function neutralizeBoundaryMarkers(value: string) {
   return value
-    .replaceAll(START_MARKER, '［YUEMAI_CONTEXT_V1］')
-    .replaceAll(END_MARKER, '［END_YUEMAI_CONTEXT］');
+    .replaceAll(START_MARKER, '［YEMAI_CONTEXT_V1］')
+    .replaceAll(END_MARKER, '［END_YEMAI_CONTEXT］');
 }
 
 function inline(value: string) {
@@ -120,14 +120,14 @@ function renderSnapshot(reference: SnapshotReference, heading: ContentHeading) {
   return sections.join('\n');
 }
 
-function renderReference(reference: YuemaiReference, heading: ContentHeading) {
+function renderReference(reference: YemaiReference, heading: ContentHeading) {
   if (reference.mode === 'manifest') return renderManifest(reference, heading);
   if (reference.mode === 'reuse') return renderReuse(reference);
   if (reference.mode === 'selection') return renderSelection(reference, heading);
   return renderSnapshot(reference, heading);
 }
 
-export function renderYuemaiContextMarkdown(envelope: YuemaiContextEnvelope) {
+export function renderYemaiContextMarkdown(envelope: YemaiContextEnvelope) {
   const sections = [
     START_MARKER,
     '',

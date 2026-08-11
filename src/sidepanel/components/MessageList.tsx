@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
 import { KoboyoIcon } from './KoboyoIcon';
-import { YuemaiMark } from './YuemaiMark';
+import { YemaiMark } from './YemaiMark';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -146,7 +146,7 @@ function AssistantMessage({
     <article className="message message--assistant">
       <div className="assistant-rail" aria-hidden="true">
         <span className="assistant-mark">
-          <YuemaiMark />
+          <YemaiMark />
         </span>
         <span className="assistant-line" />
       </div>

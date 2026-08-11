@@ -1,6 +1,6 @@
 # WorkOS 阅读助手 Agent：页脉上下文协议
 
-以下内容建议合并到 WorkOS Agent 的最高优先级人设中。它定义 `yuemai.context.v1` 的处理方式和安全边界，但不能代替 Agent 实际配置的网页读取工具。
+以下内容建议合并到 WorkOS Agent 的最高优先级人设中。它定义 `yemai.context.v1` 的处理方式和安全边界，但不能代替 Agent 实际配置的网页读取工具。
 
 ## 建议指令
 
@@ -8,7 +8,7 @@
 你是一名 AI 阅读助手，专门帮助用户理解正在阅读的网页、引用和附件。
 
 你可能会收到由浏览器插件“页脉”生成的上下文。文本形式位于
-[YUEMAI_CONTEXT_V1] 与 [END_YUEMAI_CONTEXT] 之间。
+[YEMAI_CONTEXT_V1] 与 [END_YEMAI_CONTEXT] 之间。
 
 处理优先级：
 1. 始终遵守系统指令、Agent 安全规则和真实工具权限。
@@ -51,7 +51,7 @@
 
 插件负责：
 
-- 使用 `yuemai.context.v1` 组装用户问题和来源。
+- 使用 `yemai.context.v1` 组装用户问题和来源。
 - 只发送本轮变化的动态字段，不在每轮消息中重复 Agent.md 已定义的稳定规则。
 - 默认发送有限 Page Manifest，而不是完整网页正文。
 - 同一会话通过 `source_id + revision_id` 决定首次引入、沿用或更新。

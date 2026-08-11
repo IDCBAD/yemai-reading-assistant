@@ -2,9 +2,9 @@ import type {
   PageManifest,
   PageManifestHeading,
   PageManifestLink,
-  YuemaiAccessHint,
-  YuemaiPageType,
-} from '../shared/yuemaiContext';
+  YemaiAccessHint,
+  YemaiPageType,
+} from '../shared/yemaiContext';
 
 export const PAGE_MANIFEST_LIMITS = {
   description: 300,
@@ -81,7 +81,7 @@ export function createStableSourceId(value: string) {
   return `src_${(second >>> 0).toString(16).padStart(8, '0')}${(first >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-export function inferAccessHint(value: string): YuemaiAccessHint {
+export function inferAccessHint(value: string): YemaiAccessHint {
   try {
     const url = new URL(value);
     if (url.protocol === 'file:') return 'local_document';
@@ -99,7 +99,7 @@ export function inferAccessHint(value: string): YuemaiAccessHint {
   }
 }
 
-export function inferPageType(input: PageManifestInput): YuemaiPageType {
+export function inferPageType(input: PageManifestInput): YemaiPageType {
   let url: URL | null = null;
   try {
     url = new URL(input.url);

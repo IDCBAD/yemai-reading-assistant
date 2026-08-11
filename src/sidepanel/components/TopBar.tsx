@@ -1,5 +1,5 @@
 import { KoboyoIcon } from './KoboyoIcon';
-import { YuemaiMark } from './YuemaiMark';
+import { YemaiMark } from './YemaiMark';
 
 interface TopBarProps {
   tabCount: number;
@@ -11,7 +11,7 @@ export function TopBar({ tabCount, onOpenSettings }: TopBarProps) {
     <header className="topbar">
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
-          <YuemaiMark />
+          <YemaiMark />
         </span>
         <h1 className="brand-name" translate="no">页脉</h1>
       </div>

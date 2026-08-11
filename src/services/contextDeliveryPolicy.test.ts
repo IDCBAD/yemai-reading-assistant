@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentCapabilityProfile, ReferenceSource } from '../shared/yuemaiContext';
+import type { AgentCapabilityProfile, ReferenceSource } from '../shared/yemaiContext';
 import { decideCurrentPageDelivery, type PreparedPageReference } from './contextDeliveryPolicy';
 
 const agent: AgentCapabilityProfile = {

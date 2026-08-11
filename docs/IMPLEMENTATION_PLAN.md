@@ -125,7 +125,7 @@
 - 待处理引用队列（已完成，`chrome.storage.session`）
 - Readability + Turndown 正文抽取（已完成）
 - 页面哈希和版本（已完成基础记录）
-- `yuemai.context.v1` 页面清单、来源复用和受限 Snapshot（已完成）
+- `yemai.context.v1` 页面清单、来源复用和受限 Snapshot（已完成）
 - X 单条推文渐进适配
 - 不支持页面提示（已完成基础降级）
 

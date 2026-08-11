@@ -1,4 +1,4 @@
-import type { PageManifest, YuemaiAccessHint, YuemaiPageType } from '../shared/yuemaiContext';
+import type { PageManifest, YemaiAccessHint, YemaiPageType } from '../shared/yemaiContext';
 
 export type PageStatus = 'not-read' | 'reading' | 'ready' | 'read' | 'changed';
 
@@ -14,8 +14,8 @@ export interface PageContext {
   extractedAt?: number;
   sentAt?: number;
   version?: number;
-  pageType?: YuemaiPageType;
-  accessHint?: YuemaiAccessHint;
+  pageType?: YemaiPageType;
+  accessHint?: YemaiAccessHint;
   manifest?: PageManifest;
   quality?: 'high' | 'partial' | 'fallback';
   truncated?: boolean;

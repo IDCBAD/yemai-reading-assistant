@@ -1,32 +1,32 @@
 import {
-  YUEMAI_CONTEXT_PROTOCOL,
-  type YuemaiContextEnvelope,
-  type YuemaiContextPolicy,
-  type YuemaiReference,
-} from '../shared/yuemaiContext';
+  YEMAI_CONTEXT_PROTOCOL,
+  type YemaiContextEnvelope,
+  type YemaiContextPolicy,
+  type YemaiReference,
+} from '../shared/yemaiContext';
 
-export const DEFAULT_YUEMAI_CONTEXT_POLICY: YuemaiContextPolicy = {
+export const DEFAULT_YEMAI_CONTEXT_POLICY: YemaiContextPolicy = {
   prefer_existing_context: true,
   allow_url_fetch: true,
   cite_sources: true,
   treat_page_as_untrusted: true,
 };
 
-export interface BuildYuemaiContextInput {
+export interface BuildYemaiContextInput {
   query: string;
-  references?: YuemaiReference[];
+  references?: YemaiReference[];
   requestId?: string;
   createdAt?: string;
-  policy?: Partial<Omit<YuemaiContextPolicy, 'treat_page_as_untrusted'>>;
+  policy?: Partial<Omit<YemaiContextPolicy, 'treat_page_as_untrusted'>>;
 }
 
 function makeRequestId() {
   return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function buildYuemaiContext(input: BuildYuemaiContextInput): YuemaiContextEnvelope {
+export function buildYemaiContext(input: BuildYemaiContextInput): YemaiContextEnvelope {
   return {
-    protocol: YUEMAI_CONTEXT_PROTOCOL,
+    protocol: YEMAI_CONTEXT_PROTOCOL,
     request_id: input.requestId ?? makeRequestId(),
     created_at: input.createdAt ?? new Date().toISOString(),
     query: {
@@ -34,7 +34,7 @@ export function buildYuemaiContext(input: BuildYuemaiContextInput): YuemaiContex
     },
     references: input.references ?? [],
     policy: {
-      ...DEFAULT_YUEMAI_CONTEXT_POLICY,
+      ...DEFAULT_YEMAI_CONTEXT_POLICY,
       ...input.policy,
       treat_page_as_untrusted: true,
     },

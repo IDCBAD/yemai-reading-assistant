@@ -1,6 +1,6 @@
-export const YUEMAI_CONTEXT_PROTOCOL = 'yuemai.context.v1' as const;
+export const YEMAI_CONTEXT_PROTOCOL = 'yemai.context.v1' as const;
 
-export type YuemaiPageType =
+export type YemaiPageType =
   | 'article'
   | 'documentation'
   | 'index'
@@ -9,7 +9,7 @@ export type YuemaiPageType =
   | 'application'
   | 'unknown';
 
-export type YuemaiAccessHint =
+export type YemaiAccessHint =
   | 'public_web'
   | 'authenticated_web'
   | 'browser_only'
@@ -40,8 +40,8 @@ export interface ReferenceSource {
   kind: 'current_page' | 'selected_text' | 'attachment' | 'external_link';
   title: string;
   url?: string;
-  page_type?: YuemaiPageType;
-  access_hint: YuemaiAccessHint;
+  page_type?: YemaiPageType;
+  access_hint: YemaiAccessHint;
   revision_id?: string;
   captured_at: string;
 }
@@ -95,28 +95,28 @@ export interface SnapshotReference {
   };
 }
 
-export type YuemaiReference =
+export type YemaiReference =
   | ManifestReference
   | ReuseReference
   | SelectionReference
   | SnapshotReference;
 
-export interface YuemaiContextPolicy {
+export interface YemaiContextPolicy {
   prefer_existing_context: boolean;
   allow_url_fetch: boolean;
   cite_sources: boolean;
   treat_page_as_untrusted: true;
 }
 
-export interface YuemaiContextEnvelope {
-  protocol: typeof YUEMAI_CONTEXT_PROTOCOL;
+export interface YemaiContextEnvelope {
+  protocol: typeof YEMAI_CONTEXT_PROTOCOL;
   request_id: string;
   created_at: string;
   query: {
     text: string;
   };
-  references: YuemaiReference[];
-  policy: YuemaiContextPolicy;
+  references: YemaiReference[];
+  policy: YemaiContextPolicy;
 }
 
 export interface AgentCapabilityProfile {

@@ -7,12 +7,12 @@ import type {
   ReuseReference,
   SelectionReference,
   SnapshotReference,
-  YuemaiReference,
-} from '../shared/yuemaiContext';
+  YemaiReference,
+} from '../shared/yemaiContext';
 import type { PageContext, QuoteReference } from '../sidepanel/types';
-import { buildYuemaiContext } from './buildYuemaiContext';
+import { buildYemaiContext } from './buildYemaiContext';
 import type { CurrentPageDeliveryDecision, PreparedPageReference } from './contextDeliveryPolicy';
-import { renderYuemaiContextMarkdown } from './renderYuemaiContext';
+import { renderYemaiContextMarkdown } from './renderYemaiContext';
 
 export const DEFAULT_SNAPSHOT_LENGTH = 12_000;
 
@@ -74,7 +74,7 @@ export function preparePageReference(page: PageContext | PageSnapshot): Prepared
 function pageReference(
   prepared: PreparedPageReference,
   decision: Exclude<CurrentPageDeliveryDecision, { mode: 'none' }>,
-): YuemaiReference {
+): YemaiReference {
   if (decision.mode === 'reuse') {
     return {
       mode: 'reuse',
@@ -141,12 +141,12 @@ export interface BuildAgentContentInput {
 }
 
 export function buildAgentContent(input: BuildAgentContentInput) {
-  const references: YuemaiReference[] = [];
+  const references: YemaiReference[] = [];
   if (input.page && input.page.decision.mode !== 'none') {
     references.push(pageReference(input.page.prepared, input.page.decision));
   }
   input.quotes.forEach((quote) => references.push(quoteReference(quote, input.page?.prepared)));
-  return renderYuemaiContextMarkdown(buildYuemaiContext({
+  return renderYemaiContextMarkdown(buildYemaiContext({
     query: input.question,
     references,
     requestId: input.requestId,

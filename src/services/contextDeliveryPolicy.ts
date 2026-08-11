@@ -3,7 +3,7 @@ import type {
   PageManifest,
   ReferenceSource,
   SnapshotReference,
-} from '../shared/yuemaiContext';
+} from '../shared/yemaiContext';
 
 export interface ConversationSourceDelivery {
   source_id: string;

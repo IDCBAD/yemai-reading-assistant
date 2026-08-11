@@ -336,7 +336,7 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 ## 10. 上下文组装
 
-插件内部使用 `yuemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
+插件内部使用 `yemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
 
 内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。
 

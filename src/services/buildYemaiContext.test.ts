@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildYuemaiContext } from './buildYuemaiContext';
+import { buildYemaiContext } from './buildYemaiContext';
 
-describe('buildYuemaiContext', () => {
+describe('buildYemaiContext', () => {
   it('creates a deterministic envelope when identifiers are supplied', () => {
-    expect(buildYuemaiContext({
+    expect(buildYemaiContext({
       query: '  解释这一页  ',
       requestId: 'req-1',
       createdAt: '2026-08-10T00:00:00.000Z',
       policy: { allow_url_fetch: false },
     })).toEqual({
-      protocol: 'yuemai.context.v1',
+      protocol: 'yemai.context.v1',
       request_id: 'req-1',
       created_at: '2026-08-10T00:00:00.000Z',
       query: { text: '解释这一页' },

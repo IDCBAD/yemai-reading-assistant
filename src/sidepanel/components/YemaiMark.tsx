@@ -1,11 +1,11 @@
-interface YuemaiMarkProps {
+interface YemaiMarkProps {
   className?: string;
 }
 
-export function YuemaiMark({ className = '' }: YuemaiMarkProps) {
+export function YemaiMark({ className = '' }: YemaiMarkProps) {
   return (
     <img
-      className={`yuemai-mark${className ? ` ${className}` : ''}`}
+      className={`yemai-mark${className ? ` ${className}` : ''}`}
       src="/icon.svg"
       width="64"
       height="64"

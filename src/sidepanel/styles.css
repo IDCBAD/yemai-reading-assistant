@@ -139,7 +139,7 @@ textarea:focus-visible {
   filter: drop-shadow(0 4px 8px rgba(8, 54, 150, 0.18));
 }
 
-.yuemai-mark { display: block; width: 100%; height: 100%; object-fit: contain; }
+.yemai-mark { display: block; width: 100%; height: 100%; object-fit: contain; }
 
 .brand-name {
   margin: 0;
