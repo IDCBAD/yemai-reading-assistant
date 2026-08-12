@@ -1,7 +1,8 @@
-import { isValidElement, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { isValidElement, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
 import type { ChatMessage, DraftAttachment, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { isImageFile } from '../fileTypes';
@@ -9,6 +10,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { YemaiMark } from './YemaiMark';
+import { AnswerContextTrace } from './AnswerContextTrace';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -155,11 +157,13 @@ function getRunNote(message: ChatMessage) {
 
 function AssistantMessage({
   message,
+  contextSources,
   onRetry,
   onBranch,
   branchUnavailableReason,
 }: {
   message: ChatMessage;
+  contextSources: AnswerContextSource[];
   onRetry: () => void;
   onBranch: () => void;
   branchUnavailableReason?: string;
@@ -212,6 +216,9 @@ function AssistantMessage({
           </ReactMarkdown>
           {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
         </div>
+        {Boolean(message.content) && message.status !== 'streaming' && (
+          <AnswerContextTrace sources={contextSources} />
+        )}
         {footerAvailable && (
           <div className="assistant-footer" aria-label="回答操作">
             {message.status === 'failed' && (
@@ -553,6 +560,7 @@ export function MessageList({
   onOpenBranchOrigin,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
@@ -606,6 +614,7 @@ export function MessageList({
         message.role === 'assistant' ? (
           <AssistantMessage
             message={message}
+            contextSources={answerContexts.get(message.id) ?? []}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
             branchUnavailableReason={branchUnavailableReason}
