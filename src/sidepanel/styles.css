@@ -1443,6 +1443,49 @@ textarea:focus-visible {
 .settings-section > strong,
 .settings-section--row strong { display: block; margin-bottom: 7px; color: var(--ink); font-size: 10px; font-weight: 690; }
 
+.transport-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 15px;
+}
+
+.transport-picker > button {
+  display: grid;
+  min-height: 52px;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.transport-picker > button.is-active {
+  border-color: var(--cobalt);
+  color: var(--cobalt);
+  background: var(--cobalt-pale);
+  box-shadow: inset 0 0 0 1px rgba(23, 96, 255, 0.1);
+}
+
+.transport-picker strong { font-size: 9.5px; font-weight: 690; }
+.transport-picker small { color: var(--muted-light); font-size: 8px; }
+
+.experimental-note {
+  margin: 0 0 13px;
+  padding: 9px 10px;
+  border: 1px solid #ead59d;
+  border-radius: 7px;
+  color: #8a5a08;
+  background: #fff9e8;
+}
+
+.experimental-note strong { display: block; font-size: 9.5px; }
+.experimental-note p { margin-top: 3px; color: #8a6b31; }
+
 .token-field { position: relative; }
 
 .token-field input {
@@ -1459,6 +1502,29 @@ textarea:focus-visible {
 }
 
 .token-field input:focus { border-color: var(--cobalt); box-shadow: 0 0 0 3px var(--cobalt-pale); }
+
+.identity-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.identity-grid label { margin: 0; }
+.identity-grid label > span { display: block; margin-bottom: 5px; color: var(--ink-soft); font-size: 8.5px; }
+.identity-grid input {
+  width: 100%;
+  height: 35px;
+  padding: 0 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 7px;
+  outline: 0;
+  color: var(--ink);
+  background: #fff;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+}
+
+.identity-grid input:focus { border-color: var(--cobalt); box-shadow: 0 0 0 3px var(--cobalt-pale); }
 
 .token-visibility {
   position: absolute;
@@ -1634,6 +1700,16 @@ textarea:focus-visible {
     grid-template-columns: 0 0 0;
   }
 }
+
+.connection-actions {
+  display: grid;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.connection-actions .save-token-button { margin-top: 0; }
+.connection-actions .secondary-button { min-height: 35px; }
 
 @media (max-width: 640px) {
   .message-time--user {

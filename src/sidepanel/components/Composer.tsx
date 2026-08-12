@@ -19,7 +19,7 @@ interface ComposerProps {
   activeConversationIds: Set<string>;
   runSummary: AgentRunSummary | null;
   historyOpen: boolean;
-  tokenState: 'loading' | 'configured' | 'missing';
+  connectionState: 'loading' | 'configured' | 'missing';
   fileUploadEnabled: boolean;
   maxTabs: number;
   onSelectTab: (tabId: string) => void;
@@ -66,7 +66,7 @@ export function Composer({
   activeConversationIds,
   runSummary,
   historyOpen,
-  tokenState,
+  connectionState,
   fileUploadEnabled,
   maxTabs,
   onSelectTab,
@@ -351,17 +351,17 @@ export function Composer({
                   if (fileUploadEnabled) fileInputRef.current?.click();
                   else onAttachmentUnavailable();
                 }}
-                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 Token'}
-                title={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 Token'}
+                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 v1 API Token'}
+                title={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 v1 API Token'}
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>
               {!currentPage.url && currentPageIssue && (
                 <span className="page-reference-unavailable" title={currentPageIssue}>当前页不可读取</span>
               )}
-              <span className={`composer-scope composer-scope--${tokenState}`}>
+              <span className={`composer-scope composer-scope--${connectionState}`}>
                 <i aria-hidden="true" />
-                {tokenState === 'loading' ? '读取配置' : tokenState === 'configured' ? 'Token 已配置' : '需要 Token'}
+                {connectionState === 'loading' ? '读取配置' : connectionState === 'configured' ? '连接已配置' : '需要连接'}
                 {' · '}Tab {tabs.findIndex((tab) => tab.id === activeTabId) + 1}/{maxTabs}
               </span>
             </div>

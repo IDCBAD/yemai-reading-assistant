@@ -5,6 +5,10 @@ export interface WorkosSseCallbacks {
   onError?: (message: string) => void;
 }
 
+export interface WorkosSseParserOptions {
+  expectedRunId?: string;
+}
+
 export type WorkosToolStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 /**
@@ -48,6 +52,10 @@ function unwrapPayload(value: unknown): unknown {
         current = parsed;
         continue;
       }
+    }
+    if (isRecord(current) && isRecord(current.data)) {
+      current = current.data;
+      continue;
     }
     break;
   }
@@ -133,7 +141,14 @@ export class WorkosSseParser {
   private toolActivities = new Map<string, WorkosToolActivity>();
   private completed = false;
 
-  constructor(private readonly callbacks: WorkosSseCallbacks) {}
+  constructor(
+    private readonly callbacks: WorkosSseCallbacks,
+    private readonly options: WorkosSseParserOptions = {},
+  ) {}
+
+  get isComplete() {
+    return this.completed;
+  }
 
   push(chunk: string) {
     this.buffer += chunk.replace(/\r\n/g, '\n');
@@ -163,8 +178,16 @@ export class WorkosSseParser {
       return;
     }
 
-    const payload = unwrapPayload(parseJson(data));
+    const rawPayload = parseJson(data);
+    const envelope = isRecord(rawPayload) ? rawPayload : undefined;
+    const payload = unwrapPayload(rawPayload);
     if (!isRecord(payload)) return;
+    const runId = (envelope ? firstString(envelope, ['runId', 'runID']) : undefined)
+      ?? firstString(payload, ['runId', 'runID']);
+    // Some v2 message events do not carry a runId even though the matching
+    // completion event does. Reject only an explicitly different run so we do
+    // not discard valid text from the current subscription.
+    if (this.options.expectedRunId && runId && runId !== this.options.expectedRunId) return;
     this.processEvent(eventName, payload);
   }
 

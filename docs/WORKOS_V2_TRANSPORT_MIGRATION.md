@@ -84,7 +84,7 @@ POST /api/agent/v2/conversations/{conversationUuid}/queue/submit
 1. 先建立 Conversation 级 SSE 订阅；
 2. 再向 `queue/submit` 提交消息；
 3. 从提交响应取得 `expectedRunId`；
-4. 忽略订阅中所有 runId 不匹配的历史事件；
+4. 忽略订阅中所有明确携带且与本轮不匹配的历史 runId；正文事件未携带 runId 时仍允许解析；
 5. 只把当前 run 的正文和工具活动交给 UI；
 6. 只有当前 run 的完成事件可以结束本轮；
 7. 本地停止时终止订阅和提交请求，不自动换通道重发。

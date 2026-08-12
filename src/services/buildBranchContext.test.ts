@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage } from '../sidepanel/types';
-import { buildBranchContext, prependBranchContext } from './buildBranchContext';
+import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from './buildBranchContext';
 
 describe('buildBranchContext', () => {
   it('keeps visible Markdown and references but excludes run metadata', () => {
@@ -51,5 +51,21 @@ describe('buildBranchContext', () => {
   it('prepends the branch once before the new user content', () => {
     expect(prependBranchContext('OLD_CONTEXT', 'NEW_QUESTION')).toBe('OLD_CONTEXT\n\nNEW_QUESTION');
     expect(prependBranchContext(undefined, 'NEW_QUESTION')).toBe('NEW_QUESTION');
+  });
+});
+
+describe('buildTransportHandoffContext', () => {
+  it('marks a channel switch without pretending it is a user-created branch', () => {
+    const context = buildTransportHandoffContext([{
+      id: 'message-1',
+      role: 'user',
+      content: '延续这个问题',
+      createdAt: 1,
+      status: 'complete',
+    }]);
+
+    expect(context).toContain('<conversation_transport_handoff_context');
+    expect(context).toContain('切换了远程传输通道');
+    expect(context).not.toContain('<conversation_branch_context');
   });
 });

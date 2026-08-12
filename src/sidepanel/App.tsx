@@ -5,11 +5,20 @@ import {
   preparePageReference,
   WORKOS_AGENT_CAPABILITIES,
 } from '../services/buildAgentContent';
-import { buildBranchContext, prependBranchContext } from '../services/buildBranchContext';
+import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from '../services/buildBranchContext';
 import { decideCurrentPageDelivery, type CurrentPageDeliveryDecision } from '../services/contextDeliveryPolicy';
-import { loadWorkosToken, removeWorkosToken, saveWorkosToken } from '../services/tokenStorage';
-import { createWorkosConversation, executeWorkosStream, uploadWorkosFile, WorkosApiError } from '../services/workosClient';
+import {
+  EMPTY_WORKOS_CONNECTION_SETTINGS,
+  isActiveWorkosConnectionConfigured,
+  loadWorkosConnectionSettings,
+  removeWorkosCredentials,
+  saveWorkosConnectionSettings,
+  type WorkosConnectionSettings,
+} from '../services/workosConnection';
+import { uploadWorkosFile } from '../services/workosClient';
 import type { WorkosToolActivity } from '../services/workosSse';
+import { WorkosApiError } from '../services/workosTransport';
+import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
 import type {
@@ -143,7 +152,7 @@ function isAbortError(error: unknown) {
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
-  const [workosToken, setWorkosToken] = useState<string | null>(null);
+  const [workosConnection, setWorkosConnection] = useState<WorkosConnectionSettings | null>(null);
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -199,6 +208,9 @@ export default function App() {
     () => isPageReferenceIncluded(activeConversation.draftPageReference, currentPage),
     [activeConversation.draftPageReference, currentPage],
   );
+  const activeConnectionConfigured = workosConnection
+    ? isActiveWorkosConnectionConfigured(workosConnection)
+    : false;
   currentPageRef.current = currentPage;
 
   useEffect(() => {
@@ -444,18 +456,18 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-    void loadWorkosToken()
-      .then((token) => {
+    void loadWorkosConnectionSettings()
+      .then((settings) => {
         if (!mounted) return;
-        setWorkosToken(token);
-        if (!token) {
-          setConnectionIssue('请先保存 WorkOS Token，再发送第一条消息。');
+        setWorkosConnection(settings);
+        if (!isActiveWorkosConnectionConfigured(settings)) {
+          setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送第一条消息。');
           setSettingsOpen(true);
         }
       })
       .catch(() => {
         if (!mounted) return;
-        setWorkosToken('');
+        setWorkosConnection({ ...EMPTY_WORKOS_CONNECTION_SETTINGS });
         setConnectionIssue('无法读取扩展存储，请确认页面由已安装的 Chrome 插件打开。');
         setSettingsOpen(true);
       });
@@ -659,8 +671,9 @@ export default function App() {
   ]);
 
   const runAgentRequest = async (request: QueuedAgentRequest, signal: AbortSignal) => {
-    const token = workosToken;
-    if (!token) return;
+    const connection = workosConnection;
+    if (!connection || !isActiveWorkosConnectionConfigured(connection)) return;
+    const transport = createWorkosTransport(connection);
     const { conversationId, messageId, userMessage, needsPageRead } = request;
     updateMessage(conversationId, messageId, {
       status: 'running',
@@ -675,10 +688,21 @@ export default function App() {
     const pageSnapshot = preparation?.snapshot;
     const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
     const pendingBranchContext = currentConversation?.pendingBranchContext;
+    const previousTransport = currentConversation?.remoteUuid
+      ? currentConversation.remoteTransport ?? 'public-v1'
+      : undefined;
+    const transportChanged = Boolean(previousTransport && previousTransport !== transport.kind);
+    const earlierMessages = currentConversation?.messages.filter(
+      (message) => message.id !== userMessage.id && message.id !== messageId,
+    ) ?? [];
+    const transportHandoffContext = transportChanged && earlierMessages.length
+      ? buildTransportHandoffContext(earlierMessages)
+      : undefined;
+    const continuationContext = pendingBranchContext ?? transportHandoffContext;
     const preparedPage = userMessage.pageContext
       ? preparePageReference(pageSnapshot ?? userMessage.pageContext)
       : undefined;
-    const previousPage = currentConversation?.remoteUuid && preparedPage
+    const previousPage = currentConversation?.remoteUuid && !transportChanged && preparedPage
       ? currentConversation.pages.find((page) =>
           (page.sourceId && page.sourceId === preparedPage.source.source_id)
           || page.url === preparedPage.source.url)
@@ -730,18 +754,21 @@ export default function App() {
     };
 
     try {
-      let remoteUuid = currentConversation?.remoteUuid;
+      let remoteUuid = transportChanged ? undefined : currentConversation?.remoteUuid;
       if (!remoteUuid) {
         updateMessage(conversationId, messageId, { stage: 'creating-conversation' });
-        remoteUuid = await createWorkosConversation(token, signal);
-        updateConversation(conversationId, (conversation) => ({ ...conversation, remoteUuid }));
+        remoteUuid = await transport.createConversation(signal);
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          remoteUuid,
+          remoteTransport: transport.kind,
+        }));
       }
       updateMessage(conversationId, messageId, { stage: 'waiting-first-token' });
-      await executeWorkosStream(
-        token,
+      await transport.executeStream(
         remoteUuid,
         {
-          content: prependBranchContext(pendingBranchContext, content),
+          content: prependBranchContext(continuationContext, content),
           attachments: (userMessage.attachments ?? [])
             .filter((attachment) => attachment.status === 'ready' && attachment.url)
             .map((attachment) => ({ url: attachment.url!, filename: attachment.filename })),
@@ -854,9 +881,9 @@ export default function App() {
   requestRunnerRef.current = runAgentRequest;
 
   const sendMessage = () => {
-    if (!workspaceHydrated || workosToken === null) return;
-    if (!workosToken) {
-      setConnectionIssue('请先保存 WorkOS Token，再发送消息。');
+    if (!workspaceHydrated || workosConnection === null) return;
+    if (!activeConnectionConfigured) {
+      setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送消息。');
       setSettingsOpen(true);
       return;
     }
@@ -932,7 +959,7 @@ export default function App() {
   };
 
   const retryMessage = (message: ChatMessage) => {
-    if (!workspaceHydrated || !workosToken) return;
+    if (!workspaceHydrated || !activeConnectionConfigured) return;
     const messageIndex = activeConversation.messages.findIndex((item) => item.id === message.id);
     const userMessage = [...activeConversation.messages.slice(0, messageIndex)].reverse().find((item) => item.role === 'user');
     if (!userMessage) return;
@@ -965,12 +992,13 @@ export default function App() {
   const addAttachments = (files: FileList | null) => {
     const selectedFiles = Array.from(files ?? []);
     if (!selectedFiles.length) return;
-    if (!workspaceHydrated || workosToken === null) {
+    if (!workspaceHydrated || workosConnection === null) {
       setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
       return;
     }
-    if (!workosToken) {
-      setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+    const uploadToken = workosConnection.publicApiToken;
+    if (!uploadToken) {
+      setConnectionIssue('附件仍使用公开 v1 上传接口，请先配置 AP_… API Token。');
       setSettingsOpen(true);
       return;
     }
@@ -1007,7 +1035,7 @@ export default function App() {
 
     uploads.forEach(({ file, attachment }) => {
       if (attachment.status === 'failed') return;
-      void uploadWorkosFile(workosToken, file)
+      void uploadWorkosFile(uploadToken, file)
         .then(({ fileReadUrl }) => {
           updateConversation(conversationId, (conversation) => ({
             ...conversation,
@@ -1029,17 +1057,23 @@ export default function App() {
     });
   };
 
-  const saveToken = async (value: string) => {
-    const token = await saveWorkosToken(value);
-    setWorkosToken(token);
+  const saveConnection = async (settings: WorkosConnectionSettings) => {
+    stopAllRequests();
+    const saved = await saveWorkosConnectionSettings(settings);
+    setWorkosConnection(saved);
     setConnectionIssue(null);
   };
 
-  const removeToken = async () => {
+  const testConnection = async (settings: WorkosConnectionSettings) => {
+    await validateWorkosConnection(settings);
+    setConnectionIssue(null);
+  };
+
+  const removeCredentials = async (kind: WorkosConnectionSettings['transport']) => {
     stopAllRequests();
-    await removeWorkosToken();
-    setWorkosToken('');
-    setConnectionIssue('Token 已从本机移除。');
+    const saved = await removeWorkosCredentials(kind);
+    setWorkosConnection(saved);
+    setConnectionIssue(kind === 'public-v1' ? 'v1 API Token 已从本机移除。' : 'v2 登录凭证已从本机移除。');
   };
 
   const changeSelectionBubble = (enabled: boolean) => {
@@ -1088,8 +1122,8 @@ export default function App() {
         activeConversationIds={activeConversationIds}
         runSummary={runSummary}
         historyOpen={historyOpen}
-        tokenState={!workspaceHydrated || workosToken === null ? 'loading' : workosToken ? 'configured' : 'missing'}
-        fileUploadEnabled={Boolean(workosToken)}
+        connectionState={!workspaceHydrated || workosConnection === null ? 'loading' : activeConnectionConfigured ? 'configured' : 'missing'}
+        fileUploadEnabled={Boolean(workosConnection?.publicApiToken)}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
         onAddTab={addTab}
@@ -1106,11 +1140,11 @@ export default function App() {
         onCurrentPageIncludedChange={changeCurrentPageReference}
         onFilesSelected={addAttachments}
         onAttachmentUnavailable={() => {
-          if (workosToken === null) {
+          if (workosConnection === null) {
             setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
             return;
           }
-          setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+          setConnectionIssue('附件仍使用公开 v1 上传接口，请先配置 AP_… API Token。');
           setSettingsOpen(true);
         }}
         onSend={sendMessage}
@@ -1131,11 +1165,12 @@ export default function App() {
       />
       <SettingsDrawer
         open={settingsOpen}
-        savedToken={workosToken ?? ''}
+        settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
         connectionIssue={connectionIssue}
         bubbleEnabled={selectionBubbleEnabled}
-        onSaveToken={saveToken}
-        onRemoveToken={removeToken}
+        onSaveConnection={saveConnection}
+        onTestConnection={testConnection}
+        onRemoveCredentials={removeCredentials}
         onBubbleEnabledChange={changeSelectionBubble}
         onClose={() => setSettingsOpen(false)}
         onClearHistory={() => setClearDialogOpen(true)}

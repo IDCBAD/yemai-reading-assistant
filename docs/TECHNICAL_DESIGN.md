@@ -226,7 +226,7 @@ await chrome.storage.local.setAccessLevel({
 
 浏览器重启后可以丢弃这些数据。
 
-## 8. WorkOS API 客户端
+## 8. WorkOS 传输层
 
 Agent ID 固定为：
 
@@ -234,26 +234,38 @@ Agent ID 固定为：
 409b06a1-2e2a-4d8c-af3c-ec831c0c6449
 ```
 
-客户端提供三个能力：
+上层对话逻辑只依赖统一的 `WorkosTransport`：
 
 ```ts
-createConversation(token): Promise<string>
-uploadFile(token, file): Promise<{ fileReadUrl: string }>
-executeStream(token, conversationUuid, request, callbacks): Promise<void>
+interface WorkosTransport {
+  kind: 'public-v1' | 'internal-v2'
+  createConversation(signal?): Promise<string>
+  executeStream(conversationUuid, request, callbacks, signal?): Promise<void>
+}
 ```
+
+当前实现保留两条可切换通道：
+
+- `PublicV1Transport`：官方公开 v1 API，认证只需要 `AP_...` Token。
+- `InternalV2Transport`：WorkOS 网页端 v2 协议，先订阅 SSE、再提交消息，并以 `runId` 关联本轮事件。
+
+附件上传暂时不属于统一执行传输：它仍调用 v1 公开上传接口，并要求单独配置 v1 API Token。迁移原因、风险和删除条件见 [WorkOS v2 可切换传输通道迁移方案](./WORKOS_V2_TRANSPORT_MIGRATION.md)。
 
 当前代码位置：
 
 ```text
-src/services/tokenStorage.ts
+src/services/workosConnection.ts
+src/services/workosTransport.ts
+src/services/workosTransportFactory.ts
 src/services/workosClient.ts
+src/services/workosInternalV2.ts
 src/services/workosSse.ts
 src/services/buildAgentContent.ts
 ```
 
-SSE 由 Side Panel 直接持有，停止生成使用 `AbortController`。这避免了 MV3 Service Worker 休眠导致长连接中断。Token 不传入 Content Script，也不会写入日志或错误文本。
+SSE 由 Side Panel 直接持有，停止生成使用 `AbortController`。这避免了 MV3 Service Worker 休眠导致长连接中断。连接凭证不传入 Content Script，也不会写入日志、会话或错误文本。
 
-### 8.1 创建会话
+### 8.1 v1 创建会话
 
 ```text
 POST /oapi/agent/v1/agents/{agentId}/conversations
@@ -277,7 +289,7 @@ Content-Type: multipart/form-data
 }
 ```
 
-### 8.3 SSE 执行
+### 8.3 v1 SSE 执行
 
 ```text
 POST /oapi/agent/v1/conversations/{conversationUuid}/execute/stream
@@ -298,11 +310,23 @@ SSE `data` 中还包含序列化后的第二层 JSON。解析器需要：
 8. 识别 `xybot-stream-complete` 后关闭本地运行状态。
 9. 将工具 part 或工具生命周期事件投影为稳定的工具 ID、名称、状态和起止时间。
 
+### 8.4 v2 顺序流执行
+
+v2 将消息提交和流式订阅拆开。每轮必须：
+
+1. `GET /api/agent/v2/conversations/{conversationUuid}/events/messages/subscribe` 建立 SSE；
+2. `POST /api/agent/v2/conversations/{conversationUuid}/queue/submit` 提交本轮消息；
+3. 从提交响应递归读取 `runId`；
+4. 忽略明确携带其他 `runId` 的历史事件；
+5. 只由当前 `runId` 的完成事件结束本轮。
+
+部分正文事件可能不携带 `runId`，因此解析器不能把“缺少 runId”和“runId 明确不匹配”视为同一种情况。订阅与提交共享同一个 `AbortController`；失败后不得自动切换 v1 重发，以免 Agent 或工具重复执行。
+
 内部 reasoning、Agent 配置和部署事件不得写入用户消息。工具事件只能进入安全投影；工具参数、完整输出、调试元数据和原始事件均不得进入 React 消息状态。侧边栏以可折叠的“运行过程”展示工具名称、运行状态和可计算的耗时，不展示模型原始思维链。
 
 `run.terminal` 的正常终态需要兼容 `success / succeeded / completed / finished / done / ok` 等常见表达。存在正文但终态异常时仍保留正文，并降级显示为部分失败提示；不得用高强调错误卡遮断已经可读的回答。
 
-### 8.4 会话分支上下文
+### 8.5 会话分支与通道切换上下文
 
 WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的可见记录序列化为 JSON，并用 `<conversation_branch_context>` 包裹后放入新会话的第一条请求。序列化范围包括：
 
@@ -313,6 +337,8 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 序列化范围明确排除工具活动、错误调试信息、内部 reasoning 和工具输入输出。分支创建本身不调用 API；用户真正继续提问时才创建远端会话。
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
+
+远程 Conversation 还保存创建它的 `remoteTransport`。用户切换通道后不会复用旧通道的 `remoteUuid`；下一轮在新通道创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。
 
 ## 9. 页面抽取
 

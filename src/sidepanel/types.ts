@@ -1,4 +1,5 @@
 import type { PageManifest, YemaiAccessHint, YemaiPageType } from '../shared/yemaiContext';
+import type { WorkosTransportKind } from '../services/workosTransport';
 
 export type PageStatus = 'not-read' | 'reading' | 'ready' | 'read' | 'changed';
 
@@ -98,6 +99,7 @@ export interface ConversationBranch {
 export interface Conversation {
   id: string;
   remoteUuid?: string;
+  remoteTransport?: WorkosTransportKind;
   pendingBranchContext?: string;
   title: string;
   subtitle: string;
