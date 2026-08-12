@@ -9,9 +9,17 @@ import { YemaiMark } from './YemaiMark';
 
 interface MessageListProps {
   messages: ChatMessage[];
+  branchOrigin?: {
+    title: string;
+    timestamp?: number;
+    available: boolean;
+    unavailableReason?: string;
+  };
+  branchUnavailableReason?: string;
   onUseStarter: (value: string) => void;
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
+  onOpenBranchOrigin: () => void;
 }
 
 const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
@@ -146,10 +154,12 @@ function AssistantMessage({
   message,
   onRetry,
   onBranch,
+  branchUnavailableReason,
 }: {
   message: ChatMessage;
   onRetry: () => void;
   onBranch: () => void;
+  branchUnavailableReason?: string;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const runNote = getRunNote(message);
@@ -227,8 +237,9 @@ function AssistantMessage({
                   className="assistant-action pressable"
                   type="button"
                   onClick={onBranch}
-                  aria-label="从这里分支"
-                  title="从这里分支"
+                  disabled={Boolean(branchUnavailableReason)}
+                  aria-label={branchUnavailableReason ? `无法创建分支：${branchUnavailableReason}` : '从这里分支'}
+                  title={branchUnavailableReason ?? '从这里分支：保留此前内容，探索另一条思路'}
                 >
                   <KoboyoIcon name="fork" size={14} />
                 </button>
@@ -296,7 +307,15 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-export function MessageList({ messages, onUseStarter, onRetry, onBranch }: MessageListProps) {
+export function MessageList({
+  messages,
+  branchOrigin,
+  branchUnavailableReason,
+  onUseStarter,
+  onRetry,
+  onBranch,
+  onOpenBranchOrigin,
+}: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -310,7 +329,7 @@ export function MessageList({ messages, onUseStarter, onRetry, onBranch }: Messa
           <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
           <span className="empty-kicker">读过的，终会连起来。</span>
           <h2>从当前页面开始</h2>
-          <p>当前 Tab 对应一条独立会话，问题、引用、草稿和 Agent 记忆都只属于这里。</p>
+          <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
           <div className="starter-list">
             {STARTERS.map((starter) => (
               <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter)} key={starter}>
@@ -326,12 +345,34 @@ export function MessageList({ messages, onUseStarter, onRetry, onBranch }: Messa
   return (
     <main className="messages" aria-live="polite">
       <div className="conversation-date">今天 · 当前工作页</div>
+      {branchOrigin && (
+        <button
+          className="branch-origin"
+          type="button"
+          onClick={onOpenBranchOrigin}
+          disabled={!branchOrigin.available}
+          title={branchOrigin.available ? '查看原会话' : branchOrigin.unavailableReason}
+        >
+          <KoboyoIcon name="fork" size={13} />
+          <span>
+            从「{branchOrigin.title}」
+            {branchOrigin.timestamp && (
+              <time dateTime={new Date(branchOrigin.timestamp).toISOString()}>
+                {formatMessageTimestamp(branchOrigin.timestamp).label}
+              </time>
+            )}
+            的回答分支
+          </span>
+          <strong>{branchOrigin.available ? '查看原会话' : '暂不可打开'}</strong>
+        </button>
+      )}
       {messages.map((message) =>
         message.role === 'assistant' ? (
           <AssistantMessage
             message={message}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
+            branchUnavailableReason={branchUnavailableReason}
             key={message.id}
           />
         ) : (

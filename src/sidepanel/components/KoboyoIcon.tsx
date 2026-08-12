@@ -13,7 +13,6 @@ export type KoboyoIconName =
   | 'globe'
   | 'link'
   | 'link-off'
-  | 'message-square-plus'
   | 'paperclip'
   | 'plus'
   | 'quote'

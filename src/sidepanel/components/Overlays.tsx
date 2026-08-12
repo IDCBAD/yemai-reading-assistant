@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { WorkosConnectionSettings } from '../../services/workosConnection';
 import type { WorkosTransportKind } from '../../services/workosTransport';
+import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
 import { KoboyoIcon } from './KoboyoIcon';
 
@@ -9,6 +10,7 @@ interface HistoryPopoverProps {
   conversations: Conversation[];
   openTabs: OpenConversationTab[];
   activeId: string;
+  maxTabs: number;
   onClose: () => void;
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
@@ -20,6 +22,7 @@ export function HistoryPopover({
   conversations,
   openTabs,
   activeId,
+  maxTabs,
   onClose,
   onSelect,
   onArchive,
@@ -29,6 +32,7 @@ export function HistoryPopover({
   const activeConversations = conversations.filter((conversation) => !conversation.archivedAt);
   const archivedConversations = conversations.filter((conversation) => conversation.archivedAt);
   const visibleConversations = view === 'active' ? activeConversations : archivedConversations;
+  const conversationForest = buildConversationForest(visibleConversations);
 
   useEffect(() => {
     if (!open) return;
@@ -41,6 +45,68 @@ export function HistoryPopover({
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const renderConversationNode = (node: ConversationTreeNode): ReactNode => {
+    const { conversation, children } = node;
+    const openIndex = openTabs.findIndex((tab) => tab.conversationId === conversation.id);
+    const canOpen = view !== 'archived' && (openIndex >= 0 || openTabs.length < maxTabs);
+    const detail = openIndex >= 0
+      ? `${conversation.subtitle} · 已在工作页 ${openIndex + 1}`
+      : !canOpen && view !== 'archived'
+        ? `${conversation.subtitle} · 请先关闭一个工作页`
+        : conversation.subtitle;
+    return (
+      <li className={`conversation-tree-node${conversation.branch ? ' is-branch' : ''}`} key={conversation.id}>
+        <div className={`conversation-item${conversation.id === activeId ? ' is-active' : ''}`}>
+          <button
+            className="conversation-open-button"
+            type="button"
+            onClick={() => onSelect(conversation.id)}
+            disabled={!canOpen}
+            title={!canOpen && view !== 'archived' ? `最多打开 ${maxTabs} 个工作页，请先关闭一个` : undefined}
+          >
+            <span className="conversation-icon" aria-hidden="true">
+              <KoboyoIcon name={conversation.branch ? 'fork' : 'quote'} size={14} />
+            </span>
+            <span className="conversation-copy">
+              <strong>{conversation.title}</strong>
+              <small>{detail}</small>
+            </span>
+            <span className="conversation-tab-count" title={`${conversation.pages.length} 个页面来源`}>
+              {conversation.pages.length}
+            </span>
+          </button>
+          {view === 'active' ? (
+            <button
+              className="conversation-row-action pressable"
+              type="button"
+              onClick={() => onArchive(conversation.id)}
+              disabled={openIndex >= 0}
+              aria-label={`归档会话：${conversation.title}`}
+              title={openIndex >= 0 ? '请先关闭对应工作页' : '归档会话'}
+            >
+              <KoboyoIcon name="archive" size={13} />
+            </button>
+          ) : (
+            <button
+              className="conversation-row-action pressable"
+              type="button"
+              onClick={() => onRestore(conversation.id)}
+              aria-label={`恢复会话：${conversation.title}`}
+              title="恢复到历史会话"
+            >
+              <KoboyoIcon name="cycle" size={13} />
+            </button>
+          )}
+        </div>
+        {children.length > 0 && (
+          <ol className="conversation-tree-children">
+            {children.map((child) => renderConversationNode(child))}
+          </ol>
+        )}
+      </li>
+    );
+  };
 
   return (
     <div className="history-popover-layer">
@@ -81,58 +147,11 @@ export function HistoryPopover({
               <span>{view === 'active' ? '还没有历史会话' : '归档中没有会话'}</span>
             </div>
           )}
-          {visibleConversations.map((conversation) => {
-            const openIndex = openTabs.findIndex((tab) => tab.conversationId === conversation.id);
-            const detail = openIndex >= 0
-              ? `${conversation.subtitle} · 已在 Tab ${openIndex + 1}`
-              : conversation.subtitle;
-            return (
-              <div
-                className={`conversation-item${conversation.id === activeId ? ' is-active' : ''}`}
-                key={conversation.id}
-              >
-                <button
-                  className="conversation-open-button"
-                  type="button"
-                  onClick={() => onSelect(conversation.id)}
-                  disabled={view === 'archived'}
-                >
-                  <span className="conversation-icon" aria-hidden="true">
-                    <KoboyoIcon name={conversation.branch ? 'message-square-plus' : 'quote'} size={14} />
-                  </span>
-                  <span className="conversation-copy">
-                    <strong>{conversation.title}</strong>
-                    <small>{detail}</small>
-                  </span>
-                  <span className="conversation-tab-count" title={`${conversation.pages.length} 个页面来源`}>
-                    {conversation.pages.length}
-                  </span>
-                </button>
-                {view === 'active' ? (
-                  <button
-                    className="conversation-row-action pressable"
-                    type="button"
-                    onClick={() => onArchive(conversation.id)}
-                    disabled={openIndex >= 0}
-                    aria-label={`归档会话：${conversation.title}`}
-                    title={openIndex >= 0 ? '请先关闭对应 Tab' : '归档会话'}
-                  >
-                    <KoboyoIcon name="archive" size={13} />
-                  </button>
-                ) : (
-                  <button
-                    className="conversation-row-action pressable"
-                    type="button"
-                    onClick={() => onRestore(conversation.id)}
-                    aria-label={`恢复会话：${conversation.title}`}
-                    title="恢复到历史会话"
-                  >
-                    <KoboyoIcon name="cycle" size={13} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
+          {visibleConversations.length > 0 && (
+            <ol className="conversation-tree">
+              {conversationForest.map((node) => renderConversationNode(node))}
+            </ol>
+          )}
         </nav>
       </aside>
     </div>

@@ -56,6 +56,7 @@ import type {
   RunActivityStatus,
   WorkspaceState,
 } from './types';
+import { closeWorkspaceTab, openConversationInWorkspace } from './workspaceNavigation';
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -487,20 +488,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const newConversation = () => {
-    if (!workspaceHydrated) return;
-    const conversation = createConversation(currentPage);
-    setWorkspace((current) => ({
-      ...current,
-      conversations: [conversation, ...current.conversations],
-      openTabs: current.openTabs.map((tab) => tab.id === current.activeOpenTabId
-        ? { ...tab, conversationId: conversation.id, openedAt: Date.now() }
-        : tab),
-    }));
-    setHistoryOpen(false);
-  };
-
-  const addTab = () => {
+  const startNewConversation = () => {
     if (!workspaceHydrated || workspace.openTabs.length >= MAX_OPEN_TABS) return;
     const conversation = createConversation(currentPage);
     const tab = createOpenTab(conversation.id);
@@ -514,24 +502,7 @@ export default function App() {
 
   const closeTab = (tabId: string) => {
     if (!workspaceHydrated) return;
-    setWorkspace((current) => {
-      const closingIndex = current.openTabs.findIndex((tab) => tab.id === tabId);
-      if (closingIndex < 0) return current;
-      if (current.openTabs.length === 1) {
-        const conversation = createConversation(currentPage);
-        const replacement = createOpenTab(conversation.id);
-        return {
-          conversations: [conversation, ...current.conversations],
-          openTabs: [replacement],
-          activeOpenTabId: replacement.id,
-        };
-      }
-      const openTabs = current.openTabs.filter((tab) => tab.id !== tabId);
-      const activeOpenTabId = current.activeOpenTabId === tabId
-        ? openTabs[Math.min(closingIndex, openTabs.length - 1)]!.id
-        : current.activeOpenTabId;
-      return { ...current, openTabs, activeOpenTabId };
-    });
+    setWorkspace((current) => closeWorkspaceTab(current, tabId));
   };
 
   const selectTab = (tabId: string) => {
@@ -540,16 +511,12 @@ export default function App() {
   };
 
   const selectHistory = (conversationId: string) => {
-    setWorkspace((current) => {
-      const existing = current.openTabs.find((tab) => tab.conversationId === conversationId);
-      if (existing) return { ...current, activeOpenTabId: existing.id };
-      return {
-        ...current,
-        openTabs: current.openTabs.map((tab) => tab.id === current.activeOpenTabId
-          ? { ...tab, conversationId, openedAt: Date.now() }
-          : tab),
-      };
-    });
+    setWorkspace((current) => openConversationInWorkspace(
+      current,
+      conversationId,
+      MAX_OPEN_TABS,
+      createOpenTab,
+    ));
     setHistoryOpen(false);
   };
 
@@ -570,7 +537,7 @@ export default function App() {
   };
 
   const branchFromMessage = (message: ChatMessage) => {
-    if (!workspaceHydrated || runSummary) return;
+    if (!workspaceHydrated || runSummary || workspace.openTabs.length >= MAX_OPEN_TABS) return;
     const messageIndex = activeConversation.messages.findIndex((item) => item.id === message.id);
     if (messageIndex < 0) return;
     const sourceMessages = activeConversation.messages.slice(0, messageIndex + 1);
@@ -600,16 +567,11 @@ export default function App() {
       draftPageReference: includedPageReference(activeConversation.page),
       pendingBranchContext: buildBranchContext(sourceMessages),
     };
-    const canOpenNewTab = workspace.openTabs.length < MAX_OPEN_TABS;
-    const tab = canOpenNewTab ? createOpenTab(conversation.id) : null;
+    const tab = createOpenTab(conversation.id);
     setWorkspace((current) => ({
       conversations: [conversation, ...current.conversations],
-      openTabs: tab
-        ? [...current.openTabs, tab]
-        : current.openTabs.map((item) => item.id === current.activeOpenTabId
-          ? { ...item, conversationId: conversation.id, openedAt: Date.now() }
-          : item),
-      activeOpenTabId: tab?.id ?? current.activeOpenTabId,
+      openTabs: [...current.openTabs, tab],
+      activeOpenTabId: tab.id,
     }));
     setHistoryOpen(false);
   };
@@ -1100,14 +1062,48 @@ export default function App() {
     });
   };
 
+  const branchParent = activeConversation.branch
+    ? workspace.conversations.find((conversation) => conversation.id === activeConversation.branch?.parentConversationId)
+    : undefined;
+  const branchSourceMessage = branchParent && activeConversation.branch?.sourceMessageId
+    ? branchParent.messages.find((message) => message.id === activeConversation.branch?.sourceMessageId)
+    : undefined;
+  const branchParentAlreadyOpen = Boolean(
+    branchParent && workspace.openTabs.some((tab) => tab.conversationId === branchParent.id),
+  );
+  const branchOriginUnavailableReason = !branchParent
+    ? '原会话记录不存在'
+    : branchParent.archivedAt
+      ? '原会话已归档，请先在历史中恢复'
+      : !branchParentAlreadyOpen && workspace.openTabs.length >= MAX_OPEN_TABS
+        ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+        : undefined;
+  const branchOrigin = activeConversation.branch
+    ? {
+        title: branchParent?.title ?? '原会话',
+        timestamp: branchSourceMessage?.respondedAt ?? branchSourceMessage?.createdAt,
+        available: branchOriginUnavailableReason === undefined,
+        unavailableReason: branchOriginUnavailableReason,
+      }
+    : undefined;
+
   return (
     <div className="app-shell">
       <TopBar tabCount={workspace.openTabs.length} onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
         messages={activeConversation.messages}
+        branchOrigin={branchOrigin}
+        branchUnavailableReason={runSummary
+          ? '请等待当前回答结束后再创建分支'
+          : workspace.openTabs.length >= MAX_OPEN_TABS
+            ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+            : undefined}
         onUseStarter={(value) => patchActiveConversation({ draftInput: value })}
         onRetry={retryMessage}
         onBranch={branchFromMessage}
+        onOpenBranchOrigin={() => {
+          if (branchParent) selectHistory(branchParent.id);
+        }}
       />
       <Composer
         tabs={workspace.openTabs}
@@ -1126,9 +1122,8 @@ export default function App() {
         fileUploadEnabled={Boolean(workosConnection?.publicApiToken)}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
-        onAddTab={addTab}
         onCloseTab={closeTab}
-        onNewConversation={newConversation}
+        onNewConversation={startNewConversation}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
         onRemoveQuote={(id) => patchActiveConversation({
@@ -1158,6 +1153,7 @@ export default function App() {
         conversations={workspace.conversations}
         openTabs={workspace.openTabs}
         activeId={activeConversation.id}
+        maxTabs={MAX_OPEN_TABS}
         onClose={() => setHistoryOpen(false)}
         onSelect={selectHistory}
         onArchive={archiveConversation}

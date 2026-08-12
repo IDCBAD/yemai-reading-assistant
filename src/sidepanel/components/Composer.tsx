@@ -23,7 +23,6 @@ interface ComposerProps {
   fileUploadEnabled: boolean;
   maxTabs: number;
   onSelectTab: (tabId: string) => void;
-  onAddTab: () => void;
   onCloseTab: (tabId: string) => void;
   onNewConversation: () => void;
   onToggleHistory: () => void;
@@ -70,7 +69,6 @@ export function Composer({
   fileUploadEnabled,
   maxTabs,
   onSelectTab,
-  onAddTab,
   onCloseTab,
   onNewConversation,
   onToggleHistory,
@@ -167,7 +165,7 @@ export function Composer({
       >
         <div className="composer-deck">
         <div className="tab-command-row">
-          <div className="tab-list" role="tablist" aria-label="已打开的独立会话">
+          <div className="tab-list" role="tablist" aria-label="已打开的会话工作页">
             {tabs.map((tab, index) => {
               const conversation = conversations.find((item) => item.id === tab.conversationId);
               return (
@@ -181,7 +179,7 @@ export function Composer({
                   role="tab"
                   aria-selected={tab.id === activeTabId}
                   aria-haspopup="menu"
-                  title={`${conversation?.title ?? '新的阅读对话'}，右键关闭`}
+                  title={`${conversation?.branch ? `分支 ${conversation.branch.ordinal} · ` : ''}${conversation?.title ?? '新的阅读对话'}，右键关闭`}
                   onClick={() => onSelectTab(tab.id)}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -196,6 +194,9 @@ export function Composer({
                   key={tab.id}
                 >
                   <span>{index + 1}</span>
+                  {conversation?.branch && (
+                    <KoboyoIcon name="fork" size={7} className="workspace-tab-branch" />
+                  )}
                   {activeConversationIds.has(tab.conversationId) && (
                     <i className="tab-stream-dot" aria-label="正在生成" />
                   )}
@@ -208,15 +209,12 @@ export function Composer({
             <button
               className="workbench-button pressable"
               type="button"
-              onClick={onAddTab}
-              aria-label={canAddTab ? '新增独立会话标签页' : `最多打开 ${maxTabs} 个标签页`}
-              title={canAddTab ? '新增独立会话标签页' : `最多打开 ${maxTabs} 个标签页，请先关闭一个`}
+              onClick={onNewConversation}
+              aria-label={canAddTab ? '新对话' : `最多打开 ${maxTabs} 个工作页`}
+              title={canAddTab ? '新对话：从空白开始' : `最多打开 ${maxTabs} 个工作页，请先关闭一个`}
               disabled={!canAddTab}
             >
               <KoboyoIcon name="plus" size={16} />
-            </button>
-            <button className="workbench-button pressable" type="button" onClick={onNewConversation} aria-label="在当前标签中新建对话" title="在当前标签中新建对话">
-              <KoboyoIcon name="message-square-plus" size={17} />
             </button>
             <button
               className={`workbench-button pressable${historyOpen ? ' is-active' : ''}`}
@@ -398,13 +396,15 @@ export function Composer({
           <button
             type="button"
             role="menuitem"
+            disabled={tabs.length === 1}
+            title={tabs.length === 1 ? '至少保留一个工作页' : '关闭工作页'}
             onClick={() => {
               onCloseTab(tabMenu.tabId);
               setTabMenu(null);
             }}
           >
             <KoboyoIcon name="cross" size={12} />
-            关闭标签页
+            {tabs.length === 1 ? '至少保留一个工作页' : '关闭工作页'}
           </button>
         </div>,
         document.body,

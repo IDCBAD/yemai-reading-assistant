@@ -170,20 +170,24 @@ interface SelectionQuote {
 
 `remoteUuid`、消息、草稿和页面来源全部属于会话。插件 Tab 只保存 `conversationId`，是会话的打开窗口，不承载独立 Agent 记忆。一个会话最多在一个插件 Tab 中打开；从历史选择已打开会话时直接激活对应 Tab。
 
-同一插件 Tab 在浏览器页面变化后继续指向同一会话，新页面进入该会话的 `pages` 来源集合。创建新的插件 Tab 才会创建新的本地草稿会话，因此不同插件 Tab 的请求不会共享 `conversationUuid`，也不会产生不可见的跨 Tab 记忆污染。
+同一工作页在浏览器页面变化后继续指向同一会话，新页面进入该会话的 `pages` 来源集合。“新对话”同时创建新的本地草稿会话和工作页，因此不同会话的请求不会共享 `conversationUuid`，也不会产生不可见的跨工作页记忆污染。
 
 会话分支会创建新的 `LocalConversation`，复制当前会话在分支点之前的可见消息，并保存一次性的 `pendingBranchContext`。分支不复制原 `remoteUuid`。下一次发送时先懒创建新的远端会话，再把 `pendingBranchContext` 与新问题合并到首轮请求中；服务端开始返回文本或工具事件后即清除这份一次性上下文，避免后续请求重复注入。
 
 基础标题和分支关系分开存储。`title` 不追加重复的“· 分支”；历史和顶栏根据 `ConversationBranch.ordinal` 渲染分支徽标或副标题。
+
+历史视图根据 `parentConversationId` 生成展示用会话树；缺失父节点或异常循环会被提升为根节点，避免陈旧本地元数据使会话不可访问。分支工作页通过 `sourceMessageId` 定位父会话中的分支点，并提供返回父会话的轻量入口。
 
 ### 6.1 Tab 操作约束
 
 - `openTabs.length` 硬上限为 10。
 - 达到上限时 `+` 为 disabled，不能只在事件处理器里静默拒绝。
 - Tab 条横向滚动，激活、新建或历史定位后调用 `scrollIntoView({ block: 'nearest', inline: 'nearest' })`。
-- `+` 创建 `OpenConversationTab + LocalConversation`。
-- “新对话”创建新的 `LocalConversation` 并替换当前 `OpenConversationTab.conversationId`；旧会话仍在历史索引中。
-- 历史选择未打开会话时替换当前 Tab 的 `conversationId`；已打开会话则只激活对应 Tab。
+- `+` 是唯一的“新对话”入口，同时创建 `OpenConversationTab + LocalConversation`。
+- 新建会话、创建分支和打开历史会话都不得替换当前 `OpenConversationTab.conversationId`。
+- 历史选择未打开会话时创建新的 `OpenConversationTab`；已打开会话则只激活对应工作页。
+- 达到上限后不创建后台会话，也不把新会话悄悄塞入当前工作页。
+- 最后一个工作页不可关闭，关闭动作不得隐式创建空白会话。
 - 关闭 Tab 只移除 `OpenConversationTab`，不删除 `LocalConversation`。
 - 分支在未达上限时新建 Tab；达到上限时复用当前 Tab 打开新分支。
 
