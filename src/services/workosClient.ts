@@ -1,14 +1,14 @@
 import { WorkosSseParser, type WorkosSseCallbacks } from './workosSse';
 import {
   errorMessageForStatus,
-  WORKOS_AGENT_ID,
+  DEFAULT_WORKOS_AGENT_UUID,
   WORKOS_API_ORIGIN,
   WorkosApiError,
   type ExecuteRequest,
   type WorkosTransport,
 } from './workosTransport';
 
-export { WORKOS_AGENT_ID, WorkosApiError } from './workosTransport';
+export { DEFAULT_WORKOS_AGENT_UUID, WorkosApiError } from './workosTransport';
 export type { ExecuteRequest } from './workosTransport';
 
 async function responseError(response: Response) {
@@ -31,10 +31,14 @@ function headers(token: string) {
   };
 }
 
-export async function createWorkosConversation(token: string, signal?: AbortSignal) {
+export async function createWorkosConversation(
+  token: string,
+  signal?: AbortSignal,
+  agentUuid = DEFAULT_WORKOS_AGENT_UUID,
+) {
   let response: Response;
   try {
-    response = await fetch(`${WORKOS_API_ORIGIN}/oapi/agent/v1/agents/${WORKOS_AGENT_ID}/conversations`, {
+    response = await fetch(`${WORKOS_API_ORIGIN}/oapi/agent/v1/agents/${encodeURIComponent(agentUuid)}/conversations`, {
       method: 'POST',
       headers: headers(token),
       signal,
@@ -125,10 +129,13 @@ export async function executeWorkosStream(
 export class PublicV1Transport implements WorkosTransport {
   readonly kind = 'public-v1' as const;
 
-  constructor(private readonly token: string) {}
+  constructor(
+    private readonly token: string,
+    private readonly agentUuid = DEFAULT_WORKOS_AGENT_UUID,
+  ) {}
 
   createConversation(signal?: AbortSignal) {
-    return createWorkosConversation(this.token, signal);
+    return createWorkosConversation(this.token, signal, this.agentUuid);
   }
 
   executeStream(

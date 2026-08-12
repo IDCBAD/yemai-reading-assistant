@@ -65,7 +65,7 @@ describe('buildTransportHandoffContext', () => {
     }]);
 
     expect(context).toContain('<conversation_transport_handoff_context');
-    expect(context).toContain('切换了远程传输通道');
+    expect(context).toContain('切换了远程 Agent 或传输通道');
     expect(context).not.toContain('<conversation_branch_context');
   });
 });

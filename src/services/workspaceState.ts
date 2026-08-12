@@ -156,6 +156,7 @@ function isConversationV2(value: unknown): value is Omit<Conversation, 'draftPag
   return isRecord(value)
     && typeof value.id === 'string'
     && (value.remoteTransport === undefined || value.remoteTransport === 'public-v1' || value.remoteTransport === 'internal-v2')
+    && (value.remoteAgentUuid === undefined || typeof value.remoteAgentUuid === 'string')
     && typeof value.title === 'string'
     && typeof value.subtitle === 'string'
     && typeof value.updatedAt === 'number'

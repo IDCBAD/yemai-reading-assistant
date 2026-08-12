@@ -8,6 +8,7 @@ function conversation(): Conversation {
   return {
     id: 'conversation-1',
     remoteUuid: 'remote-1',
+    remoteAgentUuid: '11111111-1111-4111-8111-111111111111',
     title: '持久化测试',
     subtitle: '1 个页面 · 刚刚',
     updatedAt: 10,
@@ -46,6 +47,7 @@ describe('workspace state v4', () => {
     expect(restored?.activeOpenTabId).toBe('open-1');
     expect(restored?.openTabs[0]?.conversationId).toBe('conversation-1');
     expect(restored?.conversations[0]?.remoteUuid).toBe('remote-1');
+    expect(restored?.conversations[0]?.remoteAgentUuid).toBe('11111111-1111-4111-8111-111111111111');
     expect(restored?.conversations[0]?.draftInput).toBe('尚未发送的草稿');
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });

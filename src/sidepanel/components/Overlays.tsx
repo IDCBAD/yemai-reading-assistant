@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { WorkosConnectionSettings } from '../../services/workosConnection';
+import { validateAgentUuid, type WorkosConnectionSettings } from '../../services/workosConnection';
+import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate';
 import type { WorkosTransportKind } from '../../services/workosTransport';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
@@ -187,6 +188,7 @@ export function SettingsDrawer({
   const [draft, setDraft] = useState(settings);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [testState, setTestState] = useState<'idle' | 'testing' | 'passed' | 'error'>('idle');
+  const [copyTemplateState, setCopyTemplateState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -195,6 +197,7 @@ export function SettingsDrawer({
     setShowToken(false);
     setSaveState('idle');
     setTestState('idle');
+    setCopyTemplateState('idle');
     setLocalError(null);
   }, [open, settings]);
 
@@ -227,13 +230,25 @@ export function SettingsDrawer({
       });
   };
 
-  const activeConfigured = draft.transport === 'public-v1'
+  const agentUuidError = draft.agentUuid.trim() ? validateAgentUuid(draft.agentUuid) : null;
+  const activeConfigured = validateAgentUuid(draft.agentUuid) === null && (draft.transport === 'public-v1'
     ? Boolean(draft.publicApiToken.trim())
     : Boolean(
         draft.internalV2.accessToken.trim()
         && draft.internalV2.userUuid.trim()
         && draft.internalV2.organizationUuid.trim(),
-      );
+      ));
+
+  const copyAgentTemplate = async () => {
+    try {
+      await navigator.clipboard.writeText(YEMAI_AGENT_MD_TEMPLATE);
+      setCopyTemplateState('copied');
+      window.setTimeout(() => setCopyTemplateState('idle'), 1600);
+    } catch {
+      setCopyTemplateState('error');
+      window.setTimeout(() => setCopyTemplateState('idle'), 2000);
+    }
+  };
 
   if (!open) return null;
 
@@ -259,6 +274,23 @@ export function SettingsDrawer({
               submitConnection();
             }}
           >
+            <label htmlFor="workos-agent-uuid">Agent UUID</label>
+            <div className="agent-uuid-field">
+              <input
+                id="workos-agent-uuid"
+                name="workosAgentUuid"
+                value={draft.agentUuid}
+                onChange={(event) => patchDraft({ agentUuid: event.target.value })}
+                placeholder="例如：409b06a1-…"
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="workos-agent-uuid-help"
+                aria-invalid={Boolean(agentUuidError)}
+              />
+            </div>
+            <p className="field-help" id="workos-agent-uuid-help">v1 与 v2 共用。更换后，下一条消息会连接新 Agent，并携带当前会话的可见上下文。</p>
+            {agentUuidError && <p className="token-error" role="alert">{agentUuidError}</p>}
+
             <label>连接通道</label>
             <div className="transport-picker" role="radiogroup" aria-label="WorkOS 连接通道">
               <button
@@ -396,6 +428,30 @@ export function SettingsDrawer({
               </button>
             )}
           </form>
+
+          <section className="settings-section agent-template-section">
+            <div className="agent-template-heading">
+              <div>
+                <strong>Agent.md 推荐模板</strong>
+                <p>复制到 WorkOS Agent 的最高优先级人设中，让 Agent 正确理解页脉的上下文和安全边界。</p>
+              </div>
+              <button
+                className="copy-template-button pressable"
+                type="button"
+                onClick={() => void copyAgentTemplate()}
+                aria-label={copyTemplateState === 'copied' ? 'Agent.md 模板已复制' : '复制 Agent.md 推荐模板'}
+              >
+                <KoboyoIcon name={copyTemplateState === 'copied' ? 'solid-checkmark' : 'copy'} size={13} />
+                <span aria-live="polite">
+                  {copyTemplateState === 'copied' ? '已复制' : copyTemplateState === 'error' ? '复制失败' : '复制模板'}
+                </span>
+              </button>
+            </div>
+            <details className="agent-template-preview">
+              <summary>查看完整模板</summary>
+              <pre><code>{YEMAI_AGENT_MD_TEMPLATE}</code></pre>
+            </details>
+          </section>
 
           <section className="settings-section settings-section--row">
             <div>

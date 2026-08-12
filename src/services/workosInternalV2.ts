@@ -6,7 +6,7 @@ import {
   isAbortError,
   parseJsonEnvelope,
   requireEventStream,
-  WORKOS_AGENT_ID,
+  DEFAULT_WORKOS_AGENT_UUID,
   WORKOS_API_ORIGIN,
   WorkosApiError,
   type ExecuteRequest,
@@ -75,7 +75,10 @@ export function internalV2Headers(
 export class InternalV2Transport implements WorkosTransport {
   readonly kind = 'internal-v2' as const;
 
-  constructor(private readonly credentials: InternalV2Credentials) {}
+  constructor(
+    private readonly credentials: InternalV2Credentials,
+    private readonly agentUuid = DEFAULT_WORKOS_AGENT_UUID,
+  ) {}
 
   async createConversation(signal?: AbortSignal) {
     let response: Response;
@@ -85,7 +88,7 @@ export class InternalV2Transport implements WorkosTransport {
         headers: internalV2Headers(this.credentials),
         body: JSON.stringify({
           agentType: 'custom_agent',
-          agentUuid: WORKOS_AGENT_ID,
+          agentUuid: this.agentUuid,
           mode: 'draft',
         }),
         signal,

@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser';
-import type { WorkosTransportKind } from './workosTransport';
+import { DEFAULT_WORKOS_AGENT_UUID, type WorkosTransportKind } from './workosTransport';
 
 const SETTINGS_KEY = 'workosConnectionSettings';
 const LEGACY_TOKEN_KEY = 'workosToken';
@@ -11,12 +11,14 @@ export interface InternalV2Credentials {
 }
 
 export interface WorkosConnectionSettings {
+  agentUuid: string;
   transport: WorkosTransportKind;
   publicApiToken: string;
   internalV2: InternalV2Credentials;
 }
 
 export const EMPTY_WORKOS_CONNECTION_SETTINGS: WorkosConnectionSettings = {
+  agentUuid: DEFAULT_WORKOS_AGENT_UUID,
   transport: 'public-v1',
   publicApiToken: '',
   internalV2: {
@@ -30,7 +32,7 @@ function clean(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeSettings(value: unknown, legacyToken: unknown = ''): WorkosConnectionSettings {
+export function normalizeWorkosConnectionSettings(value: unknown, legacyToken: unknown = ''): WorkosConnectionSettings {
   if (!value || typeof value !== 'object') {
     return { ...EMPTY_WORKOS_CONNECTION_SETTINGS, publicApiToken: clean(legacyToken) };
   }
@@ -39,6 +41,7 @@ function normalizeSettings(value: unknown, legacyToken: unknown = ''): WorkosCon
     ? record.internalV2 as Record<string, unknown>
     : {};
   return {
+    agentUuid: clean(record.agentUuid) || DEFAULT_WORKOS_AGENT_UUID,
     transport: record.transport === 'internal-v2' ? 'internal-v2' : 'public-v1',
     publicApiToken: clean(record.publicApiToken) || clean(legacyToken),
     internalV2: {
@@ -47,6 +50,15 @@ function normalizeSettings(value: unknown, legacyToken: unknown = ''): WorkosCon
       organizationUuid: clean(internal.organizationUuid),
     },
   };
+}
+
+export function validateAgentUuid(value: string) {
+  const uuid = clean(value);
+  if (!uuid) return '请输入 WorkOS Agent UUID。';
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uuid)) {
+    return 'Agent UUID 格式不正确。';
+  }
+  return null;
 }
 
 export function validatePublicApiToken(value: string) {
@@ -64,18 +76,20 @@ export function validateInternalV2Credentials(credentials: InternalV2Credentials
 }
 
 export function isActiveWorkosConnectionConfigured(settings: WorkosConnectionSettings) {
-  return settings.transport === 'public-v1'
+  return validateAgentUuid(settings.agentUuid) === null && (settings.transport === 'public-v1'
     ? validatePublicApiToken(settings.publicApiToken) === null
-    : validateInternalV2Credentials(settings.internalV2) === null;
+    : validateInternalV2Credentials(settings.internalV2) === null);
 }
 
 export async function loadWorkosConnectionSettings() {
   const stored = await browser.storage.local.get([SETTINGS_KEY, LEGACY_TOKEN_KEY]);
-  return normalizeSettings(stored[SETTINGS_KEY], stored[LEGACY_TOKEN_KEY]);
+  return normalizeWorkosConnectionSettings(stored[SETTINGS_KEY], stored[LEGACY_TOKEN_KEY]);
 }
 
 export async function saveWorkosConnectionSettings(settings: WorkosConnectionSettings) {
-  const normalized = normalizeSettings(settings);
+  const normalized = normalizeWorkosConnectionSettings(settings);
+  const agentError = validateAgentUuid(normalized.agentUuid);
+  if (agentError) throw new Error(agentError);
   if (normalized.publicApiToken) {
     const error = validatePublicApiToken(normalized.publicApiToken);
     if (error) throw new Error(error);

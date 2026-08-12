@@ -17,7 +17,7 @@ import {
 } from '../services/workosConnection';
 import { uploadWorkosFile } from '../services/workosClient';
 import type { WorkosToolActivity } from '../services/workosSse';
-import { WorkosApiError } from '../services/workosTransport';
+import { hasWorkosRemoteTargetChanged, WorkosApiError } from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -650,21 +650,24 @@ export default function App() {
     const pageSnapshot = preparation?.snapshot;
     const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
     const pendingBranchContext = currentConversation?.pendingBranchContext;
-    const previousTransport = currentConversation?.remoteUuid
-      ? currentConversation.remoteTransport ?? 'public-v1'
-      : undefined;
-    const transportChanged = Boolean(previousTransport && previousTransport !== transport.kind);
+    const connectionTargetChanged = hasWorkosRemoteTargetChanged(
+      currentConversation?.remoteUuid,
+      currentConversation?.remoteTransport,
+      currentConversation?.remoteAgentUuid,
+      transport.kind,
+      connection.agentUuid,
+    );
     const earlierMessages = currentConversation?.messages.filter(
       (message) => message.id !== userMessage.id && message.id !== messageId,
     ) ?? [];
-    const transportHandoffContext = transportChanged && earlierMessages.length
+    const transportHandoffContext = connectionTargetChanged && earlierMessages.length
       ? buildTransportHandoffContext(earlierMessages)
       : undefined;
     const continuationContext = pendingBranchContext ?? transportHandoffContext;
     const preparedPage = userMessage.pageContext
       ? preparePageReference(pageSnapshot ?? userMessage.pageContext)
       : undefined;
-    const previousPage = currentConversation?.remoteUuid && !transportChanged && preparedPage
+    const previousPage = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
       ? currentConversation.pages.find((page) =>
           (page.sourceId && page.sourceId === preparedPage.source.source_id)
           || page.url === preparedPage.source.url)
@@ -716,7 +719,7 @@ export default function App() {
     };
 
     try {
-      let remoteUuid = transportChanged ? undefined : currentConversation?.remoteUuid;
+      let remoteUuid = connectionTargetChanged ? undefined : currentConversation?.remoteUuid;
       if (!remoteUuid) {
         updateMessage(conversationId, messageId, { stage: 'creating-conversation' });
         remoteUuid = await transport.createConversation(signal);
@@ -724,6 +727,7 @@ export default function App() {
           ...conversation,
           remoteUuid,
           remoteTransport: transport.kind,
+          remoteAgentUuid: connection.agentUuid,
         }));
       }
       updateMessage(conversationId, messageId, { stage: 'waiting-first-token' });

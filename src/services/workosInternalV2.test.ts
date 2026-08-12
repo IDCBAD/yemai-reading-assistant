@@ -51,8 +51,11 @@ describe('InternalV2Transport', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const transport = new InternalV2Transport(credentials);
+    const transport = new InternalV2Transport(credentials, '11111111-1111-4111-8111-111111111111');
     await expect(transport.createConversation()).resolves.toBe('conversation-v2');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      agentUuid: '11111111-1111-4111-8111-111111111111',
+    });
   });
 
   it('subscribes before submit and ignores stale completion events', async () => {

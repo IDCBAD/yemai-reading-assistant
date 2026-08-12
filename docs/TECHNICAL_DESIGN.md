@@ -100,6 +100,8 @@ type ExtensionMessage =
 interface LocalConversation {
   id: string;
   remoteUuid?: string;
+  remoteTransport?: 'public-v1' | 'internal-v2';
+  remoteAgentUuid?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -232,11 +234,13 @@ await chrome.storage.local.setAccessLevel({
 
 ## 8. WorkOS 传输层
 
-Agent ID 固定为：
+旧版默认 Agent UUID 为：
 
 ```text
 409b06a1-2e2a-4d8c-af3c-ec831c0c6449
 ```
+
+它只用于旧配置迁移和首次默认值，不再是运行时固定常量。当前 Agent UUID 保存在 `workosConnectionSettings.agentUuid`，由 v1/v2 Transport 共用，并在创建远程 Conversation 时显式传入。
 
 上层对话逻辑只依赖统一的 `WorkosTransport`：
 
@@ -342,7 +346,7 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
 
-远程 Conversation 还保存创建它的 `remoteTransport`。用户切换通道后不会复用旧通道的 `remoteUuid`；下一轮在新通道创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。
+远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。旧版本中缺少 `remoteAgentUuid` 的远程会话按原默认 UUID 解释，避免升级时无故重建。
 
 ## 9. 页面抽取
 
@@ -368,7 +372,7 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 插件内部使用 `yemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
 
-内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。
+内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。设置页从 `recommendedAgentTemplate.ts` 读取推荐模板并复制到剪贴板；[WORKOS_AGENT_PROMPT.md](./WORKOS_AGENT_PROMPT.md) 解释模板用途和插件侧配套边界。
 
 当前页交付模式包括：
 

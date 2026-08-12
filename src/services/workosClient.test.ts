@@ -35,6 +35,23 @@ describe('public v1 transport primitives', () => {
     await expect(createWorkosConversation('AP_token')).resolves.toBe('conversation-v1');
   });
 
+  it('creates the conversation under the configured Agent UUID', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/agents/11111111-1111-4111-8111-111111111111/conversations');
+      return new Response(JSON.stringify({ data: { conversationUuid: 'custom-agent-conversation' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createWorkosConversation(
+      'AP_token',
+      undefined,
+      '11111111-1111-4111-8111-111111111111',
+    )).resolves.toBe('custom-agent-conversation');
+  });
+
   it('keeps reading text from the official execute stream', async () => {
     const inner = {
       type: 'message.part.updated',
