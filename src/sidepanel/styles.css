@@ -315,7 +315,11 @@ textarea:focus-visible {
   line-height: 1.65;
 }
 
-.user-message-card > p { margin: 0; white-space: pre-wrap; text-wrap: pretty; overflow-wrap: anywhere; }
+.user-message-text {
+  white-space: pre-wrap;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
 
 .sent-reference {
   display: grid;
@@ -339,51 +343,88 @@ textarea:focus-visible {
 
 .sent-reference .koboyo-icon { margin-top: 2px; color: var(--cobalt); }
 
-.sent-image-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-bottom: 8px;
+.sent-inline-attachments { display: inline; }
+
+.sent-attachment-token {
+  display: inline-flex;
+  max-width: min(190px, 64%);
+  align-items: center;
+  gap: 5px;
+  margin: 1px 5px 1px 0;
+  padding: 3px 7px 3px 4px;
+  border: 1px solid rgba(171, 185, 207, 0.7);
+  border-radius: 6px;
+  vertical-align: middle;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.74);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
-.sent-image-grid--single { grid-template-columns: minmax(0, 1fr); }
-
-.sent-image-button {
-  display: grid;
-  min-width: 0;
-  height: 104px;
-  overflow: hidden;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(171, 188, 220, 0.72);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.82);
+button.sent-attachment-token {
+  appearance: none;
   cursor: zoom-in;
 }
 
-.sent-image-grid--single .sent-image-button { height: clamp(138px, 31vh, 230px); }
-
-.sent-image-button img {
+.sent-attachment-token > img {
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #fff;
 }
 
-.sent-image-button:hover { border-color: rgba(84, 126, 230, 0.74); background: #fff; }
+.sent-attachment-token > span,
+.sent-attachment-token--file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-.sent-attachments { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.sent-attachment-token--file { padding-left: 6px; }
+.sent-attachment-token--file .koboyo-icon { flex: 0 0 auto; color: var(--muted); }
 
-.sent-attachments span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  border: 1px solid #d7dff2;
-  border-radius: 5px;
-  color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.74);
-  font-size: 9px;
+.sent-attachment-token--image:focus-visible {
+  border-color: var(--cobalt);
+  box-shadow: 0 0 0 2px rgba(52, 104, 255, 0.18);
+}
+
+.image-hover-preview {
+  position: fixed;
+  z-index: 160;
+  display: grid;
+  overflow: visible;
+  place-items: center;
+  padding: 9px;
+  border: 1px solid rgba(179, 192, 213, 0.72);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 48px rgba(24, 39, 67, 0.2), 0 2px 8px rgba(24, 39, 67, 0.1);
+  transform-origin: center top;
+}
+
+.image-hover-preview.is-above { transform-origin: center bottom; }
+
+.image-hover-preview::before {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 10px;
+  content: "";
+}
+
+.image-hover-preview.is-below::before { top: -10px; }
+.image-hover-preview.is-above::before { bottom: -10px; }
+
+.image-hover-preview > img {
+  display: block;
+  max-width: 100%;
+  max-height: var(--image-preview-max-height);
+  object-fit: contain;
+  border-radius: 7px;
 }
 
 .image-lightbox {
@@ -2017,6 +2058,7 @@ textarea:focus-visible {
   .pressable:hover:not(:disabled) { will-change: transform; }
   .message:hover .message-time { opacity: 1; }
   .branch-origin:hover:not(:disabled) { border-color: rgba(78, 119, 211, 0.7); background: rgba(243, 248, 255, 0.98); }
+  .sent-attachment-token--image:hover { border-color: rgba(84, 126, 230, 0.7); background: rgba(255, 255, 255, 0.94); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useRef, useState } from 'react';
+import { isValidElement, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -260,9 +260,39 @@ function AssistantMessage({
   );
 }
 
+interface HoveredImage {
+  attachment: DraftAttachment;
+  anchor: DOMRect;
+  placement: 'above' | 'below';
+}
+
+function imagePreviewStyle(preview: HoveredImage): CSSProperties & { '--image-preview-max-height': string } {
+  const gutter = 12;
+  const gap = 8;
+  const width = Math.min(380, window.innerWidth - gutter * 2);
+  const left = Math.max(gutter, Math.min(preview.anchor.left, window.innerWidth - width - gutter));
+  const availableHeight = preview.placement === 'below'
+    ? window.innerHeight - preview.anchor.bottom - gap - gutter
+    : preview.anchor.top - gap - gutter;
+  const imageMaxHeight = Math.max(80, Math.min(availableHeight - 18, window.innerHeight * 0.7, 540));
+  return {
+    width,
+    left,
+    maxHeight: Math.max(98, availableHeight),
+    '--image-preview-max-height': `${imageMaxHeight}px`,
+    ...(preview.placement === 'below'
+      ? { top: preview.anchor.bottom + gap }
+      : { bottom: window.innerHeight - preview.anchor.top + gap }),
+  };
+}
+
 function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
+  const [hoveredImage, setHoveredImage] = useState<HoveredImage | null>(null);
   const [activeImage, setActiveImage] = useState<DraftAttachment | null>(null);
+  const showPreviewTimerRef = useRef<number | null>(null);
+  const hidePreviewTimerRef = useRef<number | null>(null);
+  const suppressFocusPreviewRef = useRef(false);
   const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const imageAttachments = attachments.filter((attachment) =>
     attachment.mime?.startsWith('image/')
@@ -270,10 +300,83 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
     && !failedImageIds.has(attachment.id));
   const fileAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment));
 
+  const clearPreviewTimers = () => {
+    if (showPreviewTimerRef.current !== null) window.clearTimeout(showPreviewTimerRef.current);
+    if (hidePreviewTimerRef.current !== null) window.clearTimeout(hidePreviewTimerRef.current);
+    showPreviewTimerRef.current = null;
+    hidePreviewTimerRef.current = null;
+  };
+
+  const closeHoverPreview = () => {
+    if (showPreviewTimerRef.current !== null) window.clearTimeout(showPreviewTimerRef.current);
+    showPreviewTimerRef.current = null;
+    hidePreviewTimerRef.current = window.setTimeout(() => {
+      setHoveredImage(null);
+      hidePreviewTimerRef.current = null;
+    }, 120);
+  };
+
+  const keepHoverPreviewOpen = () => {
+    if (hidePreviewTimerRef.current !== null) window.clearTimeout(hidePreviewTimerRef.current);
+    hidePreviewTimerRef.current = null;
+  };
+
+  const openHoverPreview = (attachment: DraftAttachment, trigger: HTMLButtonElement, immediate = false) => {
+    clearPreviewTimers();
+    const anchor = trigger.getBoundingClientRect();
+    const availableBelow = window.innerHeight - anchor.bottom;
+    const availableAbove = anchor.top;
+    const placement = availableBelow >= Math.min(360, window.innerHeight * 0.58) || availableBelow >= availableAbove
+      ? 'below' as const
+      : 'above' as const;
+    const show = () => {
+      setHoveredImage({ attachment, anchor, placement });
+      showPreviewTimerRef.current = null;
+    };
+    if (immediate || hoveredImage) show();
+    else showPreviewTimerRef.current = window.setTimeout(show, 220);
+  };
+
   const closeImage = () => {
     setActiveImage(null);
-    window.requestAnimationFrame(() => activeTriggerRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      suppressFocusPreviewRef.current = true;
+      activeTriggerRef.current?.focus();
+      window.requestAnimationFrame(() => {
+        suppressFocusPreviewRef.current = false;
+      });
+    });
   };
+
+  const openImage = (attachment: DraftAttachment, trigger: HTMLButtonElement) => {
+    clearPreviewTimers();
+    setHoveredImage(null);
+    activeTriggerRef.current = trigger;
+    setActiveImage(attachment);
+  };
+
+  useEffect(() => () => clearPreviewTimers(), []);
+
+  useEffect(() => {
+    if (!hoveredImage) return;
+    const closeForViewportChange = () => {
+      clearPreviewTimers();
+      setHoveredImage(null);
+    };
+    const closeWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeForViewportChange();
+    };
+    window.addEventListener('resize', closeForViewportChange);
+    window.addEventListener('scroll', closeForViewportChange, true);
+    window.addEventListener('keydown', closeWithKeyboard);
+    return () => {
+      window.removeEventListener('resize', closeForViewportChange);
+      window.removeEventListener('scroll', closeForViewportChange, true);
+      window.removeEventListener('keydown', closeWithKeyboard);
+    };
+  }, [hoveredImage]);
 
   useEffect(() => {
     if (!activeImage) return;
@@ -294,23 +397,28 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
 
   const markImageFailed = (attachment: DraftAttachment) => {
     setFailedImageIds((current) => new Set(current).add(attachment.id));
+    if (hoveredImage?.attachment.id === attachment.id) setHoveredImage(null);
     if (activeImage?.id === attachment.id) closeImage();
   };
 
   return (
     <>
       {imageAttachments.length > 0 && (
-        <div className={`sent-image-grid${imageAttachments.length === 1 ? ' sent-image-grid--single' : ''}`}>
+        <span className="sent-inline-attachments">
           {imageAttachments.map((attachment) => (
             <button
-              className="sent-image-button pressable"
+              className="sent-attachment-token sent-attachment-token--image pressable"
               type="button"
               key={attachment.id}
-              aria-label={`查看图片：${attachment.filename}`}
-              title={`查看大图：${attachment.filename}`}
+              aria-label={`图片附件：${attachment.filename}，悬浮预览，点击查看大图`}
+              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget)}
+              onMouseLeave={closeHoverPreview}
+              onFocus={(event) => {
+                if (!suppressFocusPreviewRef.current) openHoverPreview(attachment, event.currentTarget, true);
+              }}
+              onBlur={closeHoverPreview}
               onClick={(event) => {
-                activeTriggerRef.current = event.currentTarget;
-                setActiveImage(attachment);
+                openImage(attachment, event.currentTarget);
               }}
             >
               <img
@@ -321,19 +429,38 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
                 draggable={false}
                 onError={() => markImageFailed(attachment)}
               />
+              <span>{attachment.filename}</span>
             </button>
           ))}
-        </div>
+        </span>
       )}
       {fileAttachments.length > 0 && (
-        <div className="sent-attachments">
+        <span className="sent-inline-attachments">
           {fileAttachments.map((attachment) => (
-            <span key={attachment.id} title={attachment.filename}>
+            <span className="sent-attachment-token sent-attachment-token--file" key={attachment.id} title={attachment.filename}>
               <KoboyoIcon name="file" size={13} />
               {attachment.filename}
             </span>
           ))}
-        </div>
+        </span>
+      )}
+      {hoveredImage && createPortal(
+        <div
+          className={`image-hover-preview is-${hoveredImage.placement}`}
+          style={imagePreviewStyle(hoveredImage)}
+          aria-hidden="true"
+          onMouseEnter={keepHoverPreviewOpen}
+          onMouseLeave={closeHoverPreview}
+        >
+          <img
+            src={hoveredImage.attachment.previewUrl ?? hoveredImage.attachment.url}
+            alt=""
+            decoding="async"
+            draggable={false}
+            onError={() => markImageFailed(hoveredImage.attachment)}
+          />
+        </div>,
+        document.body,
       )}
       {(activeImage?.previewUrl ?? activeImage?.url) && createPortal(
         <div
@@ -405,7 +532,8 @@ function UserMessage({ message }: { message: ChatMessage }) {
         {message.attachments && message.attachments.length > 0 && (
           <SentAttachments attachments={message.attachments} />
         )}
-        {message.content && <p>{message.content}</p>}
+        {message.attachments && message.attachments.length > 0 && message.content && ' '}
+        {message.content && <span className="user-message-text">{message.content}</span>}
         </div>
         <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
       </div>
