@@ -4,6 +4,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, DraftAttachment, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
+import { isImageFile } from '../fileTypes';
+import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { YemaiMark } from './YemaiMark';
@@ -295,7 +297,7 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   const suppressFocusPreviewRef = useRef(false);
   const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const imageAttachments = attachments.filter((attachment) =>
-    attachment.mime?.startsWith('image/')
+    isImageFile(attachment.filename, attachment.mime)
     && Boolean(attachment.previewUrl ?? attachment.url)
     && !failedImageIds.has(attachment.id));
   const fileAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment));
@@ -438,8 +440,8 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
         <span className="sent-inline-attachments">
           {fileAttachments.map((attachment) => (
             <span className="sent-attachment-token sent-attachment-token--file" key={attachment.id} title={attachment.filename}>
-              <KoboyoIcon name="file" size={13} />
-              {attachment.filename}
+              <FileTypeIcon filename={attachment.filename} mime={attachment.mime} variant="token" />
+              <span>{attachment.filename}</span>
             </span>
           ))}
         </span>

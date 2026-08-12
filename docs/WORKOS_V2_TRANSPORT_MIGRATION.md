@@ -115,14 +115,34 @@ POST /api/agent/v2/conversations/{conversationUuid}/queue/submit
 - 工具参数、隐藏推理和原始工具结果不会进入衔接上下文；
 - 通道切换不会删除本地消息，也不会删除 WorkOS 后台历史。
 
-## 8. 附件边界
+## 8. 附件上传通道
 
-当前只有 v1 公开了确定的文件上传接口。迁移期采用能力拆分：
+2026-08-13 的真实接口验证表明，WorkOS 公开上传接口与网页端内部上传链路具有不同的格式能力：
 
-- 文本执行由当前选择的 Transport 负责；
-- 附件仍使用公开 v1 API Token 上传；
-- 未配置 v1 API Token 时，v2 文本对话仍可用，但附件按钮不可用；
-- 等官方 v2 文件接口发布或内部接口完成验证后，再把上传能力纳入 v2 Transport。
+- 公开接口 `POST /oapi/power/v1/file/upload` 使用 `AP_...` Token 和 multipart 直传，并通过服务端白名单拒绝 HTML；
+- WorkOS 网页端先调用 `POST /api/agent/v1/module/file/getUploadTempUrl` 取得阿里云 OSS 签名地址，再使用原始文件 MIME 执行 `PUT`，成功后把响应中的 `readUrl` 作为文件附件 URL；
+- 内部网页上传接受 `text/html`，随后 v2 `queue/submit` 使用 `{ type: "file", url, filename, mime }` 提交给 Agent。
+
+注意：网页端文件接口路径仍包含 `/v1/`，因此它不是“公开 v2 文件 API”。这里的 `internal-web` 表示认证方式和网页端内部协议，而不是接口版本号。
+
+附件能力独立于对话流式协议：
+
+```text
+WorkosTransport                 WorkosFileUploader
+├── PublicV1Transport           ├── PublicV1FileUploader
+└── InternalV2Transport         └── InternalWebFileUploader
+```
+
+当前行为：
+
+- `public-v1` 对话使用公开 v1 上传器，只开放服务端已确认支持的阅读类文件与常见图片；
+- `internal-v2` 对话使用网页端内部上传器，不再额外要求公开 v1 API Token，并增加 HTML；
+- HTML 保留原文件和 `text/html`，不重命名、不伪装 MIME，也不转换 Markdown；
+- 上传器只保留长期可读的 `readUrl`，签名 `uploadUrl` 仅用于本次 PUT，不写入会话、日志或错误信息；
+- OSS 上传目标限定为 WorkOS 当前文件存储域名，避免认证响应被利用向任意地址发送本地文件；
+- PPT/PPTX 虽有图标识别能力，但两条已验证上传通道均未确认支持，因此暂不出现在文件选择器。
+
+未来官方 v2 文件 API 发布后，只替换 `InternalWebFileUploader` 的认证、地址申请与上传实现，不修改输入框、附件状态或 `queue/submit` 数据结构。
 
 ## 9. 发布与删除条件
 
@@ -149,5 +169,7 @@ POST /api/agent/v2/conversations/{conversationUuid}/queue/submit
 - 通道切换后不会错误复用旧通道 Conversation；
 - v2 缺少任意凭证时不能发送，并给出明确提示；
 - v2 认证失败不会误报 v1 API Token 失效；
-- v2 模式未配置 v1 Token 时只禁用附件，不禁用文本对话；
+- v2 模式附件不依赖公开 v1 Token，缺少内部登录凭证时才禁用附件；
+- HTML 在内部网页上传通道可成功取得 `readUrl` 并随消息提交；
+- HTML 在公开 v1 通道选择阶段即被阻止，不发起必然失败的请求；
 - 单元测试、TypeScript 检查和 Chrome MV3 构建全部通过。

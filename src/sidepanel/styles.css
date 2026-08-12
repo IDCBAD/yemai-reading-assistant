@@ -23,6 +23,17 @@
   --amber-pale: #fff4df;
   --danger: #b4232c;
   --danger-pale: #fff0f1;
+  --file-type-image: #3571e8;
+  --file-type-pdf: #d95164;
+  --file-type-word: #316be8;
+  --file-type-spreadsheet: #188565;
+  --file-type-csv: #1195a2;
+  --file-type-markdown: #6b63d8;
+  --file-type-html: #e26c43;
+  --file-type-text: #657791;
+  --file-type-presentation: #de7b32;
+  --file-type-json: #c48b1e;
+  --file-type-generic: #78879d;
   --shadow-deck: 0 16px 42px rgba(30, 57, 98, 0.11), 0 2px 9px rgba(30, 57, 98, 0.05);
   --shadow-float: 0 24px 64px rgba(9, 25, 53, 0.2), 0 4px 14px rgba(9, 25, 53, 0.08);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
@@ -384,8 +395,62 @@ button.sent-attachment-token {
   white-space: nowrap;
 }
 
-.sent-attachment-token--file { padding-left: 6px; }
-.sent-attachment-token--file .koboyo-icon { flex: 0 0 auto; color: var(--muted); }
+.sent-attachment-token--file { padding-left: 4px; }
+
+.file-type-icon {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+  color: var(--file-type-color, var(--file-type-generic));
+  filter: drop-shadow(0 2px 3px rgba(39, 68, 111, 0.1));
+}
+
+.file-type-icon--draft { width: 34px; height: 38px; }
+.file-type-icon--token { width: 20px; height: 23px; filter: none; }
+
+.file-type-icon__page {
+  fill: rgba(253, 254, 255, 0.96);
+  stroke: currentColor;
+  stroke-opacity: 0.38;
+}
+
+.file-type-icon__fold {
+  fill: currentColor;
+  fill-opacity: 0.1;
+  stroke: currentColor;
+  stroke-opacity: 0.28;
+}
+
+.file-type-icon__label {
+  fill: currentColor;
+  font-family: Inter, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -0.25px;
+}
+
+.file-type-icon--pdf .file-type-icon__label,
+.file-type-icon--csv .file-type-icon__label {
+  font-size: 12px;
+  letter-spacing: -0.5px;
+}
+
+.file-type-icon--html .file-type-icon__label,
+.file-type-icon--json .file-type-icon__label {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: -1px;
+}
+
+.file-type-icon--generic .file-type-icon__label { letter-spacing: 1px; }
+
+.file-type-icon__pulse {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 .sent-attachment-token--image:focus-visible {
   border-color: var(--cobalt);
@@ -1172,16 +1237,23 @@ button.sent-attachment-token {
 
 .draft-attachment-overlay {
   position: absolute;
-  inset: 0;
+  top: 3px;
+  right: 3px;
   display: grid;
+  width: 16px;
+  height: 16px;
   place-items: center;
-  background: rgba(247, 250, 255, 0.7);
+  border: 1px solid rgba(188, 201, 219, 0.78);
+  border-radius: 50%;
+  background: rgba(248, 251, 255, 0.94);
+  box-shadow: 0 2px 5px rgba(39, 68, 111, 0.12);
 }
 
 .draft-attachment-overlay--failed {
   color: var(--danger);
-  background: rgba(255, 245, 246, 0.82);
-  font-size: 13px;
+  border-color: rgba(180, 35, 44, 0.24);
+  background: rgba(255, 245, 246, 0.96);
+  font-size: 10px;
   font-weight: 760;
 }
 
@@ -1242,8 +1314,8 @@ button.sent-attachment-token {
 }
 
 .attachment-progress {
-  width: 11px;
-  height: 11px;
+  width: 9px;
+  height: 9px;
   flex: 0 0 auto;
   border: 1.5px solid #cbd3dc;
   border-top-color: var(--cobalt);

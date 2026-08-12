@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1080" viewBox="0 0 1440 1080">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#27446f" flood-opacity="0.09"/>
+    </filter>
+    <filter id="smallShadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#27446f" flood-opacity="0.12"/>
+    </filter>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDFEFF"/>
+      <stop offset="1" stop-color="#F4F8FF"/>
+    </linearGradient>
+    <linearGradient id="canvasBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4F7FC"/>
+      <stop offset="0.58" stop-color="#EDF3FC"/>
+      <stop offset="1" stop-color="#EAF1FC"/>
+    </linearGradient>
+    <symbol id="file-page" viewBox="0 0 64 72">
+      <path d="M9 2.5h31.2L55 17.3V63a6.5 6.5 0 0 1-6.5 6.5h-39A6.5 6.5 0 0 1 3 63V9a6.5 6.5 0 0 1 6-6.5Z" fill="url(#pageBg)" stroke="currentColor" stroke-opacity=".34"/>
+      <path d="M40.2 2.5v10.8a4 4 0 0 0 4 4H55" fill="currentColor" fill-opacity=".11" stroke="currentColor" stroke-opacity=".28"/>
+      <path d="M16 59.5h8.5l2.5-3.7 3.6 7.2 3-5.2 2.2 1.7H44" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <style>
+      .ui { font-family: Inter, "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace; }
+      .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; fill: #6F819D; }
+      .title { font-size: 34px; font-weight: 760; fill: #0B1833; }
+      .subtitle { font-size: 16px; fill: #687995; }
+      .section { font-size: 18px; font-weight: 720; fill: #13213D; }
+      .hint { font-size: 13px; fill: #7E8DA5; }
+      .type { font-size: 15px; font-weight: 760; letter-spacing: .3px; }
+      .desc { font-size: 12px; fill: #8795AA; }
+      .filename { font-size: 13px; font-weight: 650; fill: #243451; }
+      .meta { font-size: 11px; fill: #7587A3; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1080" fill="url(#canvasBg)"/>
+  <circle cx="1260" cy="84" r="170" fill="#2C6AFF" opacity=".035"/>
+  <circle cx="1324" cy="12" r="82" fill="#7B61FF" opacity=".045"/>
+
+  <g class="ui">
+    <text x="82" y="78" class="eyebrow">页脉 · FILE LANGUAGE 01</text>
+    <text x="82" y="126" class="title">让文件类型，也有自己的脉络。</text>
+    <text x="82" y="158" class="subtitle">统一折页轮廓 × 语义色 × 底部脉冲线；适配输入附件与消息内 Token。</text>
+
+    <g transform="translate(80 206)">
+      <rect width="1280" height="570" rx="24" fill="#FAFCFF" stroke="#D7E2F1" filter="url(#shadow)"/>
+      <text x="32" y="46" class="section">46 / 输入区附件图标</text>
+      <text x="32" y="70" class="hint">优先表达“这是什么文件”，不模拟文档内容缩略图</text>
+
+      <!-- PDF -->
+      <g transform="translate(32 100)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#D95164" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="70" text-anchor="middle" class="mono type" fill="#D95164">PDF</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">PDF</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">阅读文档</text>
+      </g>
+
+      <!-- DOCX -->
+      <g transform="translate(278 100)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#316BE8" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="72" text-anchor="middle" class="type" fill="#316BE8">W</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">DOCX</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">文字文档</text>
+      </g>
+
+      <!-- XLSX -->
+      <g transform="translate(524 100)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#188565" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <g transform="translate(102 46)" stroke="#188565" stroke-width="1.5" fill="none">
+          <rect width="22" height="18" rx="2"/><path d="M7.3 0v18M14.6 0v18M0 6h22M0 12h22"/>
+        </g>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">XLSX</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">电子表格</text>
+      </g>
+
+      <!-- CSV -->
+      <g transform="translate(770 100)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#1195A2" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="70" text-anchor="middle" class="mono type" fill="#1195A2">CSV</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">CSV</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">表格数据</text>
+      </g>
+
+      <!-- Markdown -->
+      <g transform="translate(1016 100)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#6B63D8" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="71" text-anchor="middle" class="mono type" fill="#6B63D8">MD</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">MARKDOWN</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">结构化笔记</text>
+      </g>
+
+      <!-- HTML -->
+      <g transform="translate(32 314)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#E26C43" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="70" text-anchor="middle" class="mono type" fill="#E26C43">&lt;/&gt;</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">HTML</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">网页文件</text>
+      </g>
+
+      <!-- TXT -->
+      <g transform="translate(278 314)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#657791" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <g transform="translate(101 48)" stroke="#657791" stroke-width="2" stroke-linecap="round"><path d="M0 0h24M0 7h19M0 14h22"/></g>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">TXT</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">纯文本</text>
+      </g>
+
+      <!-- PPTX -->
+      <g transform="translate(524 314)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#DE7B32" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="72" text-anchor="middle" class="type" fill="#DE7B32">P</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">PPTX</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">演示文稿</text>
+      </g>
+
+      <!-- JSON -->
+      <g transform="translate(770 314)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#C48B1E" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="71" text-anchor="middle" class="mono type" fill="#C48B1E">{ }</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">JSON</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">结构化数据</text>
+      </g>
+
+      <!-- Generic -->
+      <g transform="translate(1016 314)">
+        <rect width="226" height="190" rx="18" fill="#FFF" stroke="#E1E8F2"/>
+        <g transform="translate(81 24)" color="#78879D" filter="url(#smallShadow)"><use href="#file-page" width="64" height="72"/></g>
+        <text x="113" y="68" text-anchor="middle" class="type" fill="#78879D">•••</text>
+        <text x="113" y="126" text-anchor="middle" class="type" fill="#263650">FILE</text>
+        <text x="113" y="150" text-anchor="middle" class="desc">未知类型</text>
+      </g>
+    </g>
+
+    <g transform="translate(80 812)">
+      <text x="0" y="0" class="section">实际界面中的两个尺寸</text>
+      <text x="0" y="26" class="hint">大图标负责扫描，小图标只保留格式识别；颜色与轮廓保持连续</text>
+
+      <!-- Composer row -->
+      <g transform="translate(0 54)">
+        <rect width="790" height="150" rx="22" fill="#F9FBFF" stroke="#BED0EA" filter="url(#shadow)"/>
+        <text x="26" y="31" class="meta" font-weight="700">3 个附件</text>
+
+        <g transform="translate(24 49)">
+          <rect width="232" height="76" rx="13" fill="#F5F8FD" stroke="#D6E1EF"/>
+          <g transform="translate(12 8)" color="#316BE8"><use href="#file-page" width="46" height="52"/></g>
+          <text x="72" y="31" class="filename">研究资料汇总.docx</text>
+          <text x="72" y="51" class="meta">DOCX · 38 KB · 已上传</text>
+        </g>
+        <g transform="translate(271 49)">
+          <rect width="232" height="76" rx="13" fill="#F5F8FD" stroke="#D6E1EF"/>
+          <g transform="translate(12 8)" color="#6B63D8"><use href="#file-page" width="46" height="52"/></g>
+          <text x="72" y="31" class="filename">DESIGN.md</text>
+          <text x="72" y="51" class="meta">MD · 32 KB · 已上传</text>
+        </g>
+        <g transform="translate(518 49)">
+          <rect width="248" height="76" rx="13" fill="#F5F8FD" stroke="#D6E1EF"/>
+          <g transform="translate(12 8)" color="#188565"><use href="#file-page" width="46" height="52"/></g>
+          <text x="72" y="31" class="filename">阅读记录.xlsx</text>
+          <text x="72" y="51" class="meta">XLSX · 164 KB · 已上传</text>
+        </g>
+      </g>
+
+      <!-- Inline token row -->
+      <g transform="translate(832 54)">
+        <rect width="448" height="150" rx="22" fill="#F9FBFF" stroke="#BED0EA" filter="url(#shadow)"/>
+        <text x="24" y="31" class="meta" font-weight="700">消息内 Token · 22px</text>
+        <g transform="translate(24 53)">
+          <rect width="175" height="40" rx="11" fill="#F2F6FC" stroke="#D7E1EE"/>
+          <g transform="translate(9 8)" color="#D95164"><use href="#file-page" width="22" height="25"/></g>
+          <text x="40" y="25" class="filename">报告.pdf</text>
+        </g>
+        <g transform="translate(211 53)">
+          <rect width="210" height="40" rx="11" fill="#F2F6FC" stroke="#D7E1EE"/>
+          <g transform="translate(9 8)" color="#E26C43"><use href="#file-page" width="22" height="25"/></g>
+          <text x="40" y="25" class="filename">index.html</text>
+        </g>
+        <text x="24" y="120" class="hint">小尺寸去掉说明文字，只留下颜色与格式符号</text>
+      </g>
+    </g>
+  </g>
+</svg>

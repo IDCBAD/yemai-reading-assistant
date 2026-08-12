@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
 import type { AgentRunSummary, Conversation, DraftAttachment, OpenConversationTab, PageContext, QuoteReference } from '../types';
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
+import { attachmentFormatLabel, isImageFile } from '../fileTypes';
 import { AgentRunStatus } from './AgentRunStatus';
+import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 
@@ -22,6 +24,7 @@ interface ComposerProps {
   historyOpen: boolean;
   connectionState: 'loading' | 'configured' | 'missing';
   fileUploadEnabled: boolean;
+  fileAccept: string;
   maxTabs: number;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
@@ -38,9 +41,7 @@ interface ComposerProps {
 }
 
 function attachmentFormat(attachment: DraftAttachment) {
-  const extension = attachment.filename.match(/\.([a-z0-9]{2,5})$/i)?.[1];
-  if (extension) return extension.toLocaleUpperCase();
-  return attachment.mime?.startsWith('image/') ? '图片' : '文件';
+  return attachmentFormatLabel(attachment.filename, attachment.mime);
 }
 
 function AttachmentThumbnail({ attachment }: { attachment: DraftAttachment }) {
@@ -51,9 +52,9 @@ function AttachmentThumbnail({ attachment }: { attachment: DraftAttachment }) {
 
   return (
     <span className={`draft-attachment-thumb is-${attachment.status}`} aria-hidden="true">
-      {attachment.mime?.startsWith('image/') && source && !imageFailed
+      {isImageFile(attachment.filename, attachment.mime) && source && !imageFailed
         ? <img src={source} alt="" draggable={false} onError={() => setImageFailed(true)} />
-        : <KoboyoIcon name="file" size={16} />}
+        : <FileTypeIcon filename={attachment.filename} mime={attachment.mime} />}
       {attachment.status === 'uploading' && (
         <span className="draft-attachment-overlay"><span className="attachment-progress" /></span>
       )}
@@ -85,6 +86,7 @@ export function Composer({
   historyOpen,
   connectionState,
   fileUploadEnabled,
+  fileAccept,
   maxTabs,
   onSelectTab,
   onCloseTab,
@@ -338,7 +340,7 @@ export function Composer({
                       attachment.status === 'uploading'
                         ? '正在上传'
                         : attachment.status === 'failed'
-                          ? '上传失败'
+                          ? `上传失败：${attachment.errorMessage ?? '请删除后重试'}`
                           : '已上传'
                     }
                   </span>
@@ -402,7 +404,7 @@ export function Composer({
                 tabIndex={-1}
                 aria-hidden="true"
                 name="attachments"
-                accept=".pdf,.doc,.docx,.txt,.md,image/*"
+                accept={fileAccept}
                 multiple
                 onChange={(event) => {
                   onFilesSelected(Array.from(event.target.files ?? []));
@@ -416,8 +418,8 @@ export function Composer({
                   if (fileUploadEnabled) fileInputRef.current?.click();
                   else onAttachmentUnavailable();
                 }}
-                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 v1 API Token'}
-                title={fileUploadEnabled ? '添加附件，也可以直接粘贴图片' : '添加附件，需要先配置 v1 API Token'}
+                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置当前 WorkOS 连接'}
+                title={fileUploadEnabled ? '添加附件，也可以直接粘贴图片' : '添加附件，需要先配置当前 WorkOS 连接'}
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>

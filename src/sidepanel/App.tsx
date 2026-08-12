@@ -15,7 +15,10 @@ import {
   saveWorkosConnectionSettings,
   type WorkosConnectionSettings,
 } from '../services/workosConnection';
-import { uploadWorkosFile } from '../services/workosClient';
+import {
+  createWorkosFileUploader,
+  isWorkosFileUploadConfigured,
+} from '../services/workosFileUpload';
 import type { WorkosToolActivity } from '../services/workosSse';
 import { hasWorkosRemoteTargetChanged, WorkosApiError } from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
@@ -39,6 +42,11 @@ import { Composer } from './components/Composer';
 import { MessageList } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
+import {
+  attachmentAcceptForChannel,
+  isFileUploadSupported,
+  isImageFile,
+} from './fileTypes';
 import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
 import { shouldRefreshPageMetadataForTab, type BrowserTabChange } from './pageMetadataSync';
 import {
@@ -71,12 +79,12 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function attachmentValidationError(file: File) {
+function attachmentValidationError(file: File, channel: WorkosConnectionSettings['transport']) {
   if (file.size > MAX_ATTACHMENT_BYTES) return '单个附件不能超过 20 MB。';
-  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-  const supportedDocument = ['pdf', 'doc', 'docx', 'txt', 'md'].includes(extension);
-  if (!supportedDocument && !file.type.startsWith('image/')) {
-    return '仅支持 PDF、Word、TXT、Markdown 和常见图片。';
+  if (!isFileUploadSupported(file.name, file.type, channel)) {
+    return channel === 'internal-v2'
+      ? '当前内部上传通道支持 PDF、Word、Excel、CSV、Markdown、HTML、TXT、JSON 和常见图片。'
+      : '当前公开 v1 上传通道支持 PDF、Word、Excel、CSV、Markdown、TXT、JSON 和常见图片，不支持 HTML。';
   }
   return null;
 }
@@ -971,12 +979,14 @@ export default function App() {
       setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
       return 0;
     }
-    const uploadToken = workosConnection.publicApiToken;
-    if (!uploadToken) {
-      setConnectionIssue('附件仍使用公开 v1 上传接口，请先配置 AP_… API Token。');
+    if (!isWorkosFileUploadConfigured(workosConnection)) {
+      setConnectionIssue(workosConnection.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
       setSettingsOpen(true);
       return 0;
     }
+    const fileUploader = createWorkosFileUploader(workosConnection);
 
     const conversationId = activeConversation.id;
     const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - activeConversation.draftAttachments.length);
@@ -990,9 +1000,9 @@ export default function App() {
     }
 
     const uploads = filesToAdd.map((file) => {
-      const errorMessage = attachmentValidationError(file);
+      const errorMessage = attachmentValidationError(file, workosConnection.transport);
       let previewUrl: string | undefined;
-      if (file.type.startsWith('image/')) {
+      if (isImageFile(file.name, file.type)) {
         try {
           previewUrl = URL.createObjectURL(file);
           attachmentPreviewUrlsRef.current.add(previewUrl);
@@ -1021,7 +1031,7 @@ export default function App() {
 
     uploads.forEach(({ file, attachment }) => {
       if (attachment.status === 'failed') return;
-      void uploadWorkosFile(uploadToken, file)
+      void fileUploader.upload(file)
         .then(({ fileReadUrl }) => {
           const useRemotePreview = () => {
             updateConversation(conversationId, (conversation) => ({
@@ -1038,7 +1048,7 @@ export default function App() {
             }
           };
 
-          if (!attachment.mime?.startsWith('image/') || !attachment.previewUrl) {
+          if (!isImageFile(attachment.filename, attachment.mime) || !attachment.previewUrl) {
             useRemotePreview();
             return;
           }
@@ -1171,7 +1181,10 @@ export default function App() {
         runSummary={runSummary}
         historyOpen={historyOpen}
         connectionState={!workspaceHydrated || workosConnection === null ? 'loading' : activeConnectionConfigured ? 'configured' : 'missing'}
-        fileUploadEnabled={Boolean(workosConnection?.publicApiToken)}
+        fileUploadEnabled={Boolean(workosConnection && isWorkosFileUploadConfigured(workosConnection))}
+        fileAccept={workosConnection
+          ? attachmentAcceptForChannel(workosConnection.transport)
+          : attachmentAcceptForChannel('public-v1')}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
@@ -1198,7 +1211,9 @@ export default function App() {
             setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
             return;
           }
-          setConnectionIssue('附件仍使用公开 v1 上传接口，请先配置 AP_… API Token。');
+          setConnectionIssue(workosConnection.transport === 'internal-v2'
+            ? '请先完整配置 WorkOS 内部连接凭证。'
+            : '请先配置 WorkOS 公开 v1 API Token。');
           setSettingsOpen(true);
         }}
         onSend={sendMessage}

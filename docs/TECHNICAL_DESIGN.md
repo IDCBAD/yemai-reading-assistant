@@ -263,6 +263,8 @@ interface WorkosTransport {
 
 图片上传期间使用 `URL.createObjectURL(file)` 提供即时预览；远端 `fileReadUrl` 确认可显示后切换为远端地址并调用 `URL.revokeObjectURL()`。本地 `blob:` 地址被明确排除在工作区快照之外，删除附件、清空历史和 Side Panel 卸载时也会释放，避免把图片数据写入 `chrome.storage.local` 或长期占用内存。已发送图片渲染为行内附件 Token；完整图片只在 Token 悬浮、聚焦或点击时挂载，悬浮预览根据视口空间自动选择向上或向下展开，并在滚动、缩放或移出安全区域时关闭。远端图片不可显示时降级为普通文件 Chip。
 
+附件上传与对话传输分别由 `WorkosFileUploader` 和 `WorkosTransport` 承担。公开 v1 连接使用 multipart 文件接口；内部 v2 连接使用网页端临时地址协议：先向 WorkOS 申请 `uploadUrl` 与 `readUrl`，再以文件原始 MIME 对 `uploadUrl` 执行 OSS PUT，发送时只使用 `readUrl`。签名 URL 不进入本地会话存储。两条上传通道拥有各自的格式白名单，文件类型图标只负责识别，不代表当前通道必然允许上传。
+
 当前代码位置：
 
 ```text

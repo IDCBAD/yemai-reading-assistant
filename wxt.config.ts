@@ -9,9 +9,12 @@ export default defineConfig({
     version: '0.1.0',
     minimum_chrome_version: '116',
     permissions: ['sidePanel', 'storage', 'favicon'],
-    host_permissions: ['https://power-api.yingdao.com/*'],
+    host_permissions: [
+      'https://power-api.yingdao.com/*',
+      'https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*',
+    ],
     content_security_policy: {
-      extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com; img-src 'self' data: blob: https:",
+      extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
     },
     action: {
       default_title: '打开页脉',
