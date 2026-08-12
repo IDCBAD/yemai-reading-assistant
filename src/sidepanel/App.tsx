@@ -168,6 +168,7 @@ export default function App() {
   const pageMetadataRequestRef = useRef(0);
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
+  const attachmentPreviewUrlsRef = useRef(new Set<string>());
   const requestRunnerRef = useRef<(request: QueuedAgentRequest, signal: AbortSignal) => Promise<void>>(
     async () => undefined,
   );
@@ -229,6 +230,11 @@ export default function App() {
   useEffect(() => {
     workspaceRef.current = workspace;
   }, [workspace]);
+
+  useEffect(() => () => {
+    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    attachmentPreviewUrlsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -985,6 +991,15 @@ export default function App() {
 
     const uploads = filesToAdd.map((file) => {
       const errorMessage = attachmentValidationError(file);
+      let previewUrl: string | undefined;
+      if (file.type.startsWith('image/')) {
+        try {
+          previewUrl = URL.createObjectURL(file);
+          attachmentPreviewUrlsRef.current.add(previewUrl);
+        } catch {
+          // The attachment can still upload when the browser cannot create a local preview.
+        }
+      }
       return {
         file,
         attachment: {
@@ -993,6 +1008,7 @@ export default function App() {
           sizeLabel: formatFileSize(file.size),
           status: errorMessage ? 'failed' as const : 'uploading' as const,
           mime: file.type || undefined,
+          previewUrl,
           errorMessage: errorMessage ?? undefined,
         },
       };
@@ -1007,12 +1023,37 @@ export default function App() {
       if (attachment.status === 'failed') return;
       void uploadWorkosFile(uploadToken, file)
         .then(({ fileReadUrl }) => {
-          updateConversation(conversationId, (conversation) => ({
-            ...conversation,
-            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-              ? { ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }
-              : item),
-          }));
+          const useRemotePreview = () => {
+            updateConversation(conversationId, (conversation) => ({
+              ...conversation,
+              draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
+                ? { ...item, status: 'ready', url: fileReadUrl, previewUrl: undefined, errorMessage: undefined }
+                : item),
+            }));
+            if (attachment.previewUrl) {
+              window.requestAnimationFrame(() => {
+                URL.revokeObjectURL(attachment.previewUrl!);
+                attachmentPreviewUrlsRef.current.delete(attachment.previewUrl!);
+              });
+            }
+          };
+
+          if (!attachment.mime?.startsWith('image/') || !attachment.previewUrl) {
+            useRemotePreview();
+            return;
+          }
+
+          const remoteImage = new Image();
+          remoteImage.onload = useRemotePreview;
+          remoteImage.onerror = () => {
+            updateConversation(conversationId, (conversation) => ({
+              ...conversation,
+              draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
+                ? { ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }
+                : item),
+            }));
+          };
+          remoteImage.src = fileReadUrl;
         })
         .catch((error: unknown) => {
           const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
@@ -1057,6 +1098,8 @@ export default function App() {
   const clearHistory = () => {
     if (!workspaceHydrated) return;
     stopAllRequests();
+    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    attachmentPreviewUrlsRef.current.clear();
     const conversation = createConversation(currentPage);
     const tab = createOpenTab(conversation.id);
     setWorkspace({ conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id });
@@ -1138,9 +1181,16 @@ export default function App() {
         onRemoveQuote={(id) => patchActiveConversation({
           draftQuotes: activeConversation.draftQuotes.filter((quote) => quote.id !== id),
         })}
-        onRemoveAttachment={(id) => patchActiveConversation({
-          draftAttachments: activeConversation.draftAttachments.filter((attachment) => attachment.id !== id),
-        })}
+        onRemoveAttachment={(id) => {
+          const removed = activeConversation.draftAttachments.find((attachment) => attachment.id === id);
+          if (removed?.previewUrl) {
+            URL.revokeObjectURL(removed.previewUrl);
+            attachmentPreviewUrlsRef.current.delete(removed.previewUrl);
+          }
+          patchActiveConversation({
+            draftAttachments: activeConversation.draftAttachments.filter((attachment) => attachment.id !== id),
+          });
+        }}
         onCurrentPageIncludedChange={changeCurrentPageReference}
         onFilesSelected={addAttachments}
         onAttachmentUnavailable={() => {

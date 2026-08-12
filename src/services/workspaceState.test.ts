@@ -33,6 +33,7 @@ function conversation(): Conversation {
       status: 'ready',
       mime: 'image/png',
       url: 'https://example.com/image.png',
+      previewUrl: 'blob:temporary-preview',
     }],
     draftPageReference: { url: page.url, mode: 'included' },
   };
@@ -48,8 +49,10 @@ function workspace(): WorkspaceState {
 
 describe('workspace state v4', () => {
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
-    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(workspace(), 100), 200);
+    const snapshot = createWorkspaceSnapshot(workspace(), 100);
+    const restored = normalizeWorkspaceSnapshot(snapshot, 200);
 
+    expect(JSON.stringify(snapshot)).not.toContain('blob:temporary-preview');
     expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
     expect(restored?.activeOpenTabId).toBe('open-1');
     expect(restored?.openTabs[0]?.conversationId).toBe('conversation-1');
@@ -59,6 +62,7 @@ describe('workspace state v4', () => {
     expect(restored?.conversations[0]?.draftAttachments[0]).toMatchObject({
       mime: 'image/png',
     });
+    expect(restored?.conversations[0]?.draftAttachments[0]?.previewUrl).toBeUndefined();
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });
 

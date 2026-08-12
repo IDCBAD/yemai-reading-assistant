@@ -120,6 +120,11 @@ function recoverAttachment(attachment: DraftAttachment): DraftAttachment {
     : attachment;
 }
 
+function cleanAttachment(attachment: DraftAttachment): DraftAttachment {
+  const { previewUrl: _previewUrl, ...persisted } = attachment;
+  return persisted;
+}
+
 function isActivity(value: unknown): value is RunActivity {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -353,7 +358,9 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Dat
     messages: conversation.messages.map((message) => ({
       ...message,
       pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
+      attachments: message.attachments?.map(cleanAttachment),
     })),
+    draftAttachments: conversation.draftAttachments.map(cleanAttachment),
   }));
   return {
     version: WORKSPACE_STATE_VERSION,

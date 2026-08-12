@@ -339,6 +339,39 @@ textarea:focus-visible {
 
 .sent-reference .koboyo-icon { margin-top: 2px; color: var(--cobalt); }
 
+.sent-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.sent-image-grid--single { grid-template-columns: minmax(0, 1fr); }
+
+.sent-image-button {
+  display: grid;
+  min-width: 0;
+  height: 104px;
+  overflow: hidden;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(171, 188, 220, 0.72);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.82);
+  cursor: zoom-in;
+}
+
+.sent-image-grid--single .sent-image-button { height: clamp(138px, 31vh, 230px); }
+
+.sent-image-button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sent-image-button:hover { border-color: rgba(84, 126, 230, 0.74); background: #fff; }
+
 .sent-attachments { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
 
 .sent-attachments span {
@@ -351,6 +384,55 @@ textarea:focus-visible {
   color: var(--ink-soft);
   background: rgba(255, 255, 255, 0.74);
   font-size: 9px;
+}
+
+.image-lightbox {
+  position: fixed;
+  z-index: 200;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  place-items: center;
+  padding: 46px 18px 18px;
+  color: #fff;
+  background: rgba(8, 14, 28, 0.9);
+}
+
+.image-lightbox > img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.image-lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.11);
+  cursor: pointer;
+}
+
+.image-lightbox-close:hover { background: rgba(255, 255, 255, 0.18); }
+
+.image-lightbox-caption {
+  max-width: 100%;
+  overflow: hidden;
+  padding-top: 11px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message--assistant { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 12px; }
@@ -1020,6 +1102,48 @@ textarea:focus-visible {
 .draft-chip--quote { border-left: 2px solid var(--cobalt); }
 .draft-chip > .koboyo-icon:first-child { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
 
+.draft-chip--file {
+  min-height: 58px;
+  align-items: center;
+  padding: 5px 5px 5px 6px;
+}
+
+.draft-attachment-thumb {
+  position: relative;
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid #d5dde8;
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.draft-attachment-thumb > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.draft-attachment-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(247, 250, 255, 0.7);
+}
+
+.draft-attachment-overlay--failed {
+  color: var(--danger);
+  background: rgba(255, 245, 246, 0.82);
+  font-size: 13px;
+  font-weight: 760;
+}
+
 .draft-chip-copy {
   display: grid;
   min-width: 0;
@@ -1045,6 +1169,10 @@ textarea:focus-visible {
   -webkit-line-clamp: 1;
 }
 
+.draft-chip-copy .draft-attachment-meta { color: var(--muted); }
+.draft-chip-copy .draft-attachment-meta.is-ready { color: #397d6c; }
+.draft-chip-copy .draft-attachment-meta.is-failed { color: var(--danger); }
+
 .draft-context.is-expanded .draft-chip-copy > span { -webkit-line-clamp: 2; }
 
 .chip-remove {
@@ -1064,6 +1192,14 @@ textarea:focus-visible {
 
 .chip-remove:hover { color: var(--ink); background: #e3e8ee; }
 
+.draft-chip--file .chip-remove {
+  width: 28px;
+  height: 28px;
+  align-self: center;
+  margin-top: 0;
+  border-radius: 7px;
+}
+
 .attachment-progress {
   width: 11px;
   height: 11px;
@@ -1073,9 +1209,6 @@ textarea:focus-visible {
   border-radius: 50%;
   animation: spin 700ms linear infinite;
 }
-
-.attachment-ready { color: var(--teal); }
-.attachment-error { color: var(--danger); font-size: 10px; font-weight: 750; }
 
 .composer-input-wrap {
   padding: 4px 6px 6px;

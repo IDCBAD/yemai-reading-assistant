@@ -1,7 +1,8 @@
 import { isValidElement, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
+import type { ChatMessage, DraftAttachment, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
@@ -259,6 +260,118 @@ function AssistantMessage({
   );
 }
 
+function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
+  const [activeImage, setActiveImage] = useState<DraftAttachment | null>(null);
+  const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const imageAttachments = attachments.filter((attachment) =>
+    attachment.mime?.startsWith('image/')
+    && Boolean(attachment.previewUrl ?? attachment.url)
+    && !failedImageIds.has(attachment.id));
+  const fileAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment));
+
+  const closeImage = () => {
+    setActiveImage(null);
+    window.requestAnimationFrame(() => activeTriggerRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!activeImage) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeImage();
+      }
+    };
+    window.addEventListener('keydown', closeWithKeyboard);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeWithKeyboard);
+    };
+  }, [activeImage]);
+
+  const markImageFailed = (attachment: DraftAttachment) => {
+    setFailedImageIds((current) => new Set(current).add(attachment.id));
+    if (activeImage?.id === attachment.id) closeImage();
+  };
+
+  return (
+    <>
+      {imageAttachments.length > 0 && (
+        <div className={`sent-image-grid${imageAttachments.length === 1 ? ' sent-image-grid--single' : ''}`}>
+          {imageAttachments.map((attachment) => (
+            <button
+              className="sent-image-button pressable"
+              type="button"
+              key={attachment.id}
+              aria-label={`查看图片：${attachment.filename}`}
+              title={`查看大图：${attachment.filename}`}
+              onClick={(event) => {
+                activeTriggerRef.current = event.currentTarget;
+                setActiveImage(attachment);
+              }}
+            >
+              <img
+                src={attachment.previewUrl ?? attachment.url}
+                alt={attachment.filename}
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onError={() => markImageFailed(attachment)}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+      {fileAttachments.length > 0 && (
+        <div className="sent-attachments">
+          {fileAttachments.map((attachment) => (
+            <span key={attachment.id} title={attachment.filename}>
+              <KoboyoIcon name="file" size={13} />
+              {attachment.filename}
+            </span>
+          ))}
+        </div>
+      )}
+      {(activeImage?.previewUrl ?? activeImage?.url) && createPortal(
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`图片预览：${activeImage.filename}`}
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeImage();
+          }}
+        >
+          <button
+            className="image-lightbox-close pressable"
+            type="button"
+            onClick={closeImage}
+            onKeyDown={(event) => {
+              if (event.key === 'Tab') event.preventDefault();
+            }}
+            aria-label="关闭图片预览"
+            title="关闭"
+            autoFocus
+          >
+            <KoboyoIcon name="cross" size={15} />
+          </button>
+          <img
+            src={activeImage.previewUrl ?? activeImage.url}
+            alt={activeImage.filename}
+            decoding="async"
+            onError={() => markImageFailed(activeImage)}
+          />
+          <span className="image-lightbox-caption">{activeImage.filename}</span>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <article className="message message--user">
@@ -290,14 +403,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
           </blockquote>
         ))}
         {message.attachments && message.attachments.length > 0 && (
-          <div className="sent-attachments">
-            {message.attachments.map((attachment) => (
-              <span key={attachment.id}>
-                <KoboyoIcon name="file" size={13} />
-                {attachment.filename}
-              </span>
-            ))}
-          </div>
+          <SentAttachments attachments={message.attachments} />
         )}
         {message.content && <p>{message.content}</p>}
         </div>

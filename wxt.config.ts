@@ -11,7 +11,7 @@ export default defineConfig({
     permissions: ['sidePanel', 'storage', 'favicon'],
     host_permissions: ['https://power-api.yingdao.com/*'],
     content_security_policy: {
-      extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com",
+      extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com; img-src 'self' data: blob: https:",
     },
     action: {
       default_title: '打开页脉',

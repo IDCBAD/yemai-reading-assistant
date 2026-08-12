@@ -37,14 +37,31 @@ interface ComposerProps {
   onStop: () => void;
 }
 
-function AttachmentState({ attachment }: { attachment: DraftAttachment }) {
-  if (attachment.status === 'uploading') {
-    return <span className="attachment-progress" aria-label="正在上传" />;
-  }
-  if (attachment.status === 'failed') {
-    return <span className="attachment-error" aria-label="上传失败" title={attachment.errorMessage}>!</span>;
-  }
-  return <KoboyoIcon name="solid-checkmark" size={12} className="attachment-ready" />;
+function attachmentFormat(attachment: DraftAttachment) {
+  const extension = attachment.filename.match(/\.([a-z0-9]{2,5})$/i)?.[1];
+  if (extension) return extension.toLocaleUpperCase();
+  return attachment.mime?.startsWith('image/') ? '图片' : '文件';
+}
+
+function AttachmentThumbnail({ attachment }: { attachment: DraftAttachment }) {
+  const source = attachment.previewUrl ?? attachment.url;
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => setImageFailed(false), [source]);
+
+  return (
+    <span className={`draft-attachment-thumb is-${attachment.status}`} aria-hidden="true">
+      {attachment.mime?.startsWith('image/') && source && !imageFailed
+        ? <img src={source} alt="" draggable={false} onError={() => setImageFailed(true)} />
+        : <KoboyoIcon name="file" size={16} />}
+      {attachment.status === 'uploading' && (
+        <span className="draft-attachment-overlay"><span className="attachment-progress" /></span>
+      )}
+      {attachment.status === 'failed' && (
+        <span className="draft-attachment-overlay draft-attachment-overlay--failed">!</span>
+      )}
+    </span>
+  );
 }
 
 interface TabMenuState {
@@ -310,12 +327,22 @@ export function Composer({
             ))}
             {visibleAttachments.map((attachment) => (
               <div className="draft-chip draft-chip--file" key={attachment.id}>
-                <KoboyoIcon name="file" size={13} />
+                <AttachmentThumbnail attachment={attachment} />
                 <span className="draft-chip-copy">
-                  <strong>{attachment.mime?.startsWith('image/') ? '图片' : '附件'} · {attachment.sizeLabel}</strong>
-                  <span title={attachment.filename}>{attachment.filename}</span>
+                  <strong title={attachment.filename}>{attachment.filename}</strong>
+                  <span
+                    className={`draft-attachment-meta is-${attachment.status}`}
+                    title={attachment.errorMessage}
+                  >
+                    {attachmentFormat(attachment)} · {attachment.sizeLabel} · {
+                      attachment.status === 'uploading'
+                        ? '正在上传'
+                        : attachment.status === 'failed'
+                          ? '上传失败'
+                          : '已上传'
+                    }
+                  </span>
                 </span>
-                <AttachmentState attachment={attachment} />
                 <button className="chip-remove pressable" type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`删除附件：${attachment.filename}`}>
                   <KoboyoIcon name="cross" size={11} />
                 </button>

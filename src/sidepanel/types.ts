@@ -46,6 +46,7 @@ export interface DraftAttachment {
   status: AttachmentStatus;
   mime?: string;
   url?: string;
+  previewUrl?: string;
   errorMessage?: string;
 }
 

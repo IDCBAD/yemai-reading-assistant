@@ -261,6 +261,8 @@ interface WorkosTransport {
 
 输入框的粘贴图片与附件按钮复用同一条上传管道：`Composer` 只负责从 `ClipboardEvent.clipboardData` 中提取图片、生成可读文件名并交给上层；`App` 统一完成数量和大小校验、v1 文件上传、草稿状态更新以及发送时的 URL/MIME 组装。没有图片的粘贴事件不会被拦截，因此文本输入仍保持原生行为。
 
+图片上传期间使用 `URL.createObjectURL(file)` 提供即时预览；远端 `fileReadUrl` 确认可显示后切换为远端地址并调用 `URL.revokeObjectURL()`。本地 `blob:` 地址被明确排除在工作区快照之外，删除附件、清空历史和 Side Panel 卸载时也会释放，避免把图片数据写入 `chrome.storage.local` 或长期占用内存。已发送图片使用 `loading="lazy"` 与 `decoding="async"`，远端图片不可显示时降级为普通文件 Chip。
+
 当前代码位置：
 
 ```text
