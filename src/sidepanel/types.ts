@@ -44,6 +44,7 @@ export interface DraftAttachment {
   filename: string;
   sizeLabel: string;
   status: AttachmentStatus;
+  mime?: string;
   url?: string;
   errorMessage?: string;
 }

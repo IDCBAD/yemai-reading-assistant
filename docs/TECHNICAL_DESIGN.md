@@ -259,6 +259,8 @@ interface WorkosTransport {
 
 附件上传暂时不属于统一执行传输：它仍调用 v1 公开上传接口，并要求单独配置 v1 API Token。迁移原因、风险和删除条件见 [WorkOS v2 可切换传输通道迁移方案](./WORKOS_V2_TRANSPORT_MIGRATION.md)。
 
+输入框的粘贴图片与附件按钮复用同一条上传管道：`Composer` 只负责从 `ClipboardEvent.clipboardData` 中提取图片、生成可读文件名并交给上层；`App` 统一完成数量和大小校验、v1 文件上传、草稿状态更新以及发送时的 URL/MIME 组装。没有图片的粘贴事件不会被拦截，因此文本输入仍保持原生行为。
+
 当前代码位置：
 
 ```text

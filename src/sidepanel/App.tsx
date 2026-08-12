@@ -737,7 +737,11 @@ export default function App() {
           content: prependBranchContext(continuationContext, content),
           attachments: (userMessage.attachments ?? [])
             .filter((attachment) => attachment.status === 'ready' && attachment.url)
-            .map((attachment) => ({ url: attachment.url!, filename: attachment.filename })),
+            .map((attachment) => ({
+              url: attachment.url!,
+              filename: attachment.filename,
+              ...(attachment.mime ? { mime: attachment.mime } : {}),
+            })),
         },
         {
           onText: (text) => {
@@ -955,18 +959,17 @@ export default function App() {
     });
   };
 
-  const addAttachments = (files: FileList | null) => {
-    const selectedFiles = Array.from(files ?? []);
-    if (!selectedFiles.length) return;
+  const addAttachments = (selectedFiles: File[]) => {
+    if (!selectedFiles.length) return 0;
     if (!workspaceHydrated || workosConnection === null) {
       setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
-      return;
+      return 0;
     }
     const uploadToken = workosConnection.publicApiToken;
     if (!uploadToken) {
       setConnectionIssue('附件仍使用公开 v1 上传接口，请先配置 AP_… API Token。');
       setSettingsOpen(true);
-      return;
+      return 0;
     }
 
     const conversationId = activeConversation.id;
@@ -974,7 +977,7 @@ export default function App() {
     const filesToAdd = selectedFiles.slice(0, availableSlots);
     if (!filesToAdd.length) {
       setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件。`);
-      return;
+      return 0;
     }
     if (filesToAdd.length < selectedFiles.length) {
       setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件，已忽略多余文件。`);
@@ -989,6 +992,7 @@ export default function App() {
           filename: file.name,
           sizeLabel: formatFileSize(file.size),
           status: errorMessage ? 'failed' as const : 'uploading' as const,
+          mime: file.type || undefined,
           errorMessage: errorMessage ?? undefined,
         },
       };
@@ -1021,6 +1025,7 @@ export default function App() {
           setConnectionIssue(errorMessage);
         });
     });
+    return filesToAdd.length;
   };
 
   const saveConnection = async (settings: WorkosConnectionSettings) => {

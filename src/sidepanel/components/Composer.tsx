@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
 import type { AgentRunSummary, Conversation, DraftAttachment, OpenConversationTab, PageContext, QuoteReference } from '../types';
+import { extractClipboardImages, namePastedImages } from '../clipboardImages';
 import { AgentRunStatus } from './AgentRunStatus';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
@@ -30,7 +31,7 @@ interface ComposerProps {
   onRemoveQuote: (id: string) => void;
   onRemoveAttachment: (id: string) => void;
   onCurrentPageIncludedChange: (included: boolean) => void;
-  onFilesSelected: (files: FileList | null) => void;
+  onFilesSelected: (files: File[]) => number | void;
   onAttachmentUnavailable: () => void;
   onSend: () => void;
   onStop: () => void;
@@ -82,10 +83,12 @@ export function Composer({
   onStop,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pasteAnnouncementTimerRef = useRef<number | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
   const [contextExpanded, setContextExpanded] = useState(false);
+  const [pasteAnnouncement, setPasteAnnouncement] = useState('');
   const canAddTab = tabs.length < maxTabs;
   const contextItemCount = quotes.length + attachments.length;
   const visibleQuotes = contextExpanded ? quotes : quotes.slice(-1);
@@ -132,6 +135,20 @@ export function Composer({
   useEffect(() => {
     if (contextItemCount <= 1) setContextExpanded(false);
   }, [contextItemCount]);
+
+  useEffect(() => () => {
+    if (pasteAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(pasteAnnouncementTimerRef.current);
+    }
+  }, []);
+
+  const announcePaste = (message: string) => {
+    setPasteAnnouncement(message);
+    if (pasteAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(pasteAnnouncementTimerRef.current);
+    }
+    pasteAnnouncementTimerRef.current = window.setTimeout(() => setPasteAnnouncement(''), 2200);
+  };
 
   const openTabMenu = (tabId: string, target: HTMLButtonElement) => {
     const bounds = target.getBoundingClientRect();
@@ -295,7 +312,7 @@ export function Composer({
               <div className="draft-chip draft-chip--file" key={attachment.id}>
                 <KoboyoIcon name="file" size={13} />
                 <span className="draft-chip-copy">
-                  <strong>附件 · {attachment.sizeLabel}</strong>
+                  <strong>{attachment.mime?.startsWith('image/') ? '图片' : '附件'} · {attachment.sizeLabel}</strong>
                   <span title={attachment.filename}>{attachment.filename}</span>
                 </span>
                 <AttachmentState attachment={attachment} />
@@ -314,6 +331,26 @@ export function Composer({
             autoComplete="off"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
+            onPaste={(event) => {
+              const clipboardImages = extractClipboardImages(event.clipboardData);
+              if (clipboardImages.length === 0) return;
+
+              event.preventDefault();
+              if (!fileUploadEnabled) {
+                onAttachmentUnavailable();
+                announcePaste('图片未添加，需要先配置附件上传连接。');
+                return;
+              }
+
+              const namedImages = namePastedImages(
+                clipboardImages,
+                attachments.map((attachment) => attachment.filename),
+              );
+              const addedCount = onFilesSelected(namedImages) ?? 0;
+              if (addedCount > 0) {
+                announcePaste(`已添加 ${addedCount} 张粘贴图片。`);
+              }
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
@@ -322,10 +359,13 @@ export function Composer({
             }}
             placeholder={quotes.length > 0
               ? `针对已引用的 ${quotes.length} 段内容提问…`
-              : '继续追问，或引用新的内容…'}
+              : '继续追问，或粘贴图片提问…'}
             rows={2}
             aria-label="输入问题"
+            aria-describedby="composer-paste-hint composer-paste-status"
           />
+          <span className="visually-hidden" id="composer-paste-hint">支持直接粘贴剪贴板中的图片。</span>
+          <span className="visually-hidden" id="composer-paste-status" aria-live="polite">{pasteAnnouncement}</span>
           <div className="composer-toolbar">
             <div className="composer-tools">
               <input
@@ -338,7 +378,7 @@ export function Composer({
                 accept=".pdf,.doc,.docx,.txt,.md,image/*"
                 multiple
                 onChange={(event) => {
-                  onFilesSelected(event.target.files);
+                  onFilesSelected(Array.from(event.target.files ?? []));
                   event.currentTarget.value = '';
                 }}
               />
@@ -350,7 +390,7 @@ export function Composer({
                   else onAttachmentUnavailable();
                 }}
                 aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 v1 API Token'}
-                title={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 v1 API Token'}
+                title={fileUploadEnabled ? '添加附件，也可以直接粘贴图片' : '添加附件，需要先配置 v1 API Token'}
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>

@@ -109,6 +109,7 @@ function isAttachment(value: unknown): value is DraftAttachment {
     && typeof value.filename === 'string'
     && typeof value.sizeLabel === 'string'
     && typeof value.status === 'string'
+    && (value.mime === undefined || typeof value.mime === 'string')
     && (value.url === undefined || typeof value.url === 'string')
     && (value.errorMessage === undefined || typeof value.errorMessage === 'string');
 }

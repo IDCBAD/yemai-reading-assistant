@@ -26,7 +26,14 @@ function conversation(): Conversation {
     }],
     draftInput: '尚未发送的草稿',
     draftQuotes: [],
-    draftAttachments: [],
+    draftAttachments: [{
+      id: 'attachment-1',
+      filename: '粘贴图片 1.png',
+      sizeLabel: '12 KB',
+      status: 'ready',
+      mime: 'image/png',
+      url: 'https://example.com/image.png',
+    }],
     draftPageReference: { url: page.url, mode: 'included' },
   };
 }
@@ -49,6 +56,9 @@ describe('workspace state v4', () => {
     expect(restored?.conversations[0]?.remoteUuid).toBe('remote-1');
     expect(restored?.conversations[0]?.remoteAgentUuid).toBe('11111111-1111-4111-8111-111111111111');
     expect(restored?.conversations[0]?.draftInput).toBe('尚未发送的草稿');
+    expect(restored?.conversations[0]?.draftAttachments[0]).toMatchObject({
+      mime: 'image/png',
+    });
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });
 
