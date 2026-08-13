@@ -36,6 +36,7 @@ function conversation(): Conversation {
         mime: 'image/png',
         url: 'https://example.com/image.png',
         previewUrl: 'blob:temporary-preview',
+        uploadTransport: 'internal-v2',
       }),
     ],
   };
@@ -62,7 +63,10 @@ describe('workspace state v5', () => {
     expect(restored?.conversations[0]?.remoteAgentUuid).toBe('11111111-1111-4111-8111-111111111111');
     expect(restored?.conversations[0]?.draftInput).toBe('尚未发送的草稿');
     const attachment = restored?.conversations[0]?.draftContextItems.find((item) => item.kind === 'image');
-    expect(attachment?.kind === 'image' ? attachment.attachment : undefined).toMatchObject({ mime: 'image/png' });
+    expect(attachment?.kind === 'image' ? attachment.attachment : undefined).toMatchObject({
+      mime: 'image/png',
+      uploadTransport: 'internal-v2',
+    });
     expect(attachment?.kind === 'image' ? attachment.attachment.previewUrl : undefined).toBeUndefined();
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ContextItem } from '../types';
-import { attachmentFormatLabel } from '../fileTypes';
+import { attachmentFormatLabel, uploadChannelLabel } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
@@ -9,6 +9,7 @@ interface ContextWorkbenchProps {
   items: ContextItem[];
   onIncludedChange: (id: string, included: boolean) => void;
   onRemove: (id: string) => void;
+  onRetryAttachment: (id: string) => void;
 }
 
 const KIND_LABEL: Record<ContextItem['kind'], string> = {
@@ -28,12 +29,20 @@ function itemTitle(item: ContextItem) {
   return item.link.title || item.link.url;
 }
 
+function itemKindLabel(item: ContextItem) {
+  if (item.kind === 'selection' && item.selection.origin === 'assistant') return '回答';
+  return KIND_LABEL[item.kind];
+}
+
 function itemDetail(item: ContextItem) {
   if (item.issue) return item.issue;
   if (item.kind === 'page') return item.page.url;
   if (item.kind === 'selection') return item.selection.text;
   if (item.kind === 'file' || item.kind === 'image') {
-    return `${attachmentFormatLabel(item.attachment.filename, item.attachment.mime)} · ${item.attachment.sizeLabel}`;
+    const channel = item.attachment.status === 'ready'
+      ? ` · 已通过${uploadChannelLabel(item.attachment.uploadTransport)}上传`
+      : '';
+    return `${attachmentFormatLabel(item.attachment.filename, item.attachment.mime)} · ${item.attachment.sizeLabel}${channel}`;
   }
   if (item.kind === 'memory') return item.memory.excerpt;
   return item.link.url;
@@ -103,14 +112,17 @@ function ContextToken({
   onInspect,
   onIncludedChange,
   onRemove,
+  onRetryAttachment,
 }: {
   item: ContextItem;
   inspecting: boolean;
   onInspect: () => void;
   onIncludedChange: (included: boolean) => void;
   onRemove: () => void;
+  onRetryAttachment: () => void;
 }) {
   const removable = item.kind !== 'page' || item.role !== 'current';
+  const retryable = (item.kind === 'file' || item.kind === 'image') && item.status === 'failed';
   const statusLabel = item.status === 'preparing'
     ? '正在准备'
     : item.status === 'failed'
@@ -118,7 +130,7 @@ function ContextToken({
       : item.included ? '已包含' : '已排除';
 
   return (
-    <div className={`context-token is-${item.kind} is-${item.status}${item.included ? '' : ' is-excluded'}${inspecting ? ' is-inspecting' : ''}`}>
+    <div className={`context-token is-${item.kind} is-${item.status}${item.included ? '' : ' is-excluded'}${inspecting ? ' is-inspecting' : ''}${retryable ? ' is-retryable' : ''}`}>
       <ContextItemIcon item={item} />
       <button
         className="context-token-main"
@@ -128,7 +140,7 @@ function ContextToken({
         title={`查看详情：${itemTitle(item)}`}
       >
         <span className="context-token-title">
-          <small>{KIND_LABEL[item.kind]}</small>
+          <small>{itemKindLabel(item)}</small>
           <strong>{itemTitle(item)}</strong>
         </span>
         {inspecting && <span className="context-token-detail">{itemDetail(item)}</span>}
@@ -137,6 +149,18 @@ function ContextToken({
         {item.status === 'preparing' && <i aria-hidden="true" />}
         {item.status === 'failed' && <b aria-hidden="true">!</b>}
       </span>
+      {retryable && (
+        <button
+          className="context-token-retry pressable"
+          type="button"
+          onClick={onRetryAttachment}
+          aria-label={`重试上传：${itemTitle(item)}`}
+          title="重试上传"
+        >
+          <KoboyoIcon name="cycle" size={12} />
+          <span>重试</span>
+        </button>
+      )}
       <button
         className="context-token-action pressable"
         type="button"
@@ -162,7 +186,7 @@ function ContextToken({
   );
 }
 
-export function ContextWorkbench({ items, onIncludedChange, onRemove }: ContextWorkbenchProps) {
+export function ContextWorkbench({ items, onIncludedChange, onRemove, onRetryAttachment }: ContextWorkbenchProps) {
   const [expanded, setExpanded] = useState(false);
   const [inspectingId, setInspectingId] = useState<string | null>(null);
   const includedCount = items.filter((item) => item.included).length;
@@ -204,6 +228,7 @@ export function ContextWorkbench({ items, onIncludedChange, onRemove }: ContextW
             onInspect={() => setInspectingId((current) => current === item.id ? null : item.id)}
             onIncludedChange={(included) => onIncludedChange(item.id, included)}
             onRemove={() => onRemove(item.id)}
+            onRetryAttachment={() => onRetryAttachment(item.id)}
             key={item.id}
           />
         ))}

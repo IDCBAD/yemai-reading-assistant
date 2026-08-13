@@ -35,6 +35,8 @@ export interface QuoteReference {
   pageTitle: string;
   pageUrl: string;
   createdAt: number;
+  origin?: 'page' | 'assistant';
+  sourceMessageId?: string;
 }
 
 export type AttachmentStatus = 'uploading' | 'ready' | 'failed';
@@ -47,6 +49,7 @@ export interface DraftAttachment {
   mime?: string;
   url?: string;
   previewUrl?: string;
+  uploadTransport?: WorkosTransportKind;
   errorMessage?: string;
 }
 

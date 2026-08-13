@@ -4,9 +4,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
 import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
-import type { ChatMessage, DraftAttachment, RunActivity, RunActivityStatus } from '../types';
+import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
-import { isImageFile } from '../fileTypes';
+import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
@@ -26,9 +26,23 @@ interface MessageListProps {
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
   onOpenBranchOrigin: () => void;
+  onAddAssistantQuote: (quote: QuoteReference) => void;
 }
 
 const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
+const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
+
+interface AssistantSelectionAction {
+  messageId: string;
+  text: string;
+  left: number;
+  top: number;
+}
+
+function selectionInsideMessage(selection: Selection, container: HTMLElement) {
+  if (!selection.rangeCount || selection.isCollapsed) return false;
+  return container.contains(selection.getRangeAt(0).commonAncestorContainer);
+}
 
 function MessageTime({
   timestamp,
@@ -185,7 +199,7 @@ function AssistantMessage({
   const footerAvailable = actionsAvailable || message.status === 'failed';
 
   return (
-    <article className="message message--assistant">
+    <article className="message message--assistant" data-assistant-message-id={message.id}>
       <div className="assistant-rail" aria-hidden="true">
         <span className="assistant-mark">
           <YemaiMark />
@@ -194,7 +208,7 @@ function AssistantMessage({
       </div>
       <div className="message-content">
         {message.activities && message.activities.length > 0 && <RunActivityPanel activities={message.activities} />}
-        <div className="markdown-body">
+        <div className="markdown-body" data-assistant-selectable="true">
           {!message.content && runNote && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
@@ -270,13 +284,13 @@ function AssistantMessage({
   );
 }
 
-interface HoveredImage {
+interface HoveredAttachment {
   attachment: DraftAttachment;
   anchor: DOMRect;
   placement: 'above' | 'below';
 }
 
-function imagePreviewStyle(preview: HoveredImage): CSSProperties & { '--image-preview-max-height': string } {
+function imagePreviewStyle(preview: HoveredAttachment): CSSProperties & { '--image-preview-max-height': string } {
   const gutter = 12;
   const gap = 8;
   const width = Math.min(380, window.innerWidth - gutter * 2);
@@ -296,9 +310,24 @@ function imagePreviewStyle(preview: HoveredImage): CSSProperties & { '--image-pr
   };
 }
 
+function fileDetailStyle(preview: HoveredAttachment): CSSProperties {
+  const gutter = 12;
+  const gap = 8;
+  const width = Math.min(310, window.innerWidth - gutter * 2);
+  const left = Math.max(gutter, Math.min(preview.anchor.left, window.innerWidth - width - gutter));
+  return {
+    width,
+    left,
+    ...(preview.placement === 'below'
+      ? { top: preview.anchor.bottom + gap }
+      : { bottom: window.innerHeight - preview.anchor.top + gap }),
+  };
+}
+
 function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
-  const [hoveredImage, setHoveredImage] = useState<HoveredImage | null>(null);
+  const [hoveredImage, setHoveredImage] = useState<HoveredAttachment | null>(null);
+  const [hoveredFile, setHoveredFile] = useState<HoveredAttachment | null>(null);
   const [activeImage, setActiveImage] = useState<DraftAttachment | null>(null);
   const showPreviewTimerRef = useRef<number | null>(null);
   const hidePreviewTimerRef = useRef<number | null>(null);
@@ -322,6 +351,7 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
     showPreviewTimerRef.current = null;
     hidePreviewTimerRef.current = window.setTimeout(() => {
       setHoveredImage(null);
+      setHoveredFile(null);
       hidePreviewTimerRef.current = null;
     }, 120);
   };
@@ -331,7 +361,12 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
     hidePreviewTimerRef.current = null;
   };
 
-  const openHoverPreview = (attachment: DraftAttachment, trigger: HTMLButtonElement, immediate = false) => {
+  const openHoverPreview = (
+    attachment: DraftAttachment,
+    trigger: HTMLButtonElement,
+    kind: 'image' | 'file',
+    immediate = false,
+  ) => {
     clearPreviewTimers();
     const anchor = trigger.getBoundingClientRect();
     const availableBelow = window.innerHeight - anchor.bottom;
@@ -340,10 +375,17 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
       ? 'below' as const
       : 'above' as const;
     const show = () => {
-      setHoveredImage({ attachment, anchor, placement });
+      const preview = { attachment, anchor, placement };
+      if (kind === 'image') {
+        setHoveredFile(null);
+        setHoveredImage(preview);
+      } else {
+        setHoveredImage(null);
+        setHoveredFile(preview);
+      }
       showPreviewTimerRef.current = null;
     };
-    if (immediate || hoveredImage) show();
+    if (immediate || hoveredImage || hoveredFile) show();
     else showPreviewTimerRef.current = window.setTimeout(show, 220);
   };
 
@@ -361,6 +403,7 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   const openImage = (attachment: DraftAttachment, trigger: HTMLButtonElement) => {
     clearPreviewTimers();
     setHoveredImage(null);
+    setHoveredFile(null);
     activeTriggerRef.current = trigger;
     setActiveImage(attachment);
   };
@@ -368,10 +411,11 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   useEffect(() => () => clearPreviewTimers(), []);
 
   useEffect(() => {
-    if (!hoveredImage) return;
+    if (!hoveredImage && !hoveredFile) return;
     const closeForViewportChange = () => {
       clearPreviewTimers();
       setHoveredImage(null);
+      setHoveredFile(null);
     };
     const closeWithKeyboard = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -386,7 +430,7 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
       window.removeEventListener('scroll', closeForViewportChange, true);
       window.removeEventListener('keydown', closeWithKeyboard);
     };
-  }, [hoveredImage]);
+  }, [hoveredFile, hoveredImage]);
 
   useEffect(() => {
     if (!activeImage) return;
@@ -421,10 +465,10 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
               type="button"
               key={attachment.id}
               aria-label={`图片附件：${attachment.filename}，悬浮预览，点击查看大图`}
-              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget)}
+              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget, 'image')}
               onMouseLeave={closeHoverPreview}
               onFocus={(event) => {
-                if (!suppressFocusPreviewRef.current) openHoverPreview(attachment, event.currentTarget, true);
+                if (!suppressFocusPreviewRef.current) openHoverPreview(attachment, event.currentTarget, 'image', true);
               }}
               onBlur={closeHoverPreview}
               onClick={(event) => {
@@ -447,10 +491,19 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
       {fileAttachments.length > 0 && (
         <span className="sent-inline-attachments">
           {fileAttachments.map((attachment) => (
-            <span className="sent-attachment-token sent-attachment-token--file" key={attachment.id} title={attachment.filename}>
+            <button
+              className="sent-attachment-token sent-attachment-token--file"
+              type="button"
+              key={attachment.id}
+              aria-label={`文件附件：${attachment.filename}，悬浮查看详情`}
+              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget, 'file')}
+              onMouseLeave={closeHoverPreview}
+              onFocus={(event) => openHoverPreview(attachment, event.currentTarget, 'file', true)}
+              onBlur={closeHoverPreview}
+            >
               <FileTypeIcon filename={attachment.filename} mime={attachment.mime} variant="token" />
               <span>{attachment.filename}</span>
-            </span>
+            </button>
           ))}
         </span>
       )}
@@ -469,6 +522,31 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
             draggable={false}
             onError={() => markImageFailed(hoveredImage.attachment)}
           />
+        </div>,
+        document.body,
+      )}
+      {hoveredFile && createPortal(
+        <div
+          className={`file-hover-detail is-${hoveredFile.placement}`}
+          style={fileDetailStyle(hoveredFile)}
+          role="tooltip"
+          onMouseEnter={keepHoverPreviewOpen}
+          onMouseLeave={closeHoverPreview}
+        >
+          <FileTypeIcon
+            filename={hoveredFile.attachment.filename}
+            mime={hoveredFile.attachment.mime}
+            variant="draft"
+          />
+          <span>
+            <strong>{hoveredFile.attachment.filename}</strong>
+            <small>
+              {getFileType(hoveredFile.attachment.filename, hoveredFile.attachment.mime).description}
+              {' · '}{attachmentFormatLabel(hoveredFile.attachment.filename, hoveredFile.attachment.mime)}
+              {' · '}{hoveredFile.attachment.sizeLabel}
+            </small>
+            <em>已通过{uploadChannelLabel(hoveredFile.attachment.uploadTransport)}上传</em>
+          </span>
         </div>,
         document.body,
       )}
@@ -563,9 +641,73 @@ export function MessageList({
   onRetry,
   onBranch,
   onOpenBranchOrigin,
+  onAddAssistantQuote,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLElement>(null);
+  const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
   const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
+
+  useEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
+
+    const updateSelection = () => {
+      window.requestAnimationFrame(() => {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || !selection.rangeCount) {
+          setSelectionAction(null);
+          return;
+        }
+        const anchorElement = selection.anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? selection.anchorNode as Element
+          : selection.anchorNode?.parentElement;
+        const selectable = anchorElement?.closest<HTMLElement>('[data-assistant-selectable="true"]');
+        const article = selectable?.closest<HTMLElement>('[data-assistant-message-id]');
+        if (!selectable || !article || !selectionInsideMessage(selection, selectable)) {
+          setSelectionAction(null);
+          return;
+        }
+        const text = selection.toString().replace(/\s+/gu, ' ').trim();
+        if (!text) {
+          setSelectionAction(null);
+          return;
+        }
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        setSelectionAction({
+          messageId: article.dataset.assistantMessageId ?? '',
+          text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - 108)),
+          top: Math.max(8, rect.top - 39),
+        });
+      });
+    };
+    const clearSelectionAction = () => setSelectionAction(null);
+    const clearCollapsedSelection = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) setSelectionAction(null);
+    };
+    const clearFromOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || root.contains(target)) return;
+      if (target instanceof Element && target.closest('.assistant-selection-action')) return;
+      setSelectionAction(null);
+    };
+    root.addEventListener('pointerup', updateSelection);
+    root.addEventListener('keyup', updateSelection);
+    root.addEventListener('scroll', clearSelectionAction, { passive: true });
+    document.addEventListener('selectionchange', clearCollapsedSelection);
+    document.addEventListener('pointerdown', clearFromOutside);
+    window.addEventListener('resize', clearSelectionAction);
+    return () => {
+      root.removeEventListener('pointerup', updateSelection);
+      root.removeEventListener('keyup', updateSelection);
+      root.removeEventListener('scroll', clearSelectionAction);
+      document.removeEventListener('selectionchange', clearCollapsedSelection);
+      document.removeEventListener('pointerdown', clearFromOutside);
+      window.removeEventListener('resize', clearSelectionAction);
+    };
+  }, [messages]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
@@ -592,7 +734,7 @@ export function MessageList({
   }
 
   return (
-    <main className="messages" aria-live="polite">
+    <main className="messages" aria-live="polite" ref={messagesRef}>
       <div className="conversation-date">今天 · 当前工作页</div>
       {branchOrigin && (
         <button
@@ -630,6 +772,32 @@ export function MessageList({
         ),
       )}
       <div ref={endRef} />
+      {selectionAction && createPortal(
+        <button
+          className="assistant-selection-action pressable"
+          type="button"
+          style={{ left: selectionAction.left, top: selectionAction.top }}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (!messages.some((message) => message.id === selectionAction.messageId)) return;
+            onAddAssistantQuote({
+              id: `quote-assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              text: selectionAction.text,
+              pageTitle: '页脉回答',
+              pageUrl: '',
+              createdAt: Date.now(),
+              origin: 'assistant',
+              sourceMessageId: selectionAction.messageId,
+            });
+            window.getSelection()?.removeAllRanges();
+            setSelectionAction(null);
+          }}
+        >
+          <KoboyoIcon name="quote" size={12} />
+          添加到对话
+        </button>,
+        document.body,
+      )}
     </main>
   );
 }

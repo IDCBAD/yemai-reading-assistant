@@ -27,6 +27,7 @@ interface ComposerProps {
   onInputChange: (value: string) => void;
   onContextIncludedChange: (id: string, included: boolean) => void;
   onRemoveContextItem: (id: string) => void;
+  onRetryAttachment: (id: string) => void;
   onFilesSelected: (files: File[]) => number | void;
   onAttachmentUnavailable: () => void;
   onSend: () => void;
@@ -59,6 +60,7 @@ export function Composer({
   onInputChange,
   onContextIncludedChange,
   onRemoveContextItem,
+  onRetryAttachment,
   onFilesSelected,
   onAttachmentUnavailable,
   onSend,
@@ -70,6 +72,7 @@ export function Composer({
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
   const [pasteAnnouncement, setPasteAnnouncement] = useState('');
+  const [dragDepth, setDragDepth] = useState(0);
   const canAddTab = tabs.length < maxTabs;
   const contextItemCount = contextItems.length;
   const selections = contextItems.filter((item) => item.kind === 'selection' && item.included);
@@ -84,6 +87,7 @@ export function Composer({
     (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
   );
   const canSend = hasContent && !hasUploadingAttachments;
+  const isDraggingFiles = dragDepth > 0;
   const composerState = [
     runSummary ? 'is-running' : 'is-idle',
     contextItemCount > 0 ? 'has-context' : '',
@@ -121,6 +125,18 @@ export function Composer({
     if (pasteAnnouncementTimerRef.current !== null) {
       window.clearTimeout(pasteAnnouncementTimerRef.current);
     }
+  }, []);
+
+  useEffect(() => {
+    const clearFileDrag = () => setDragDepth(0);
+    window.addEventListener('drop', clearFileDrag);
+    window.addEventListener('dragend', clearFileDrag);
+    window.addEventListener('blur', clearFileDrag);
+    return () => {
+      window.removeEventListener('drop', clearFileDrag);
+      window.removeEventListener('dragend', clearFileDrag);
+      window.removeEventListener('blur', clearFileDrag);
+    };
   }, []);
 
   const announcePaste = (message: string) => {
@@ -161,7 +177,44 @@ export function Composer({
         active={Boolean(runSummary)}
         borderRadius={16}
       >
-        <div className="composer-deck">
+        <div
+          className={`composer-deck${isDraggingFiles ? ' is-dragging-files' : ''}`}
+          onDragEnter={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth((value) => value + 1);
+          }}
+          onDragOver={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = fileUploadEnabled ? 'copy' : 'none';
+          }}
+          onDragLeave={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth((value) => Math.max(0, value - 1));
+          }}
+          onDrop={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth(0);
+            const files = Array.from(event.dataTransfer.files);
+            if (!files.length) return;
+            if (!fileUploadEnabled) {
+              onAttachmentUnavailable();
+              announcePaste('文件未添加，需要先配置附件上传连接。');
+              return;
+            }
+            const addedCount = onFilesSelected(files) ?? 0;
+            if (addedCount > 0) announcePaste(`已添加 ${addedCount} 个附件。`);
+          }}
+        >
+        {isDraggingFiles && (
+          <div className="composer-drop-overlay" aria-hidden="true">
+            <KoboyoIcon name="paperclip" size={17} />
+            <strong>{fileUploadEnabled ? '释放以加入本次提问' : '需要先配置附件上传'}</strong>
+          </div>
+        )}
         <div className="tab-command-row">
           <div className="tab-list" role="tablist" aria-label="已打开的会话工作页">
             {tabs.map((tab, index) => {
@@ -231,6 +284,7 @@ export function Composer({
           items={contextItems}
           onIncludedChange={onContextIncludedChange}
           onRemove={onRemoveContextItem}
+          onRetryAttachment={onRetryAttachment}
         />
 
         <div className="composer-input-wrap">

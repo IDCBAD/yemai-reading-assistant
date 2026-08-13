@@ -60,6 +60,28 @@ describe('buildAgentContent', () => {
     expect(content).toContain('> 第二段引用');
   });
 
+  it('adds an assistant answer selection without inventing a web URL', () => {
+    const content = buildAgentContent({
+      question: '把这句话再解释一下',
+      quotes: [{
+        id: 'quote-assistant-1',
+        text: '上下文压缩不是删除记忆，而是改变记忆的表达形式。',
+        pageTitle: '页脉回答',
+        pageUrl: '',
+        createdAt: 3,
+        origin: 'assistant',
+        sourceMessageId: 'assistant-1',
+      }],
+      requestId: 'req-assistant-quote',
+      createdAt: '2026-08-10T00:00:00.000Z',
+    });
+
+    expect(content).toContain('来源：页脉回答');
+    expect(content).toContain('回答中的选中内容（引用资料）');
+    expect(content).toContain('> 上下文压缩不是删除记忆，而是改变记忆的表达形式。');
+    expect(content).not.toContain('网址：');
+  });
+
   it('reuses a page without repeating its manifest or markdown', () => {
     const content = buildAgentContent({
       question: '继续',

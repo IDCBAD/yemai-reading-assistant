@@ -7,6 +7,8 @@ import {
   isImageFile,
   isFileUploadSupported,
   isSupportedDocument,
+  uploadChannelCapabilities,
+  uploadChannelLabel,
 } from './fileTypes';
 
 describe('fileTypes', () => {
@@ -62,5 +64,13 @@ describe('fileTypes', () => {
     expect(getFileExtension('README.markdown')).toBe('markdown');
     expect(attachmentFormatLabel('README.markdown')).toBe('MARKDOWN');
     expect(attachmentFormatLabel('clipboard-image', 'image/png')).toBe('图片');
+  });
+
+  it('describes upload channels in user-facing product language', () => {
+    expect(uploadChannelLabel('internal-v2')).toBe('内部实时连接');
+    expect(uploadChannelLabel('public-v1')).toBe('官方 API');
+    expect(uploadChannelCapabilities('internal-v2')).toContain('HTML');
+    expect(uploadChannelCapabilities('public-v1')).not.toContain('HTML');
+    expect(uploadChannelCapabilities('public-v1')).toContain('图片');
   });
 });

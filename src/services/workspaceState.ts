@@ -113,7 +113,9 @@ function isQuote(value: unknown): value is QuoteReference {
     && typeof value.text === 'string'
     && typeof value.pageTitle === 'string'
     && typeof value.pageUrl === 'string'
-    && typeof value.createdAt === 'number';
+    && typeof value.createdAt === 'number'
+    && (value.origin === undefined || value.origin === 'page' || value.origin === 'assistant')
+    && (value.sourceMessageId === undefined || typeof value.sourceMessageId === 'string');
 }
 
 function isAttachment(value: unknown): value is DraftAttachment {
@@ -124,6 +126,7 @@ function isAttachment(value: unknown): value is DraftAttachment {
     && typeof value.status === 'string'
     && (value.mime === undefined || typeof value.mime === 'string')
     && (value.url === undefined || typeof value.url === 'string')
+    && (value.uploadTransport === undefined || value.uploadTransport === 'public-v1' || value.uploadTransport === 'internal-v2')
     && (value.errorMessage === undefined || typeof value.errorMessage === 'string');
 }
 
@@ -160,7 +163,7 @@ function isContextItem(value: unknown): value is ContextItem {
 
 function recoverAttachment(attachment: DraftAttachment): DraftAttachment {
   return attachment.status === 'uploading'
-    ? { ...attachment, status: 'failed', errorMessage: '上传在浏览器关闭前未完成，请删除后重新添加。' }
+    ? { ...attachment, status: 'failed', errorMessage: '上传在浏览器关闭前未完成，请重新选择原文件。' }
     : attachment;
 }
 

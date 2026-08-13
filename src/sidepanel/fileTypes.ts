@@ -140,3 +140,15 @@ export function attachmentFormatLabel(filename: string, mime?: string) {
   if (extension) return extension.toLocaleUpperCase();
   return getFileType(filename, mime).description;
 }
+
+export function uploadChannelLabel(channel?: FileUploadChannel) {
+  if (channel === 'internal-v2') return '内部实时连接';
+  if (channel === 'public-v1') return '官方 API';
+  return 'WorkOS';
+}
+
+export function uploadChannelCapabilities(channel: FileUploadChannel) {
+  return channel === 'internal-v2'
+    ? ['HTML', 'PDF / Word / Excel', 'Markdown / TXT / JSON', '图片']
+    : ['PDF / Word / Excel', 'Markdown / TXT / JSON', '图片'];
+}

@@ -188,6 +188,8 @@ export default function App() {
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
   const attachmentPreviewUrlsRef = useRef(new Set<string>());
+  const attachmentFilesRef = useRef(new Map<string, File>());
+  const attachmentUploadsRef = useRef(new Set<string>());
   const requestRunnerRef = useRef<(request: QueuedAgentRequest, signal: AbortSignal) => Promise<void>>(
     async () => undefined,
   );
@@ -264,6 +266,8 @@ export default function App() {
   useEffect(() => () => {
     attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentPreviewUrlsRef.current.clear();
+    attachmentFilesRef.current.clear();
+    attachmentUploadsRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -1019,6 +1023,109 @@ export default function App() {
     });
   };
 
+  const uploadAttachment = useCallback((
+    conversationId: string,
+    attachmentId: string,
+    file: File,
+    localPreviewUrl?: string,
+  ) => {
+    const connection = workosConnection;
+    if (!connection || !isWorkosFileUploadConfigured(connection)) {
+      setConnectionIssue(connection?.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
+      setSettingsOpen(true);
+      return;
+    }
+    if (attachmentUploadsRef.current.has(attachmentId)) return;
+    attachmentUploadsRef.current.add(attachmentId);
+    const fileUploader = createWorkosFileUploader(connection);
+    const previewUrl = isImageFile(file.name, file.type) ? localPreviewUrl : undefined;
+
+    updateConversation(conversationId, (conversation) => ({
+      ...conversation,
+      draftContextItems: updateAttachmentContextItem(
+        conversation.draftContextItems,
+        attachmentId,
+        (item) => ({
+          ...item,
+          status: 'uploading',
+          uploadTransport: connection.transport,
+          errorMessage: undefined,
+        }),
+      ),
+    }));
+
+    void fileUploader.upload(file)
+      .then(({ fileReadUrl }) => {
+        const useRemotePreview = () => {
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftContextItems: updateAttachmentContextItem(
+              conversation.draftContextItems,
+              attachmentId,
+              (item) => ({
+                ...item,
+                status: 'ready',
+                url: fileReadUrl,
+                previewUrl: undefined,
+                uploadTransport: connection.transport,
+                errorMessage: undefined,
+              }),
+            ),
+          }));
+          attachmentFilesRef.current.delete(attachmentId);
+          attachmentUploadsRef.current.delete(attachmentId);
+          if (previewUrl) {
+            window.requestAnimationFrame(() => {
+              URL.revokeObjectURL(previewUrl);
+              attachmentPreviewUrlsRef.current.delete(previewUrl);
+            });
+          }
+        };
+
+        if (!isImageFile(file.name, file.type) || !previewUrl) {
+          useRemotePreview();
+          return;
+        }
+
+        const remoteImage = new Image();
+        remoteImage.onload = useRemotePreview;
+        remoteImage.onerror = () => {
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftContextItems: updateAttachmentContextItem(
+              conversation.draftContextItems,
+              attachmentId,
+              (item) => ({
+                ...item,
+                status: 'ready',
+                url: fileReadUrl,
+                uploadTransport: connection.transport,
+                errorMessage: undefined,
+              }),
+            ),
+          }));
+          attachmentFilesRef.current.delete(attachmentId);
+          attachmentUploadsRef.current.delete(attachmentId);
+        };
+        remoteImage.src = fileReadUrl;
+      })
+      .catch((error: unknown) => {
+        attachmentUploadsRef.current.delete(attachmentId);
+        const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          draftContextItems: updateAttachmentContextItem(
+            conversation.draftContextItems,
+            attachmentId,
+            (item) => ({ ...item, status: 'failed', errorMessage }),
+          ),
+        }));
+        setConnectionIssue(errorMessage);
+      });
+  }, [updateConversation, workosConnection]);
+
   const addAttachments = (selectedFiles: File[]) => {
     if (!selectedFiles.length) return 0;
     if (!workspaceHydrated || workosConnection === null) {
@@ -1032,7 +1139,6 @@ export default function App() {
       setSettingsOpen(true);
       return 0;
     }
-    const fileUploader = createWorkosFileUploader(workosConnection);
 
     const conversationId = activeConversation.id;
     const attachmentCount = activeConversation.draftContextItems.filter(
@@ -1068,9 +1174,14 @@ export default function App() {
           status: errorMessage ? 'failed' as const : 'uploading' as const,
           mime: file.type || undefined,
           previewUrl,
+          uploadTransport: workosConnection.transport,
           errorMessage: errorMessage ?? undefined,
         },
       };
+    });
+
+    uploads.forEach(({ file, attachment }) => {
+      attachmentFilesRef.current.set(attachment.id, file);
     });
 
     updateConversation(conversationId, (conversation) => ({
@@ -1082,59 +1193,78 @@ export default function App() {
     }));
 
     uploads.forEach(({ file, attachment }) => {
-      if (attachment.status === 'failed') return;
-      void fileUploader.upload(file)
-        .then(({ fileReadUrl }) => {
-          const useRemotePreview = () => {
-            updateConversation(conversationId, (conversation) => ({
-              ...conversation,
-              draftContextItems: updateAttachmentContextItem(
-                conversation.draftContextItems,
-                attachment.id,
-                (item) => ({ ...item, status: 'ready', url: fileReadUrl, previewUrl: undefined, errorMessage: undefined }),
-              ),
-            }));
-            if (attachment.previewUrl) {
-              window.requestAnimationFrame(() => {
-                URL.revokeObjectURL(attachment.previewUrl!);
-                attachmentPreviewUrlsRef.current.delete(attachment.previewUrl!);
-              });
-            }
-          };
-
-          if (!isImageFile(attachment.filename, attachment.mime) || !attachment.previewUrl) {
-            useRemotePreview();
-            return;
-          }
-
-          const remoteImage = new Image();
-          remoteImage.onload = useRemotePreview;
-          remoteImage.onerror = () => {
-            updateConversation(conversationId, (conversation) => ({
-              ...conversation,
-              draftContextItems: updateAttachmentContextItem(
-                conversation.draftContextItems,
-                attachment.id,
-                (item) => ({ ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }),
-              ),
-            }));
-          };
-          remoteImage.src = fileReadUrl;
-        })
-        .catch((error: unknown) => {
-          const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
-          updateConversation(conversationId, (conversation) => ({
-            ...conversation,
-            draftContextItems: updateAttachmentContextItem(
-              conversation.draftContextItems,
-              attachment.id,
-              (item) => ({ ...item, status: 'failed', errorMessage }),
-            ),
-          }));
-          setConnectionIssue(errorMessage);
-        });
+      if (attachment.status !== 'failed') uploadAttachment(conversationId, attachment.id, file, attachment.previewUrl);
     });
     return filesToAdd.length;
+  };
+
+  const retryAttachment = (contextItemId: string) => {
+    const item = draftContextItems.find((candidate) => candidate.id === contextItemId);
+    if (!item || (item.kind !== 'file' && item.kind !== 'image') || item.status !== 'failed') return;
+    if (!workosConnection || !isWorkosFileUploadConfigured(workosConnection)) {
+      setConnectionIssue(workosConnection?.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
+      setSettingsOpen(true);
+      return;
+    }
+    const file = attachmentFilesRef.current.get(item.attachment.id);
+    if (!file) {
+      const picker = document.createElement('input');
+      picker.type = 'file';
+      picker.accept = attachmentAcceptForChannel(workosConnection.transport);
+      picker.onchange = () => {
+        const replacement = picker.files?.[0];
+        if (!replacement) return;
+        const validationIssue = attachmentValidationError(replacement, workosConnection.transport);
+        if (validationIssue) {
+          setConnectionIssue(validationIssue);
+          return;
+        }
+        const oldPreview = item.attachment.previewUrl;
+        let previewUrl: string | undefined;
+        if (isImageFile(replacement.name, replacement.type)) {
+          try {
+            previewUrl = URL.createObjectURL(replacement);
+            attachmentPreviewUrlsRef.current.add(previewUrl);
+          } catch {
+            // The upload can continue without a local preview.
+          }
+        }
+        if (oldPreview) {
+          URL.revokeObjectURL(oldPreview);
+          attachmentPreviewUrlsRef.current.delete(oldPreview);
+        }
+        attachmentFilesRef.current.set(item.attachment.id, replacement);
+        updateConversation(activeConversation.id, (conversation) => ({
+          ...conversation,
+          draftContextItems: updateAttachmentContextItem(
+            conversation.draftContextItems,
+            item.attachment.id,
+            (attachment) => ({
+              ...attachment,
+              filename: replacement.name,
+              sizeLabel: formatFileSize(replacement.size),
+              mime: replacement.type || undefined,
+              previewUrl,
+              uploadTransport: workosConnection.transport,
+              errorMessage: undefined,
+            }),
+          ),
+        }));
+        uploadAttachment(activeConversation.id, item.attachment.id, replacement, previewUrl);
+      };
+      picker.click();
+      return;
+    }
+    const validationIssue = workosConnection
+      ? attachmentValidationError(file, workosConnection.transport)
+      : '连接配置尚未读取完成。';
+    if (validationIssue) {
+      setConnectionIssue(validationIssue);
+      return;
+    }
+    uploadAttachment(activeConversation.id, item.attachment.id, file, item.attachment.previewUrl);
   };
 
   const saveConnection = async (settings: WorkosConnectionSettings) => {
@@ -1168,6 +1298,8 @@ export default function App() {
     stopAllRequests();
     attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentPreviewUrlsRef.current.clear();
+    attachmentFilesRef.current.clear();
+    attachmentUploadsRef.current.clear();
     const conversation = createConversation(currentPage);
     const tab = createOpenTab(conversation.id);
     setWorkspace({ conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id });
@@ -1223,6 +1355,16 @@ export default function App() {
         onOpenBranchOrigin={() => {
           if (branchParent) selectHistory(branchParent.id);
         }}
+        onAddAssistantQuote={(quote) => {
+          updateConversation(activeConversation.id, (conversation) => {
+            const alreadyAdded = conversation.draftContextItems.some((item) => item.kind === 'selection'
+              && item.selection.sourceMessageId === quote.sourceMessageId
+              && item.selection.text === quote.text);
+            return alreadyAdded
+              ? conversation
+              : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
+          });
+        }}
       />
       <Composer
         tabs={workspace.openTabs}
@@ -1245,11 +1387,15 @@ export default function App() {
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
         onContextIncludedChange={changeContextItemIncluded}
+        onRetryAttachment={retryAttachment}
         onRemoveContextItem={(id) => {
           const removed = draftContextItems.find((item) => item.id === id);
           if (removed && (removed.kind === 'file' || removed.kind === 'image') && removed.attachment.previewUrl) {
             URL.revokeObjectURL(removed.attachment.previewUrl);
             attachmentPreviewUrlsRef.current.delete(removed.attachment.previewUrl);
+          }
+          if (removed && (removed.kind === 'file' || removed.kind === 'image')) {
+            attachmentFilesRef.current.delete(removed.attachment.id);
           }
           patchActiveConversation({
             draftContextItems: removeContextItem(draftContextItems, id),

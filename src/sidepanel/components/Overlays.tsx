@@ -4,6 +4,7 @@ import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate
 import type { WorkosTransportKind } from '../../services/workosTransport';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
+import { uploadChannelCapabilities } from '../fileTypes';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface HistoryPopoverProps {
@@ -313,6 +314,17 @@ export function SettingsDrawer({
                 <strong>实验性实时连接</strong>
                 <small>v2 · 多轮流式</small>
               </button>
+            </div>
+            <div className="transport-capabilities" aria-label="当前连接支持的附件类型">
+              <span>当前连接支持</span>
+              <ul>
+                {uploadChannelCapabilities(draft.transport).map((capability) => (
+                  <li key={capability}>
+                    <KoboyoIcon name="solid-checkmark" size={10} />
+                    {capability}
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {draft.transport === 'public-v1' ? (
