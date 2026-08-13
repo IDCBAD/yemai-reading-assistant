@@ -50,6 +50,66 @@ export interface DraftAttachment {
   errorMessage?: string;
 }
 
+export type ContextItemKind = 'page' | 'selection' | 'file' | 'image' | 'memory' | 'link';
+export type ContextItemStatus = 'preparing' | 'ready' | 'failed';
+
+interface ContextItemBase {
+  id: string;
+  kind: ContextItemKind;
+  included: boolean;
+  status: ContextItemStatus;
+  createdAt: number;
+  issue?: string;
+}
+
+export interface PageContextItem extends ContextItemBase {
+  kind: 'page';
+  page: PageContext;
+  role: 'current' | 'referenced';
+  delivery?: 'introduce' | 'update' | 'reuse';
+}
+
+export interface SelectionContextItem extends ContextItemBase {
+  kind: 'selection';
+  selection: QuoteReference;
+}
+
+export interface FileContextItem extends ContextItemBase {
+  kind: 'file';
+  attachment: DraftAttachment;
+}
+
+export interface ImageContextItem extends ContextItemBase {
+  kind: 'image';
+  attachment: DraftAttachment;
+}
+
+export interface MemoryContextItem extends ContextItemBase {
+  kind: 'memory';
+  memory: {
+    title: string;
+    excerpt: string;
+    sourceId?: string;
+  };
+}
+
+export interface LinkContextItem extends ContextItemBase {
+  kind: 'link';
+  link: {
+    title: string;
+    url: string;
+    site?: string;
+  };
+}
+
+export type ContextItem =
+  | PageContextItem
+  | SelectionContextItem
+  | FileContextItem
+  | ImageContextItem
+  | MemoryContextItem
+  | LinkContextItem;
+
 export type MessageStatus = 'queued' | 'running' | 'streaming' | 'complete' | 'stopped' | 'failed';
 export type MessageStage = 'queued' | 'reading-page' | 'creating-conversation' | 'waiting-first-token' | 'streaming';
 export type AgentOrbState = 'searching' | 'listening' | 'working' | 'composing' | 'shaping';
@@ -83,6 +143,8 @@ export interface ChatMessage {
   stage?: MessageStage;
   errorMessage?: string;
   activities?: RunActivity[];
+  contextItems?: ContextItem[];
+  /** Legacy fields retained only for locally stored messages created before context-item snapshots. */
   references?: QuoteReference[];
   attachments?: DraftAttachment[];
   pageContext?: PageContext;
@@ -114,9 +176,7 @@ export interface Conversation {
   pages: PageContext[];
   messages: ChatMessage[];
   draftInput: string;
-  draftQuotes: QuoteReference[];
-  draftAttachments: DraftAttachment[];
-  draftPageReference: DraftPageReference;
+  draftContextItems: ContextItem[];
 }
 
 export interface OpenConversationTab {

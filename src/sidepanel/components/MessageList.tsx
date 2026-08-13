@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
+import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
 import type { ChatMessage, DraftAttachment, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { isImageFile } from '../fileTypes';
@@ -509,39 +510,43 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
 }
 
 function UserMessage({ message }: { message: ChatMessage }) {
+  const messageContextItems = contextItemsFromMessage(message);
+  const pageItem = contextPage(messageContextItems);
+  const references = contextSelections(messageContextItems);
+  const attachments = contextAttachments(messageContextItems);
   return (
     <article className="message message--user">
       <div className="user-message-stack">
-        {message.pageContext && (
+        {pageItem && (
           <div
-            className={`sent-page-context sent-page-context--${message.pageContext.status}${message.pageContextIssue ? ' has-issue' : ''}`}
-            title={message.pageContextIssue ?? message.pageContext.url}
+            className={`sent-page-context sent-page-context--${pageItem.page.status}${pageItem.issue ? ' has-issue' : ''}`}
+            title={pageItem.issue ?? pageItem.page.url}
           >
             <PageFavicon
-              url={message.pageContext.url}
-              title={message.pageContext.title}
-              site={message.pageContext.site}
+              url={pageItem.page.url}
+              title={pageItem.page.title}
+              site={pageItem.page.site}
               size={14}
             />
             <span>
-              {message.pageContextIssue
+              {pageItem.issue
                 ? '当前页仅以链接加入'
-                : `${message.pageContext.title} · ${message.pageContext.site}`}
+                : `${pageItem.page.title} · ${pageItem.page.site}`}
             </span>
-            {message.pageContext.status === 'reading' && <i aria-label="正在准备当前页" />}
+            {pageItem.status === 'preparing' && <i aria-label="正在准备当前页" />}
           </div>
         )}
         <div className="user-message-card">
-        {message.references?.map((reference) => (
+        {references.map((reference) => (
           <blockquote className="sent-reference" key={reference.id}>
             <KoboyoIcon name="quote" size={13} />
             <span>{reference.text}</span>
           </blockquote>
         ))}
-        {message.attachments && message.attachments.length > 0 && (
-          <SentAttachments attachments={message.attachments} />
+        {attachments.length > 0 && (
+          <SentAttachments attachments={attachments} />
         )}
-        {message.attachments && message.attachments.length > 0 && message.content && ' '}
+        {attachments.length > 0 && message.content && ' '}
         {message.content && <span className="user-message-text">{message.content}</span>}
         </div>
         <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />

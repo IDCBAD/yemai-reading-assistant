@@ -43,18 +43,30 @@ import { MessageList } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
 import {
+  attachmentContextItem,
+  cloneContextItems,
+  contextAttachments,
+  contextItemIncluded,
+  contextItemsFromMessage,
+  contextPage,
+  contextSelections,
+  createContextSnapshot,
+  legacyDraftContextItems,
+  removeContextItem,
+  retainContextAfterSend,
+  selectionContextItem,
+  syncCurrentPageContextItem,
+  updateAttachmentContextItem,
+  updatePageContextSnapshot,
+} from './contextItems';
+import {
   attachmentAcceptForChannel,
   isFileUploadSupported,
   isImageFile,
 } from './fileTypes';
 import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
 import { shouldRefreshPageMetadataForTab, type BrowserTabChange } from './pageMetadataSync';
-import {
-  includedPageReference,
-  isPageReferenceIncluded,
-  setPageReferenceIncluded,
-  shouldPreparePageReference,
-} from './pageReference';
+import { shouldPreparePageReference } from './pageReference';
 import type {
   ChatMessage,
   Conversation,
@@ -101,9 +113,7 @@ function createConversation(currentPage: PageContext = CURRENT_PAGE): Conversati
     pages: [page],
     messages: [],
     draftInput: '',
-    draftQuotes: [],
-    draftAttachments: [],
-    draftPageReference: includedPageReference(page),
+    draftContextItems: legacyDraftContextItems(page, undefined),
   };
 }
 
@@ -127,6 +137,7 @@ function cloneMessagesForBranch(messages: ChatMessage[]) {
     pageContext: message.pageContext ? { ...message.pageContext } : undefined,
     references: message.references?.map((reference) => ({ ...reference, id: makeId('quote') })),
     attachments: message.attachments?.map((attachment) => ({ ...attachment, id: makeId('attachment') })),
+    contextItems: message.contextItems ? cloneContextItems(message.contextItems, makeId) : undefined,
     activities: message.activities?.map((activity) => ({ ...activity })),
   }));
 }
@@ -214,10 +225,15 @@ export default function App() {
       ? { ...currentPage, ...sentPage, title: currentPage.title, site: currentPage.site, status: 'read' as const }
       : { ...currentPage, status: currentPage.status === 'changed' ? 'changed' as const : 'not-read' as const };
   }, [activeConversation.pages, currentPage]);
-  const pageReferenceIncluded = useMemo(
-    () => isPageReferenceIncluded(activeConversation.draftPageReference, currentPage),
-    [activeConversation.draftPageReference, currentPage],
+  const draftContextItems = useMemo(
+    () => syncCurrentPageContextItem(activeConversation.draftContextItems, displayedPage, pageIssue ?? undefined),
+    [activeConversation.draftContextItems, displayedPage, pageIssue],
   );
+  const currentPageItem = useMemo(
+    () => draftContextItems.find((item) => item.kind === 'page' && item.role === 'current'),
+    [draftContextItems],
+  );
+  const pageReferenceIncluded = Boolean(currentPageItem?.included && currentPage.url);
   const activeConnectionConfigured = workosConnection
     ? isActiveWorkosConnectionConfigured(workosConnection)
     : false;
@@ -228,12 +244,18 @@ export default function App() {
     setWorkspace((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => {
-        if (conversation.id !== activeConversation.id
-          || conversation.draftPageReference.url === currentPage.url) return conversation;
-        return { ...conversation, draftPageReference: includedPageReference(currentPage) };
+        if (conversation.id !== activeConversation.id) return conversation;
+        return {
+          ...conversation,
+          draftContextItems: syncCurrentPageContextItem(
+            conversation.draftContextItems,
+            currentPage,
+            pageIssue ?? undefined,
+          ),
+        };
       }),
     }));
-  }, [activeConversation.id, currentPage.url, workspaceHydrated]);
+  }, [activeConversation.id, currentPage, pageIssue, workspaceHydrated]);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -423,11 +445,14 @@ export default function App() {
     const response = await browser.runtime.sendMessage(request).catch(() => null) as SelectionConsumeResponse | null;
     if (!response?.quotes?.length) return;
     updateConversation(activeConversation.id, (conversation) => {
-      const nextQuotes = [...conversation.draftQuotes];
+      const nextItems = [...conversation.draftContextItems];
       response.quotes.forEach((quote) => {
-        if (!nextQuotes.some((item) => item.pageUrl === quote.pageUrl && item.text === quote.text)) nextQuotes.push(quote);
+        const alreadyAdded = nextItems.some((item) => item.kind === 'selection'
+          && item.selection.pageUrl === quote.pageUrl
+          && item.selection.text === quote.text);
+        if (!alreadyAdded) nextItems.push(selectionContextItem(quote));
       });
-      return { ...conversation, draftQuotes: nextQuotes };
+      return { ...conversation, draftContextItems: nextItems };
     });
   }, [activeConversation.id, updateConversation]);
 
@@ -576,9 +601,7 @@ export default function App() {
       pages: activeConversation.pages.map((page) => ({ ...page })),
       messages: cloneMessagesForBranch(sourceMessages),
       draftInput: '',
-      draftQuotes: [],
-      draftAttachments: [],
-      draftPageReference: includedPageReference(activeConversation.page),
+      draftContextItems: legacyDraftContextItems(activeConversation.page, undefined),
       pendingBranchContext: buildBranchContext(sourceMessages),
     };
     const tab = createOpenTab(conversation.id);
@@ -678,8 +701,13 @@ export default function App() {
       ? buildTransportHandoffContext(earlierMessages)
       : undefined;
     const continuationContext = pendingBranchContext ?? transportHandoffContext;
-    const preparedPage = userMessage.pageContext
-      ? preparePageReference(pageSnapshot ?? userMessage.pageContext)
+    const messageContextItems = contextItemsFromMessage(userMessage);
+    const messagePageItem = contextPage(messageContextItems);
+    const messagePage = messagePageItem?.page;
+    const messageSelections = contextSelections(messageContextItems);
+    const messageAttachments = contextAttachments(messageContextItems);
+    const preparedPage = messagePage
+      ? preparePageReference(pageSnapshot ?? messagePage)
       : undefined;
     const previousPage = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
       ? currentConversation.pages.find((page) =>
@@ -687,7 +715,7 @@ export default function App() {
           || page.url === preparedPage.source.url)
       : undefined;
     const pageDecision: CurrentPageDeliveryDecision = decideCurrentPageDelivery({
-      included: Boolean(userMessage.pageContext),
+      included: Boolean(messagePage),
       prepared: preparedPage,
       previous: previousPage
         ? {
@@ -707,23 +735,34 @@ export default function App() {
 
     if (pageSnapshot) {
       updateMessage(conversationId, userMessage.id, {
-        pageContext: pageContextFromSnapshot(pageSnapshot, 'ready'),
+        contextItems: updatePageContextSnapshot(
+          messageContextItems,
+          pageContextFromSnapshot(pageSnapshot, 'ready'),
+          undefined,
+          pageContextDelivery,
+        ),
         pageContextMode,
         pageContextDelivery,
         pageContextIssue: undefined,
       });
-    } else if (needsPageRead && userMessage.pageContext) {
+    } else if (needsPageRead && messagePage) {
+      const issue = preparation?.error ?? '当前页仅以链接加入，正文未能读取。';
       updateMessage(conversationId, userMessage.id, {
-        pageContext: { ...userMessage.pageContext, status: 'not-read' },
+        contextItems: updatePageContextSnapshot(
+          messageContextItems,
+          { ...messagePage, status: 'not-read' },
+          issue,
+          pageContextDelivery,
+        ),
         pageContextMode,
         pageContextDelivery,
-        pageContextIssue: preparation?.error ?? '当前页仅以链接加入，正文未能读取。',
+        pageContextIssue: issue,
       });
     }
 
     const content = buildAgentContent({
       question: userMessage.content,
-      quotes: userMessage.references ?? [],
+      quotes: messageSelections,
       ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
     });
     const consumeBranchContext = () => {
@@ -749,7 +788,7 @@ export default function App() {
         remoteUuid,
         {
           content: prependBranchContext(continuationContext, content),
-          attachments: (userMessage.attachments ?? [])
+          attachments: messageAttachments
             .filter((attachment) => attachment.status === 'ready' && attachment.url)
             .map((attachment) => ({
               url: attachment.url!,
@@ -782,7 +821,7 @@ export default function App() {
       consumeBranchContext();
       if (terminalError) throw new WorkosApiError(terminalError);
       if (!receivedText) throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的文本。');
-      if (preparedPage && pageDecision.mode !== 'none' && userMessage.pageContext) {
+      if (preparedPage && pageDecision.mode !== 'none' && messagePage) {
         const deliveredAt = Date.now();
         updateConversation(conversationId, (conversation) => {
           const existing = conversation.pages.find((page) =>
@@ -793,7 +832,7 @@ export default function App() {
                 ? existing?.version ?? 1
                 : (existing?.version ?? 0) + 1)
             : {
-                ...userMessage.pageContext!,
+                ...messagePage,
                 sourceId: preparedPage.source.source_id,
                 manifest: preparedPage.manifest,
                 status: 'read' as const,
@@ -824,10 +863,15 @@ export default function App() {
           };
         });
         updateMessage(conversationId, userMessage.id, {
-          pageContext: {
-            ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : userMessage.pageContext),
-            sentAt: deliveredAt,
-          },
+          contextItems: updatePageContextSnapshot(
+            messageContextItems,
+            {
+              ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : messagePage),
+              sentAt: deliveredAt,
+            },
+            pageSnapshot ? undefined : preparation?.error,
+            pageContextDelivery,
+          ),
           pageContextMode,
           pageContextDelivery,
           pageContextIssue: pageSnapshot ? undefined : preparation?.error,
@@ -871,21 +915,22 @@ export default function App() {
       setSettingsOpen(true);
       return;
     }
-    if (activeConversation.draftAttachments.some((attachment) => attachment.status === 'uploading')) {
+    if (draftContextItems.some((item) => item.included
+      && (item.kind === 'file' || item.kind === 'image')
+      && item.status === 'preparing')) {
       setConnectionIssue('附件仍在上传，请等待完成后再发送。');
       return;
     }
-    const readyAttachments = activeConversation.draftAttachments.filter(
-      (attachment) => attachment.status === 'ready' && attachment.url,
-    );
+    const readyAttachments = contextAttachments(draftContextItems).filter((attachment) => attachment.url);
+    const readySelections = contextSelections(draftContextItems);
     const hasContent = activeConversation.draftInput.trim()
-      || activeConversation.draftQuotes.length > 0
+      || readySelections.length > 0
       || readyAttachments.length > 0;
     if (!hasContent) return;
 
     const now = Date.now();
     const conversationAtSend = activeConversation;
-    const pageAtSend = displayedPage;
+    const pageAtSend = contextPage(draftContextItems)?.page ?? displayedPage;
     const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
     const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
     const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
@@ -896,11 +941,14 @@ export default function App() {
       content: activeConversation.draftInput.trim(),
       createdAt: now,
       status: 'complete',
-      references: activeConversation.draftQuotes,
-      attachments: readyAttachments,
-      pageContext: includeCurrentPage
-        ? { ...pageAtSend, status: needsPageRead ? 'reading' : 'read' }
-        : undefined,
+      contextItems: createContextSnapshot(draftContextItems).map((item) =>
+        item.kind === 'page'
+          ? {
+              ...item,
+              status: needsPageRead ? 'preparing' as const : 'ready' as const,
+              page: { ...item.page, status: needsPageRead ? 'reading' as const : 'read' as const },
+            }
+          : item),
     };
     const assistantMessage: ChatMessage = {
       id: makeId('message'),
@@ -922,9 +970,7 @@ export default function App() {
       updatedAt: now,
       messages: [...conversation.messages, userMessage, assistantMessage],
       draftInput: '',
-      draftQuotes: [],
-      draftAttachments: conversation.draftAttachments.filter((attachment) => attachment.status !== 'ready'),
-      draftPageReference: conversationAtSend.draftPageReference,
+      draftContextItems: retainContextAfterSend(conversation.draftContextItems),
     }));
 
     const pageSnapshotPromise = queuedSnapshot
@@ -955,7 +1001,7 @@ export default function App() {
       errorMessage: undefined,
       activities: [],
     });
-    const retryPage = userMessage.pageContext;
+    const retryPage = contextPage(contextItemsFromMessage(userMessage))?.page;
     const cachedSnapshot = retryPage
       ? pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, retryPage.url))
       : undefined;
@@ -989,7 +1035,10 @@ export default function App() {
     const fileUploader = createWorkosFileUploader(workosConnection);
 
     const conversationId = activeConversation.id;
-    const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - activeConversation.draftAttachments.length);
+    const attachmentCount = activeConversation.draftContextItems.filter(
+      (item) => item.kind === 'file' || item.kind === 'image',
+    ).length;
+    const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - attachmentCount);
     const filesToAdd = selectedFiles.slice(0, availableSlots);
     if (!filesToAdd.length) {
       setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件。`);
@@ -1026,7 +1075,10 @@ export default function App() {
 
     updateConversation(conversationId, (conversation) => ({
       ...conversation,
-      draftAttachments: [...conversation.draftAttachments, ...uploads.map(({ attachment }) => attachment)],
+      draftContextItems: [
+        ...conversation.draftContextItems,
+        ...uploads.map(({ attachment }) => attachmentContextItem(attachment)),
+      ],
     }));
 
     uploads.forEach(({ file, attachment }) => {
@@ -1036,9 +1088,11 @@ export default function App() {
           const useRemotePreview = () => {
             updateConversation(conversationId, (conversation) => ({
               ...conversation,
-              draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-                ? { ...item, status: 'ready', url: fileReadUrl, previewUrl: undefined, errorMessage: undefined }
-                : item),
+              draftContextItems: updateAttachmentContextItem(
+                conversation.draftContextItems,
+                attachment.id,
+                (item) => ({ ...item, status: 'ready', url: fileReadUrl, previewUrl: undefined, errorMessage: undefined }),
+              ),
             }));
             if (attachment.previewUrl) {
               window.requestAnimationFrame(() => {
@@ -1058,9 +1112,11 @@ export default function App() {
           remoteImage.onerror = () => {
             updateConversation(conversationId, (conversation) => ({
               ...conversation,
-              draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-                ? { ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }
-                : item),
+              draftContextItems: updateAttachmentContextItem(
+                conversation.draftContextItems,
+                attachment.id,
+                (item) => ({ ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }),
+              ),
             }));
           };
           remoteImage.src = fileReadUrl;
@@ -1069,9 +1125,11 @@ export default function App() {
           const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
           updateConversation(conversationId, (conversation) => ({
             ...conversation,
-            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-              ? { ...item, status: 'failed', errorMessage }
-              : item),
+            draftContextItems: updateAttachmentContextItem(
+              conversation.draftContextItems,
+              attachment.id,
+              (item) => ({ ...item, status: 'failed', errorMessage }),
+            ),
           }));
           setConnectionIssue(errorMessage);
         });
@@ -1117,10 +1175,9 @@ export default function App() {
     setSettingsOpen(false);
   };
 
-  const changeCurrentPageReference = (included: boolean) => {
-    if (!currentPage.url) return;
+  const changeContextItemIncluded = (id: string, included: boolean) => {
     patchActiveConversation({
-      draftPageReference: setPageReferenceIncluded(currentPage, included),
+      draftContextItems: contextItemIncluded(draftContextItems, id, included),
     });
   };
 
@@ -1172,11 +1229,7 @@ export default function App() {
         conversations={workspace.conversations}
         activeTabId={activeOpenTab.id}
         input={activeConversation.draftInput}
-        quotes={activeConversation.draftQuotes}
-        attachments={activeConversation.draftAttachments}
-        currentPage={displayedPage}
-        currentPageIncluded={pageReferenceIncluded}
-        currentPageIssue={pageIssue}
+        contextItems={draftContextItems}
         activeConversationIds={activeConversationIds}
         runSummary={runSummary}
         historyOpen={historyOpen}
@@ -1191,20 +1244,17 @@ export default function App() {
         onNewConversation={startNewConversation}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
-        onRemoveQuote={(id) => patchActiveConversation({
-          draftQuotes: activeConversation.draftQuotes.filter((quote) => quote.id !== id),
-        })}
-        onRemoveAttachment={(id) => {
-          const removed = activeConversation.draftAttachments.find((attachment) => attachment.id === id);
-          if (removed?.previewUrl) {
-            URL.revokeObjectURL(removed.previewUrl);
-            attachmentPreviewUrlsRef.current.delete(removed.previewUrl);
+        onContextIncludedChange={changeContextItemIncluded}
+        onRemoveContextItem={(id) => {
+          const removed = draftContextItems.find((item) => item.id === id);
+          if (removed && (removed.kind === 'file' || removed.kind === 'image') && removed.attachment.previewUrl) {
+            URL.revokeObjectURL(removed.attachment.previewUrl);
+            attachmentPreviewUrlsRef.current.delete(removed.attachment.previewUrl);
           }
           patchActiveConversation({
-            draftAttachments: activeConversation.draftAttachments.filter((attachment) => attachment.id !== id),
+            draftContextItems: removeContextItem(draftContextItems, id),
           });
         }}
-        onCurrentPageIncludedChange={changeCurrentPageReference}
         onFilesSelected={addAttachments}
         onAttachmentUnavailable={() => {
           if (workosConnection === null) {

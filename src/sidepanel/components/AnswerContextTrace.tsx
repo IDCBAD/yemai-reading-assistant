@@ -17,7 +17,8 @@ function compactText(value: string, maximum = 70) {
 function sourceTitle(source: AnswerContextSource) {
   if (source.kind === 'page') return source.page.title || source.page.site || source.page.url;
   if (source.kind === 'quote') return source.quote.pageTitle || compactText(source.quote.text, 36);
-  return source.attachment.filename;
+  if (source.kind === 'attachment') return source.attachment.filename;
+  return source.title;
 }
 
 function pageDeliveryLabel(source: Extract<AnswerContextSource, { kind: 'page' }>) {
@@ -41,6 +42,13 @@ function ContextSourceIcon({ source }: { source: AnswerContextSource }) {
     return (
       <span className="answer-context-quote-icon" aria-hidden="true">
         <KoboyoIcon name="quote" size={14} />
+      </span>
+    );
+  }
+  if (source.kind === 'memory' || source.kind === 'link') {
+    return (
+      <span className="answer-context-quote-icon" aria-hidden="true">
+        <KoboyoIcon name={source.kind === 'link' ? 'link' : 'archive'} size={14} />
       </span>
     );
   }
@@ -80,6 +88,20 @@ function ContextSourceRow({ source }: { source: AnswerContextSource }) {
         <span className="answer-context-source-copy">
           <strong>{sourceTitle(source)}</strong>
           <small title={source.quote.text}>划词引用 · {compactText(source.quote.text)}</small>
+        </span>
+        <span className="answer-context-source-status">已提供</span>
+      </div>
+    );
+  }
+
+  if (source.kind === 'memory' || source.kind === 'link') {
+    const detail = source.kind === 'memory' ? source.excerpt : source.url;
+    return (
+      <div className="answer-context-source">
+        <ContextSourceIcon source={source} />
+        <span className="answer-context-source-copy">
+          <strong>{source.title}</strong>
+          <small title={detail}>{source.kind === 'memory' ? '历史记忆' : detail}</small>
         </span>
         <span className="answer-context-source-status">已提供</span>
       </div>

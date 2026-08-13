@@ -1,24 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
-import type { AgentRunSummary, Conversation, DraftAttachment, OpenConversationTab, PageContext, QuoteReference } from '../types';
+import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } from '../types';
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
-import { attachmentFormatLabel, isImageFile } from '../fileTypes';
 import { AgentRunStatus } from './AgentRunStatus';
-import { FileTypeIcon } from './FileTypeIcon';
+import { ContextWorkbench } from './ContextWorkbench';
 import { KoboyoIcon } from './KoboyoIcon';
-import { PageFavicon } from './PageFavicon';
 
 interface ComposerProps {
   tabs: OpenConversationTab[];
   conversations: Conversation[];
   activeTabId: string;
   input: string;
-  quotes: QuoteReference[];
-  attachments: DraftAttachment[];
-  currentPage: PageContext;
-  currentPageIncluded: boolean;
-  currentPageIssue: string | null;
+  contextItems: ContextItem[];
   activeConversationIds: Set<string>;
   runSummary: AgentRunSummary | null;
   historyOpen: boolean;
@@ -31,38 +25,12 @@ interface ComposerProps {
   onNewConversation: () => void;
   onToggleHistory: () => void;
   onInputChange: (value: string) => void;
-  onRemoveQuote: (id: string) => void;
-  onRemoveAttachment: (id: string) => void;
-  onCurrentPageIncludedChange: (included: boolean) => void;
+  onContextIncludedChange: (id: string, included: boolean) => void;
+  onRemoveContextItem: (id: string) => void;
   onFilesSelected: (files: File[]) => number | void;
   onAttachmentUnavailable: () => void;
   onSend: () => void;
   onStop: () => void;
-}
-
-function attachmentFormat(attachment: DraftAttachment) {
-  return attachmentFormatLabel(attachment.filename, attachment.mime);
-}
-
-function AttachmentThumbnail({ attachment }: { attachment: DraftAttachment }) {
-  const source = attachment.previewUrl ?? attachment.url;
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => setImageFailed(false), [source]);
-
-  return (
-    <span className={`draft-attachment-thumb is-${attachment.status}`} aria-hidden="true">
-      {isImageFile(attachment.filename, attachment.mime) && source && !imageFailed
-        ? <img src={source} alt="" draggable={false} onError={() => setImageFailed(true)} />
-        : <FileTypeIcon filename={attachment.filename} mime={attachment.mime} />}
-      {attachment.status === 'uploading' && (
-        <span className="draft-attachment-overlay"><span className="attachment-progress" /></span>
-      )}
-      {attachment.status === 'failed' && (
-        <span className="draft-attachment-overlay draft-attachment-overlay--failed">!</span>
-      )}
-    </span>
-  );
 }
 
 interface TabMenuState {
@@ -76,11 +44,7 @@ export function Composer({
   conversations,
   activeTabId,
   input,
-  quotes,
-  attachments,
-  currentPage,
-  currentPageIncluded,
-  currentPageIssue,
+  contextItems,
   activeConversationIds,
   runSummary,
   historyOpen,
@@ -93,9 +57,8 @@ export function Composer({
   onNewConversation,
   onToggleHistory,
   onInputChange,
-  onRemoveQuote,
-  onRemoveAttachment,
-  onCurrentPageIncludedChange,
+  onContextIncludedChange,
+  onRemoveContextItem,
   onFilesSelected,
   onAttachmentUnavailable,
   onSend,
@@ -106,17 +69,20 @@ export function Composer({
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
-  const [contextExpanded, setContextExpanded] = useState(false);
   const [pasteAnnouncement, setPasteAnnouncement] = useState('');
   const canAddTab = tabs.length < maxTabs;
-  const contextItemCount = quotes.length + attachments.length;
-  const visibleQuotes = contextExpanded ? quotes : quotes.slice(-1);
-  const visibleAttachments = contextExpanded ? attachments : attachments.slice(-1);
+  const contextItemCount = contextItems.length;
+  const selections = contextItems.filter((item) => item.kind === 'selection' && item.included);
+  const attachments = contextItems
+    .filter((item): item is Extract<ContextItem, { kind: 'file' | 'image' }> => item.kind === 'file' || item.kind === 'image')
+    .map((item) => item.attachment);
   const hasContent =
     input.trim().length > 0 ||
-    quotes.length > 0 ||
-    attachments.some((attachment) => attachment.status === 'ready');
-  const hasUploadingAttachments = attachments.some((attachment) => attachment.status === 'uploading');
+    selections.length > 0 ||
+    contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
+  const hasUploadingAttachments = contextItems.some(
+    (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
+  );
   const canSend = hasContent && !hasUploadingAttachments;
   const composerState = [
     runSummary ? 'is-running' : 'is-idle',
@@ -150,10 +116,6 @@ export function Composer({
   useEffect(() => {
     tabButtonsRef.current.get(activeTabId)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTabId]);
-
-  useEffect(() => {
-    if (contextItemCount <= 1) setContextExpanded(false);
-  }, [contextItemCount]);
 
   useEffect(() => () => {
     if (pasteAnnouncementTimerRef.current !== null) {
@@ -265,94 +227,11 @@ export function Composer({
           </div>
         </div>
 
-        {currentPage.url && (
-          <div
-            className={`current-page-context current-page-context--${currentPage.status}${currentPageIssue ? ' has-issue' : ''}${currentPageIncluded ? '' : ' is-excluded'}`}
-            aria-label={currentPageIncluded ? '本次提问引用的当前页面' : '当前页面未加入本次提问'}
-            aria-live="polite"
-          >
-            <PageFavicon
-              url={currentPage.url}
-              title={currentPage.title}
-              site={currentPage.site}
-              size={16}
-            />
-            <span className="current-page-copy">
-              <small>{!currentPageIncluded ? '未引用' : currentPageIssue ? '当前页未能读取' : currentPage.status === 'reading' ? '正在准备当前页' : '当前页'}</small>
-              <strong title={`${currentPage.title} · ${currentPage.site}`}>{currentPage.title}</strong>
-            </span>
-            {currentPageIncluded && currentPage.status === 'reading' && <span className="page-context-progress" aria-hidden="true" />}
-            <button
-              className="current-page-toggle pressable"
-              type="button"
-              onClick={() => onCurrentPageIncludedChange(!currentPageIncluded)}
-              aria-label={currentPageIncluded ? '取消引用当前页' : '恢复引用当前页'}
-              aria-pressed={currentPageIncluded}
-              title={currentPageIncluded ? '取消引用' : '恢复引用'}
-            >
-              <KoboyoIcon name={currentPageIncluded ? 'link' : 'link-off'} size={15} />
-            </button>
-          </div>
-        )}
-
-        {contextItemCount > 0 && (
-          <div className={`draft-context${contextExpanded ? ' is-expanded' : ''}`} aria-label="待发送的引用和附件">
-            <div className="draft-context-header">
-              <span className="draft-context-summary">
-                {quotes.length > 0 && `已引用 ${quotes.length} 段`}
-                {quotes.length > 0 && attachments.length > 0 && ' · '}
-                {attachments.length > 0 && `${attachments.length} 个附件`}
-              </span>
-              {contextItemCount > 1 && (
-                <button
-                  className="draft-context-toggle pressable"
-                  type="button"
-                  onClick={() => setContextExpanded((expanded) => !expanded)}
-                  aria-expanded={contextExpanded}
-                >
-                  {contextExpanded ? '收起' : '查看全部'}
-                </button>
-              )}
-            </div>
-            <div className="draft-context-list">
-            {visibleQuotes.map((quote) => (
-              <div className="draft-chip draft-chip--quote" key={quote.id}>
-                <KoboyoIcon name="quote" size={13} />
-                <span className="draft-chip-copy">
-                  <strong title={quote.pageTitle}>{quote.pageTitle}</strong>
-                  <span title={quote.text}>{quote.text}</span>
-                </span>
-                <button className="chip-remove pressable" type="button" onClick={() => onRemoveQuote(quote.id)} aria-label={`删除引用：${quote.text}`}>
-                  <KoboyoIcon name="cross" size={11} />
-                </button>
-              </div>
-            ))}
-            {visibleAttachments.map((attachment) => (
-              <div className="draft-chip draft-chip--file" key={attachment.id}>
-                <AttachmentThumbnail attachment={attachment} />
-                <span className="draft-chip-copy">
-                  <strong title={attachment.filename}>{attachment.filename}</strong>
-                  <span
-                    className={`draft-attachment-meta is-${attachment.status}`}
-                    title={attachment.errorMessage}
-                  >
-                    {attachmentFormat(attachment)} · {attachment.sizeLabel} · {
-                      attachment.status === 'uploading'
-                        ? '正在上传'
-                        : attachment.status === 'failed'
-                          ? `上传失败：${attachment.errorMessage ?? '请删除后重试'}`
-                          : '已上传'
-                    }
-                  </span>
-                </span>
-                <button className="chip-remove pressable" type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`删除附件：${attachment.filename}`}>
-                  <KoboyoIcon name="cross" size={11} />
-                </button>
-              </div>
-            ))}
-            </div>
-          </div>
-        )}
+        <ContextWorkbench
+          items={contextItems}
+          onIncludedChange={onContextIncludedChange}
+          onRemove={onRemoveContextItem}
+        />
 
         <div className="composer-input-wrap">
           <textarea
@@ -386,8 +265,8 @@ export function Composer({
                 if (canSend) onSend();
               }
             }}
-            placeholder={quotes.length > 0
-              ? `针对已引用的 ${quotes.length} 段内容提问…`
+            placeholder={selections.length > 0
+              ? `针对已引用的 ${selections.length} 段内容提问…`
               : '继续追问，或粘贴图片提问…'}
             rows={2}
             aria-label="输入问题"
@@ -423,9 +302,6 @@ export function Composer({
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>
-              {!currentPage.url && currentPageIssue && (
-                <span className="page-reference-unavailable" title={currentPageIssue}>当前页不可读取</span>
-              )}
               <span className={`composer-scope composer-scope--${connectionState}`}>
                 <i aria-hidden="true" />
                 {connectionState === 'loading' ? '读取配置' : connectionState === 'configured' ? '连接已配置' : '需要连接'}

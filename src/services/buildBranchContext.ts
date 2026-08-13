@@ -1,4 +1,5 @@
-import type { ChatMessage } from '../sidepanel/types';
+import { contextItemsFromMessage, contextPage, contextSelections } from '../sidepanel/contextItems';
+import type { ChatMessage, PageContext } from '../sidepanel/types';
 import { createStableSourceId } from '../content/pageManifest';
 
 interface BranchTurn {
@@ -27,10 +28,10 @@ function buildVisibleConversationContext(
     site: string;
     url: string;
     contentHash?: string;
-    manifest?: NonNullable<ChatMessage['pageContext']>['manifest'];
+    manifest?: PageContext['manifest'];
   }>();
   messages.forEach((message) => {
-    const page = message.pageContext;
+    const page = contextPage(contextItemsFromMessage(message))?.page;
     if (!page?.url) return;
     const sourceId = page.sourceId ?? createStableSourceId(page.url);
     if (sources.has(sourceId)) return;
@@ -44,23 +45,27 @@ function buildVisibleConversationContext(
     });
   });
   const turns: BranchTurn[] = messages
-    .filter((message) => message.content.trim() || message.references?.length)
-    .map((message) => ({
-      role: message.role,
-      content: message.content,
-      ...(message.pageContext?.url
-        ? { pageSourceId: message.pageContext.sourceId ?? createStableSourceId(message.pageContext.url) }
-        : {}),
-      ...(message.references?.length
-        ? {
-            references: message.references.map((reference) => ({
+    .map((message) => ({ message, references: contextSelections(contextItemsFromMessage(message)) }))
+    .filter(({ message, references }) => message.content.trim() || references.length)
+    .map(({ message, references }) => {
+      const page = contextPage(contextItemsFromMessage(message))?.page;
+      return {
+        role: message.role,
+        content: message.content,
+        ...(page?.url
+          ? { pageSourceId: page.sourceId ?? createStableSourceId(page.url) }
+          : {}),
+        ...(references.length
+          ? {
+              references: references.map((reference) => ({
               text: reference.text,
               pageTitle: reference.pageTitle,
               pageUrl: reference.pageUrl,
             })),
           }
         : {}),
-    }));
+      };
+    });
 
   return [
     `<${tag} format="json">`,

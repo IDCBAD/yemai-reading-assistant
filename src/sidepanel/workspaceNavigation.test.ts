@@ -14,9 +14,7 @@ function conversation(id: string): Conversation {
     pages: [page],
     messages: [],
     draftInput: '',
-    draftQuotes: [],
-    draftAttachments: [],
-    draftPageReference: { url: page.url, mode: 'included' },
+    draftContextItems: [],
   };
 }
 

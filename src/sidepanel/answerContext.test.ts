@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildAnswerContextMap, getMessageContextSources } from './answerContext';
 import type { ChatMessage } from './types';
+import { pageContextItem } from './contextItems';
 
 function message(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'role'>): ChatMessage {
   return {
@@ -76,5 +77,29 @@ describe('answer context provenance', () => {
       message({ id: 'answer-1', role: 'assistant' }),
     ]);
     expect(contexts.get('answer-1')).toEqual([]);
+  });
+
+  it('prefers the immutable unified snapshot on new messages', () => {
+    const userMessage = message({
+      id: 'user-context',
+      role: 'user',
+      contextItems: [pageContextItem({
+        title: '发送时页面',
+        site: 'example.com',
+        url: 'https://example.com/sent',
+        status: 'read',
+      })],
+      pageContext: {
+        title: '旧兼容字段',
+        site: 'legacy.example.com',
+        url: 'https://legacy.example.com',
+        status: 'read',
+      },
+    });
+
+    expect(getMessageContextSources(userMessage)[0]).toMatchObject({
+      kind: 'page',
+      page: { title: '发送时页面' },
+    });
   });
 });

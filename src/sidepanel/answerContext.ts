@@ -1,3 +1,4 @@
+import { contextItemsFromMessage } from './contextItems';
 import type { ChatMessage, DraftAttachment, PageContext, QuoteReference } from './types';
 
 export type AnswerContextSource =
@@ -17,28 +18,42 @@ export type AnswerContextSource =
       kind: 'attachment';
       id: string;
       attachment: DraftAttachment;
+    }
+  | {
+      kind: 'memory';
+      id: string;
+      title: string;
+      excerpt: string;
+    }
+  | {
+      kind: 'link';
+      id: string;
+      title: string;
+      url: string;
     };
 
 export function getMessageContextSources(message: ChatMessage | undefined): AnswerContextSource[] {
   if (!message || message.role !== 'user') return [];
 
-  const sources: AnswerContextSource[] = [];
-  if (message.pageContext) {
-    sources.push({
-      kind: 'page',
-      id: `page:${message.id}`,
-      page: message.pageContext,
-      delivery: message.pageContextDelivery,
-      issue: message.pageContextIssue,
-    });
-  }
-  for (const quote of message.references ?? []) {
-    sources.push({ kind: 'quote', id: `quote:${quote.id}`, quote });
-  }
-  for (const attachment of message.attachments ?? []) {
-    sources.push({ kind: 'attachment', id: `attachment:${attachment.id}`, attachment });
-  }
-  return sources;
+  return contextItemsFromMessage(message).map((item): AnswerContextSource => {
+    if (item.kind === 'page') {
+      return {
+        kind: 'page',
+        id: item.id,
+        page: item.page,
+        delivery: item.delivery ?? message.pageContextDelivery,
+        issue: item.issue ?? message.pageContextIssue,
+      };
+    }
+    if (item.kind === 'selection') return { kind: 'quote', id: item.id, quote: item.selection };
+    if (item.kind === 'file' || item.kind === 'image') {
+      return { kind: 'attachment', id: item.id, attachment: item.attachment };
+    }
+    if (item.kind === 'memory') {
+      return { kind: 'memory', id: item.id, title: item.memory.title, excerpt: item.memory.excerpt };
+    }
+    return { kind: 'link', id: item.id, title: item.link.title, url: item.link.url };
+  });
 }
 
 /**

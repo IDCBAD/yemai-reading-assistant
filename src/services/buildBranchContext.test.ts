@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage } from '../sidepanel/types';
+import { pageContextItem, selectionContextItem } from '../sidepanel/contextItems';
 import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from './buildBranchContext';
 
 describe('buildBranchContext', () => {
@@ -67,5 +68,34 @@ describe('buildTransportHandoffContext', () => {
     expect(context).toContain('<conversation_transport_handoff_context');
     expect(context).toContain('切换了远程 Agent 或传输通道');
     expect(context).not.toContain('<conversation_branch_context');
+  });
+
+  it('replays page and selection provenance from unified context snapshots', () => {
+    const context = buildBranchContext([{
+      id: 'user-context-items',
+      role: 'user',
+      content: '继续解释',
+      createdAt: 1,
+      status: 'complete',
+      contextItems: [
+        pageContextItem({
+          title: '上下文工程',
+          site: 'example.com',
+          url: 'https://example.com/context',
+          status: 'read',
+          sourceId: 'src-context',
+        }),
+        selectionContextItem({
+          id: 'selection-1',
+          text: '窗口有限，对话持续增长。',
+          pageTitle: '上下文工程',
+          pageUrl: 'https://example.com/context',
+          createdAt: 1,
+        }),
+      ],
+    }]);
+
+    expect(context).toContain('src-context');
+    expect(context).toContain('窗口有限，对话持续增长。');
   });
 });

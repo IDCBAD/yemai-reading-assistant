@@ -19,9 +19,7 @@ function conversation(id: string, updatedAt: number, parentConversationId?: stri
     pages: [page],
     messages: [],
     draftInput: '',
-    draftQuotes: [],
-    draftAttachments: [],
-    draftPageReference: { url: page.url, mode: 'included' },
+    draftContextItems: [],
   };
 }
 
