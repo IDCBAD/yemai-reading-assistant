@@ -5,11 +5,23 @@ import {
   preparePageReference,
   WORKOS_AGENT_CAPABILITIES,
 } from '../services/buildAgentContent';
-import { buildBranchContext, prependBranchContext } from '../services/buildBranchContext';
+import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from '../services/buildBranchContext';
 import { decideCurrentPageDelivery, type CurrentPageDeliveryDecision } from '../services/contextDeliveryPolicy';
-import { loadWorkosToken, removeWorkosToken, saveWorkosToken } from '../services/tokenStorage';
-import { createWorkosConversation, executeWorkosStream, uploadWorkosFile, WorkosApiError } from '../services/workosClient';
+import {
+  EMPTY_WORKOS_CONNECTION_SETTINGS,
+  isActiveWorkosConnectionConfigured,
+  loadWorkosConnectionSettings,
+  removeWorkosCredentials,
+  saveWorkosConnectionSettings,
+  type WorkosConnectionSettings,
+} from '../services/workosConnection';
+import {
+  createWorkosFileUploader,
+  isWorkosFileUploadConfigured,
+} from '../services/workosFileUpload';
 import type { WorkosToolActivity } from '../services/workosSse';
+import { hasWorkosRemoteTargetChanged, WorkosApiError } from '../services/workosTransport';
+import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
 import type {
@@ -30,14 +42,35 @@ import { Composer } from './components/Composer';
 import { MessageList } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
-import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
-import { shouldRefreshPageMetadataForTab, type BrowserTabChange } from './pageMetadataSync';
 import {
-  includedPageReference,
-  isPageReferenceIncluded,
-  setPageReferenceIncluded,
-  shouldPreparePageReference,
-} from './pageReference';
+  attachmentContextItem,
+  cloneContextItems,
+  contextAttachments,
+  contextItemIncluded,
+  contextItemsFromMessage,
+  contextPage,
+  contextSelections,
+  createContextSnapshot,
+  legacyDraftContextItems,
+  removeContextItem,
+  retainContextAfterSend,
+  selectionContextItem,
+  syncCurrentPageContextItem,
+  updateAttachmentContextItem,
+  updatePageContextSnapshot,
+} from './contextItems';
+import {
+  attachmentAcceptForChannel,
+  isFileUploadSupported,
+  isImageFile,
+} from './fileTypes';
+import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
+import {
+  shouldApplyContentPageChange,
+  shouldRefreshPageMetadataForTab,
+  type BrowserTabChange,
+} from './pageMetadataSync';
+import { shouldPreparePageReference } from './pageReference';
 import type {
   ChatMessage,
   Conversation,
@@ -47,6 +80,7 @@ import type {
   RunActivityStatus,
   WorkspaceState,
 } from './types';
+import { closeWorkspaceTab, openConversationInWorkspace } from './workspaceNavigation';
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -61,12 +95,12 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function attachmentValidationError(file: File) {
+function attachmentValidationError(file: File, channel: WorkosConnectionSettings['transport']) {
   if (file.size > MAX_ATTACHMENT_BYTES) return '单个附件不能超过 20 MB。';
-  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-  const supportedDocument = ['pdf', 'doc', 'docx', 'txt', 'md'].includes(extension);
-  if (!supportedDocument && !file.type.startsWith('image/')) {
-    return '仅支持 PDF、Word、TXT、Markdown 和常见图片。';
+  if (!isFileUploadSupported(file.name, file.type, channel)) {
+    return channel === 'internal-v2'
+      ? '当前内部上传通道支持 PDF、Word、Excel、CSV、Markdown、HTML、TXT、JSON 和常见图片。'
+      : '当前公开 v1 上传通道支持 PDF、Word、Excel、CSV、Markdown、TXT、JSON 和常见图片，不支持 HTML。';
   }
   return null;
 }
@@ -83,9 +117,7 @@ function createConversation(currentPage: PageContext = CURRENT_PAGE): Conversati
     pages: [page],
     messages: [],
     draftInput: '',
-    draftQuotes: [],
-    draftAttachments: [],
-    draftPageReference: includedPageReference(page),
+    draftContextItems: legacyDraftContextItems(page, undefined),
   };
 }
 
@@ -109,6 +141,7 @@ function cloneMessagesForBranch(messages: ChatMessage[]) {
     pageContext: message.pageContext ? { ...message.pageContext } : undefined,
     references: message.references?.map((reference) => ({ ...reference, id: makeId('quote') })),
     attachments: message.attachments?.map((attachment) => ({ ...attachment, id: makeId('attachment') })),
+    contextItems: message.contextItems ? cloneContextItems(message.contextItems, makeId) : undefined,
     activities: message.activities?.map((activity) => ({ ...activity })),
   }));
 }
@@ -143,13 +176,15 @@ function isAbortError(error: unknown) {
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
-  const [workosToken, setWorkosToken] = useState<string | null>(null);
+  const [workosConnection, setWorkosConnection] = useState<WorkosConnectionSettings | null>(null);
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
+  const [smartSelectionActive, setSmartSelectionActive] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
@@ -158,6 +193,9 @@ export default function App() {
   const pageMetadataRequestRef = useRef(0);
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
+  const attachmentPreviewUrlsRef = useRef(new Set<string>());
+  const attachmentFilesRef = useRef(new Map<string, File>());
+  const attachmentUploadsRef = useRef(new Set<string>());
   const requestRunnerRef = useRef<(request: QueuedAgentRequest, signal: AbortSignal) => Promise<void>>(
     async () => undefined,
   );
@@ -195,10 +233,18 @@ export default function App() {
       ? { ...currentPage, ...sentPage, title: currentPage.title, site: currentPage.site, status: 'read' as const }
       : { ...currentPage, status: currentPage.status === 'changed' ? 'changed' as const : 'not-read' as const };
   }, [activeConversation.pages, currentPage]);
-  const pageReferenceIncluded = useMemo(
-    () => isPageReferenceIncluded(activeConversation.draftPageReference, currentPage),
-    [activeConversation.draftPageReference, currentPage],
+  const draftContextItems = useMemo(
+    () => syncCurrentPageContextItem(activeConversation.draftContextItems, displayedPage, pageIssue ?? undefined),
+    [activeConversation.draftContextItems, displayedPage, pageIssue],
   );
+  const currentPageItem = useMemo(
+    () => draftContextItems.find((item) => item.kind === 'page' && item.role === 'current'),
+    [draftContextItems],
+  );
+  const pageReferenceIncluded = Boolean(currentPageItem?.included && currentPage.url);
+  const activeConnectionConfigured = workosConnection
+    ? isActiveWorkosConnectionConfigured(workosConnection)
+    : false;
   currentPageRef.current = currentPage;
 
   useEffect(() => {
@@ -206,16 +252,29 @@ export default function App() {
     setWorkspace((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => {
-        if (conversation.id !== activeConversation.id
-          || conversation.draftPageReference.url === currentPage.url) return conversation;
-        return { ...conversation, draftPageReference: includedPageReference(currentPage) };
+        if (conversation.id !== activeConversation.id) return conversation;
+        return {
+          ...conversation,
+          draftContextItems: syncCurrentPageContextItem(
+            conversation.draftContextItems,
+            currentPage,
+            pageIssue ?? undefined,
+          ),
+        };
       }),
     }));
-  }, [activeConversation.id, currentPage.url, workspaceHydrated]);
+  }, [activeConversation.id, currentPage, pageIssue, workspaceHydrated]);
 
   useEffect(() => {
     workspaceRef.current = workspace;
   }, [workspace]);
+
+  useEffect(() => () => {
+    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    attachmentPreviewUrlsRef.current.clear();
+    attachmentFilesRef.current.clear();
+    attachmentUploadsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -396,13 +455,47 @@ export default function App() {
     const response = await browser.runtime.sendMessage(request).catch(() => null) as SelectionConsumeResponse | null;
     if (!response?.quotes?.length) return;
     updateConversation(activeConversation.id, (conversation) => {
-      const nextQuotes = [...conversation.draftQuotes];
+      const nextItems = [...conversation.draftContextItems];
       response.quotes.forEach((quote) => {
-        if (!nextQuotes.some((item) => item.pageUrl === quote.pageUrl && item.text === quote.text)) nextQuotes.push(quote);
+        const alreadyAdded = nextItems.some((item) => item.kind === 'selection'
+          && item.selection.pageUrl === quote.pageUrl
+          && item.selection.text === quote.text);
+        if (!alreadyAdded) nextItems.push(selectionContextItem(quote));
       });
-      return { ...conversation, draftQuotes: nextQuotes };
+      return { ...conversation, draftContextItems: nextItems };
     });
   }, [activeConversation.id, updateConversation]);
+
+  const startSmartSelection = useCallback(async () => {
+    setSmartSelectionActive(true);
+    setPageIssue(null);
+    const request: ExtensionRequest = {
+      type: 'selection:smart-active',
+      tabId: activeBrowserTabIdRef.current,
+    };
+    const response = await browser.runtime.sendMessage(request).catch(() => null) as { ok: boolean; error?: string } | null;
+    if (!response?.ok) {
+      setSmartSelectionActive(false);
+      setPageIssue(response?.error ?? '无法在当前网页开始智能框选。');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!smartSelectionActive) return;
+    const cancelWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      const request: ExtensionRequest = {
+        type: 'selection:smart-cancel-active',
+        tabId: activeBrowserTabIdRef.current,
+      };
+      void browser.runtime.sendMessage(request).catch(() => undefined);
+      setSmartSelectionActive(false);
+    };
+    window.addEventListener('keydown', cancelWithEscape, true);
+    return () => window.removeEventListener('keydown', cancelWithEscape, true);
+  }, [smartSelectionActive]);
 
   useEffect(() => {
     const port = browser.runtime.connect({ name: 'yebian-sidepanel' });
@@ -411,14 +504,31 @@ export default function App() {
 
   useEffect(() => {
     if (!workspaceHydrated) return;
-    const onRuntimeMessage = (message: ExtensionEvent) => {
+    const onRuntimeMessage = (
+      message: ExtensionEvent,
+      sender: { tab?: { id?: number } },
+    ) => {
       if (message?.type === 'selection:available') void consumePendingQuotes();
+      if (message?.type === 'selection:smart-finished') setSmartSelectionActive(false);
+      if (message?.type === 'page:changed') {
+        const senderTabId = sender.tab?.id;
+        if (!shouldApplyContentPageChange(senderTabId, activeBrowserTabIdRef.current)) return undefined;
+        const page: PageContext = {
+          ...message.page,
+          browserTabId: senderTabId,
+          status: 'not-read',
+        };
+        pendingPageSnapshotsRef.current.delete(pageSnapshotKey(activeConversation.id, page.url));
+        setPageMetadataRevision((revision) => revision + 1);
+        setCurrentPage(page);
+        setPageIssue(null);
+      }
       return undefined;
     };
     browser.runtime.onMessage.addListener(onRuntimeMessage);
     void consumePendingQuotes();
     return () => browser.runtime.onMessage.removeListener(onRuntimeMessage);
-  }, [consumePendingQuotes, workspaceHydrated]);
+  }, [activeConversation.id, consumePendingQuotes, workspaceHydrated]);
 
   useEffect(() => {
     const onActivated = (activeInfo: { tabId: number }) => {
@@ -444,18 +554,18 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-    void loadWorkosToken()
-      .then((token) => {
+    void loadWorkosConnectionSettings()
+      .then((settings) => {
         if (!mounted) return;
-        setWorkosToken(token);
-        if (!token) {
-          setConnectionIssue('请先保存 WorkOS Token，再发送第一条消息。');
+        setWorkosConnection(settings);
+        if (!isActiveWorkosConnectionConfigured(settings)) {
+          setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送第一条消息。');
           setSettingsOpen(true);
         }
       })
       .catch(() => {
         if (!mounted) return;
-        setWorkosToken('');
+        setWorkosConnection({ ...EMPTY_WORKOS_CONNECTION_SETTINGS });
         setConnectionIssue('无法读取扩展存储，请确认页面由已安装的 Chrome 插件打开。');
         setSettingsOpen(true);
       });
@@ -475,20 +585,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const newConversation = () => {
-    if (!workspaceHydrated) return;
-    const conversation = createConversation(currentPage);
-    setWorkspace((current) => ({
-      ...current,
-      conversations: [conversation, ...current.conversations],
-      openTabs: current.openTabs.map((tab) => tab.id === current.activeOpenTabId
-        ? { ...tab, conversationId: conversation.id, openedAt: Date.now() }
-        : tab),
-    }));
-    setHistoryOpen(false);
-  };
-
-  const addTab = () => {
+  const startNewConversation = () => {
     if (!workspaceHydrated || workspace.openTabs.length >= MAX_OPEN_TABS) return;
     const conversation = createConversation(currentPage);
     const tab = createOpenTab(conversation.id);
@@ -502,24 +599,7 @@ export default function App() {
 
   const closeTab = (tabId: string) => {
     if (!workspaceHydrated) return;
-    setWorkspace((current) => {
-      const closingIndex = current.openTabs.findIndex((tab) => tab.id === tabId);
-      if (closingIndex < 0) return current;
-      if (current.openTabs.length === 1) {
-        const conversation = createConversation(currentPage);
-        const replacement = createOpenTab(conversation.id);
-        return {
-          conversations: [conversation, ...current.conversations],
-          openTabs: [replacement],
-          activeOpenTabId: replacement.id,
-        };
-      }
-      const openTabs = current.openTabs.filter((tab) => tab.id !== tabId);
-      const activeOpenTabId = current.activeOpenTabId === tabId
-        ? openTabs[Math.min(closingIndex, openTabs.length - 1)]!.id
-        : current.activeOpenTabId;
-      return { ...current, openTabs, activeOpenTabId };
-    });
+    setWorkspace((current) => closeWorkspaceTab(current, tabId));
   };
 
   const selectTab = (tabId: string) => {
@@ -528,16 +608,12 @@ export default function App() {
   };
 
   const selectHistory = (conversationId: string) => {
-    setWorkspace((current) => {
-      const existing = current.openTabs.find((tab) => tab.conversationId === conversationId);
-      if (existing) return { ...current, activeOpenTabId: existing.id };
-      return {
-        ...current,
-        openTabs: current.openTabs.map((tab) => tab.id === current.activeOpenTabId
-          ? { ...tab, conversationId, openedAt: Date.now() }
-          : tab),
-      };
-    });
+    setWorkspace((current) => openConversationInWorkspace(
+      current,
+      conversationId,
+      MAX_OPEN_TABS,
+      createOpenTab,
+    ));
     setHistoryOpen(false);
   };
 
@@ -558,7 +634,7 @@ export default function App() {
   };
 
   const branchFromMessage = (message: ChatMessage) => {
-    if (!workspaceHydrated || runSummary) return;
+    if (!workspaceHydrated || runSummary || workspace.openTabs.length >= MAX_OPEN_TABS) return;
     const messageIndex = activeConversation.messages.findIndex((item) => item.id === message.id);
     if (messageIndex < 0) return;
     const sourceMessages = activeConversation.messages.slice(0, messageIndex + 1);
@@ -583,21 +659,14 @@ export default function App() {
       pages: activeConversation.pages.map((page) => ({ ...page })),
       messages: cloneMessagesForBranch(sourceMessages),
       draftInput: '',
-      draftQuotes: [],
-      draftAttachments: [],
-      draftPageReference: includedPageReference(activeConversation.page),
+      draftContextItems: legacyDraftContextItems(activeConversation.page, undefined),
       pendingBranchContext: buildBranchContext(sourceMessages),
     };
-    const canOpenNewTab = workspace.openTabs.length < MAX_OPEN_TABS;
-    const tab = canOpenNewTab ? createOpenTab(conversation.id) : null;
+    const tab = createOpenTab(conversation.id);
     setWorkspace((current) => ({
       conversations: [conversation, ...current.conversations],
-      openTabs: tab
-        ? [...current.openTabs, tab]
-        : current.openTabs.map((item) => item.id === current.activeOpenTabId
-          ? { ...item, conversationId: conversation.id, openedAt: Date.now() }
-          : item),
-      activeOpenTabId: tab?.id ?? current.activeOpenTabId,
+      openTabs: [...current.openTabs, tab],
+      activeOpenTabId: tab.id,
     }));
     setHistoryOpen(false);
   };
@@ -659,8 +728,9 @@ export default function App() {
   ]);
 
   const runAgentRequest = async (request: QueuedAgentRequest, signal: AbortSignal) => {
-    const token = workosToken;
-    if (!token) return;
+    const connection = workosConnection;
+    if (!connection || !isActiveWorkosConnectionConfigured(connection)) return;
+    const transport = createWorkosTransport(connection);
     const { conversationId, messageId, userMessage, needsPageRead } = request;
     updateMessage(conversationId, messageId, {
       status: 'running',
@@ -675,16 +745,35 @@ export default function App() {
     const pageSnapshot = preparation?.snapshot;
     const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
     const pendingBranchContext = currentConversation?.pendingBranchContext;
-    const preparedPage = userMessage.pageContext
-      ? preparePageReference(pageSnapshot ?? userMessage.pageContext)
+    const connectionTargetChanged = hasWorkosRemoteTargetChanged(
+      currentConversation?.remoteUuid,
+      currentConversation?.remoteTransport,
+      currentConversation?.remoteAgentUuid,
+      transport.kind,
+      connection.agentUuid,
+    );
+    const earlierMessages = currentConversation?.messages.filter(
+      (message) => message.id !== userMessage.id && message.id !== messageId,
+    ) ?? [];
+    const transportHandoffContext = connectionTargetChanged && earlierMessages.length
+      ? buildTransportHandoffContext(earlierMessages)
       : undefined;
-    const previousPage = currentConversation?.remoteUuid && preparedPage
+    const continuationContext = pendingBranchContext ?? transportHandoffContext;
+    const messageContextItems = contextItemsFromMessage(userMessage);
+    const messagePageItem = contextPage(messageContextItems);
+    const messagePage = messagePageItem?.page;
+    const messageSelections = contextSelections(messageContextItems);
+    const messageAttachments = contextAttachments(messageContextItems);
+    const preparedPage = messagePage
+      ? preparePageReference(pageSnapshot ?? messagePage)
+      : undefined;
+    const previousPage = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
       ? currentConversation.pages.find((page) =>
           (page.sourceId && page.sourceId === preparedPage.source.source_id)
           || page.url === preparedPage.source.url)
       : undefined;
     const pageDecision: CurrentPageDeliveryDecision = decideCurrentPageDelivery({
-      included: Boolean(userMessage.pageContext),
+      included: Boolean(messagePage),
       prepared: preparedPage,
       previous: previousPage
         ? {
@@ -704,23 +793,34 @@ export default function App() {
 
     if (pageSnapshot) {
       updateMessage(conversationId, userMessage.id, {
-        pageContext: pageContextFromSnapshot(pageSnapshot, 'ready'),
+        contextItems: updatePageContextSnapshot(
+          messageContextItems,
+          pageContextFromSnapshot(pageSnapshot, 'ready'),
+          undefined,
+          pageContextDelivery,
+        ),
         pageContextMode,
         pageContextDelivery,
         pageContextIssue: undefined,
       });
-    } else if (needsPageRead && userMessage.pageContext) {
+    } else if (needsPageRead && messagePage) {
+      const issue = preparation?.error ?? '当前页仅以链接加入，正文未能读取。';
       updateMessage(conversationId, userMessage.id, {
-        pageContext: { ...userMessage.pageContext, status: 'not-read' },
+        contextItems: updatePageContextSnapshot(
+          messageContextItems,
+          { ...messagePage, status: 'not-read' },
+          issue,
+          pageContextDelivery,
+        ),
         pageContextMode,
         pageContextDelivery,
-        pageContextIssue: preparation?.error ?? '当前页仅以链接加入，正文未能读取。',
+        pageContextIssue: issue,
       });
     }
 
     const content = buildAgentContent({
       question: userMessage.content,
-      quotes: userMessage.references ?? [],
+      quotes: messageSelections,
       ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
     });
     const consumeBranchContext = () => {
@@ -730,30 +830,40 @@ export default function App() {
     };
 
     try {
-      let remoteUuid = currentConversation?.remoteUuid;
+      let remoteUuid = connectionTargetChanged ? undefined : currentConversation?.remoteUuid;
       if (!remoteUuid) {
         updateMessage(conversationId, messageId, { stage: 'creating-conversation' });
-        remoteUuid = await createWorkosConversation(token, signal);
-        updateConversation(conversationId, (conversation) => ({ ...conversation, remoteUuid }));
+        remoteUuid = await transport.createConversation(signal);
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          remoteUuid,
+          remoteTransport: transport.kind,
+          remoteAgentUuid: connection.agentUuid,
+        }));
       }
       updateMessage(conversationId, messageId, { stage: 'waiting-first-token' });
-      await executeWorkosStream(
-        token,
+      await transport.executeStream(
         remoteUuid,
         {
-          content: prependBranchContext(pendingBranchContext, content),
-          attachments: (userMessage.attachments ?? [])
+          content: prependBranchContext(continuationContext, content),
+          attachments: messageAttachments
             .filter((attachment) => attachment.status === 'ready' && attachment.url)
-            .map((attachment) => ({ url: attachment.url!, filename: attachment.filename })),
+            .map((attachment) => ({
+              url: attachment.url!,
+              filename: attachment.filename,
+              ...(attachment.mime ? { mime: attachment.mime } : {}),
+            })),
         },
         {
           onText: (text) => {
             consumeBranchContext();
+            const respondedAt = !receivedText && text.length > 0 ? Date.now() : undefined;
             receivedText = receivedText || text.length > 0;
             updateMessage(conversationId, messageId, {
               content: text,
               stage: 'streaming',
               status: 'streaming',
+              ...(respondedAt ? { respondedAt } : {}),
             });
           },
           onActivity: (activity) => {
@@ -769,7 +879,7 @@ export default function App() {
       consumeBranchContext();
       if (terminalError) throw new WorkosApiError(terminalError);
       if (!receivedText) throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的文本。');
-      if (preparedPage && pageDecision.mode !== 'none' && userMessage.pageContext) {
+      if (preparedPage && pageDecision.mode !== 'none' && messagePage) {
         const deliveredAt = Date.now();
         updateConversation(conversationId, (conversation) => {
           const existing = conversation.pages.find((page) =>
@@ -780,7 +890,7 @@ export default function App() {
                 ? existing?.version ?? 1
                 : (existing?.version ?? 0) + 1)
             : {
-                ...userMessage.pageContext!,
+                ...messagePage,
                 sourceId: preparedPage.source.source_id,
                 manifest: preparedPage.manifest,
                 status: 'read' as const,
@@ -811,10 +921,15 @@ export default function App() {
           };
         });
         updateMessage(conversationId, userMessage.id, {
-          pageContext: {
-            ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : userMessage.pageContext),
-            sentAt: deliveredAt,
-          },
+          contextItems: updatePageContextSnapshot(
+            messageContextItems,
+            {
+              ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : messagePage),
+              sentAt: deliveredAt,
+            },
+            pageSnapshot ? undefined : preparation?.error,
+            pageContextDelivery,
+          ),
           pageContextMode,
           pageContextDelivery,
           pageContextIssue: pageSnapshot ? undefined : preparation?.error,
@@ -852,27 +967,28 @@ export default function App() {
   requestRunnerRef.current = runAgentRequest;
 
   const sendMessage = () => {
-    if (!workspaceHydrated || workosToken === null) return;
-    if (!workosToken) {
-      setConnectionIssue('请先保存 WorkOS Token，再发送消息。');
+    if (!workspaceHydrated || workosConnection === null) return;
+    if (!activeConnectionConfigured) {
+      setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送消息。');
       setSettingsOpen(true);
       return;
     }
-    if (activeConversation.draftAttachments.some((attachment) => attachment.status === 'uploading')) {
+    if (draftContextItems.some((item) => item.included
+      && (item.kind === 'file' || item.kind === 'image')
+      && item.status === 'preparing')) {
       setConnectionIssue('附件仍在上传，请等待完成后再发送。');
       return;
     }
-    const readyAttachments = activeConversation.draftAttachments.filter(
-      (attachment) => attachment.status === 'ready' && attachment.url,
-    );
+    const readyAttachments = contextAttachments(draftContextItems).filter((attachment) => attachment.url);
+    const readySelections = contextSelections(draftContextItems);
     const hasContent = activeConversation.draftInput.trim()
-      || activeConversation.draftQuotes.length > 0
+      || readySelections.length > 0
       || readyAttachments.length > 0;
     if (!hasContent) return;
 
     const now = Date.now();
     const conversationAtSend = activeConversation;
-    const pageAtSend = displayedPage;
+    const pageAtSend = contextPage(draftContextItems)?.page ?? displayedPage;
     const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
     const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
     const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
@@ -883,11 +999,14 @@ export default function App() {
       content: activeConversation.draftInput.trim(),
       createdAt: now,
       status: 'complete',
-      references: activeConversation.draftQuotes,
-      attachments: readyAttachments,
-      pageContext: includeCurrentPage
-        ? { ...pageAtSend, status: needsPageRead ? 'reading' : 'read' }
-        : undefined,
+      contextItems: createContextSnapshot(draftContextItems).map((item) =>
+        item.kind === 'page'
+          ? {
+              ...item,
+              status: needsPageRead ? 'preparing' as const : 'ready' as const,
+              page: { ...item.page, status: needsPageRead ? 'reading' as const : 'read' as const },
+            }
+          : item),
     };
     const assistantMessage: ChatMessage = {
       id: makeId('message'),
@@ -909,9 +1028,7 @@ export default function App() {
       updatedAt: now,
       messages: [...conversation.messages, userMessage, assistantMessage],
       draftInput: '',
-      draftQuotes: [],
-      draftAttachments: conversation.draftAttachments.filter((attachment) => attachment.status !== 'ready'),
-      draftPageReference: conversationAtSend.draftPageReference,
+      draftContextItems: retainContextAfterSend(conversation.draftContextItems),
     }));
 
     const pageSnapshotPromise = queuedSnapshot
@@ -930,18 +1047,19 @@ export default function App() {
   };
 
   const retryMessage = (message: ChatMessage) => {
-    if (!workspaceHydrated || !workosToken) return;
+    if (!workspaceHydrated || !activeConnectionConfigured) return;
     const messageIndex = activeConversation.messages.findIndex((item) => item.id === message.id);
     const userMessage = [...activeConversation.messages.slice(0, messageIndex)].reverse().find((item) => item.role === 'user');
     if (!userMessage) return;
     updateMessage(activeConversation.id, message.id, {
       content: '',
+      respondedAt: undefined,
       status: 'queued',
       stage: 'queued',
       errorMessage: undefined,
       activities: [],
     });
-    const retryPage = userMessage.pageContext;
+    const retryPage = contextPage(contextItemsFromMessage(userMessage))?.page;
     const cachedSnapshot = retryPage
       ? pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, retryPage.url))
       : undefined;
@@ -959,32 +1077,148 @@ export default function App() {
     });
   };
 
-  const addAttachments = (files: FileList | null) => {
-    const selectedFiles = Array.from(files ?? []);
-    if (!selectedFiles.length) return;
-    if (!workspaceHydrated || workosToken === null) {
-      setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
-      return;
-    }
-    if (!workosToken) {
-      setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+  const uploadAttachment = useCallback((
+    conversationId: string,
+    attachmentId: string,
+    file: File,
+    localPreviewUrl?: string,
+  ) => {
+    const connection = workosConnection;
+    if (!connection || !isWorkosFileUploadConfigured(connection)) {
+      setConnectionIssue(connection?.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
       setSettingsOpen(true);
       return;
     }
+    if (attachmentUploadsRef.current.has(attachmentId)) return;
+    attachmentUploadsRef.current.add(attachmentId);
+    const fileUploader = createWorkosFileUploader(connection);
+    const previewUrl = isImageFile(file.name, file.type) ? localPreviewUrl : undefined;
+
+    updateConversation(conversationId, (conversation) => ({
+      ...conversation,
+      draftContextItems: updateAttachmentContextItem(
+        conversation.draftContextItems,
+        attachmentId,
+        (item) => ({
+          ...item,
+          status: 'uploading',
+          uploadTransport: connection.transport,
+          errorMessage: undefined,
+        }),
+      ),
+    }));
+
+    void fileUploader.upload(file)
+      .then(({ fileReadUrl }) => {
+        const useRemotePreview = () => {
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftContextItems: updateAttachmentContextItem(
+              conversation.draftContextItems,
+              attachmentId,
+              (item) => ({
+                ...item,
+                status: 'ready',
+                url: fileReadUrl,
+                previewUrl: undefined,
+                uploadTransport: connection.transport,
+                errorMessage: undefined,
+              }),
+            ),
+          }));
+          attachmentFilesRef.current.delete(attachmentId);
+          attachmentUploadsRef.current.delete(attachmentId);
+          if (previewUrl) {
+            window.requestAnimationFrame(() => {
+              URL.revokeObjectURL(previewUrl);
+              attachmentPreviewUrlsRef.current.delete(previewUrl);
+            });
+          }
+        };
+
+        if (!isImageFile(file.name, file.type) || !previewUrl) {
+          useRemotePreview();
+          return;
+        }
+
+        const remoteImage = new Image();
+        remoteImage.onload = useRemotePreview;
+        remoteImage.onerror = () => {
+          updateConversation(conversationId, (conversation) => ({
+            ...conversation,
+            draftContextItems: updateAttachmentContextItem(
+              conversation.draftContextItems,
+              attachmentId,
+              (item) => ({
+                ...item,
+                status: 'ready',
+                url: fileReadUrl,
+                uploadTransport: connection.transport,
+                errorMessage: undefined,
+              }),
+            ),
+          }));
+          attachmentFilesRef.current.delete(attachmentId);
+          attachmentUploadsRef.current.delete(attachmentId);
+        };
+        remoteImage.src = fileReadUrl;
+      })
+      .catch((error: unknown) => {
+        attachmentUploadsRef.current.delete(attachmentId);
+        const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          draftContextItems: updateAttachmentContextItem(
+            conversation.draftContextItems,
+            attachmentId,
+            (item) => ({ ...item, status: 'failed', errorMessage }),
+          ),
+        }));
+        setConnectionIssue(errorMessage);
+      });
+  }, [updateConversation, workosConnection]);
+
+  const addAttachments = (selectedFiles: File[]) => {
+    if (!selectedFiles.length) return 0;
+    if (!workspaceHydrated || workosConnection === null) {
+      setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
+      return 0;
+    }
+    if (!isWorkosFileUploadConfigured(workosConnection)) {
+      setConnectionIssue(workosConnection.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
+      setSettingsOpen(true);
+      return 0;
+    }
 
     const conversationId = activeConversation.id;
-    const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - activeConversation.draftAttachments.length);
+    const attachmentCount = activeConversation.draftContextItems.filter(
+      (item) => item.kind === 'file' || item.kind === 'image',
+    ).length;
+    const availableSlots = Math.max(0, MAX_DRAFT_ATTACHMENTS - attachmentCount);
     const filesToAdd = selectedFiles.slice(0, availableSlots);
     if (!filesToAdd.length) {
       setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件。`);
-      return;
+      return 0;
     }
     if (filesToAdd.length < selectedFiles.length) {
       setConnectionIssue(`每个问题最多添加 ${MAX_DRAFT_ATTACHMENTS} 个附件，已忽略多余文件。`);
     }
 
     const uploads = filesToAdd.map((file) => {
-      const errorMessage = attachmentValidationError(file);
+      const errorMessage = attachmentValidationError(file, workosConnection.transport);
+      let previewUrl: string | undefined;
+      if (isImageFile(file.name, file.type)) {
+        try {
+          previewUrl = URL.createObjectURL(file);
+          attachmentPreviewUrlsRef.current.add(previewUrl);
+        } catch {
+          // The attachment can still upload when the browser cannot create a local preview.
+        }
+      }
       return {
         file,
         attachment: {
@@ -992,51 +1226,118 @@ export default function App() {
           filename: file.name,
           sizeLabel: formatFileSize(file.size),
           status: errorMessage ? 'failed' as const : 'uploading' as const,
+          mime: file.type || undefined,
+          previewUrl,
+          uploadTransport: workosConnection.transport,
           errorMessage: errorMessage ?? undefined,
         },
       };
     });
 
+    uploads.forEach(({ file, attachment }) => {
+      attachmentFilesRef.current.set(attachment.id, file);
+    });
+
     updateConversation(conversationId, (conversation) => ({
       ...conversation,
-      draftAttachments: [...conversation.draftAttachments, ...uploads.map(({ attachment }) => attachment)],
+      draftContextItems: [
+        ...conversation.draftContextItems,
+        ...uploads.map(({ attachment }) => attachmentContextItem(attachment)),
+      ],
     }));
 
     uploads.forEach(({ file, attachment }) => {
-      if (attachment.status === 'failed') return;
-      void uploadWorkosFile(workosToken, file)
-        .then(({ fileReadUrl }) => {
-          updateConversation(conversationId, (conversation) => ({
-            ...conversation,
-            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-              ? { ...item, status: 'ready', url: fileReadUrl, errorMessage: undefined }
-              : item),
-          }));
-        })
-        .catch((error: unknown) => {
-          const errorMessage = error instanceof Error ? error.message : '附件上传失败，请稍后重试。';
-          updateConversation(conversationId, (conversation) => ({
-            ...conversation,
-            draftAttachments: conversation.draftAttachments.map((item) => item.id === attachment.id
-              ? { ...item, status: 'failed', errorMessage }
-              : item),
-          }));
-          setConnectionIssue(errorMessage);
-        });
+      if (attachment.status !== 'failed') uploadAttachment(conversationId, attachment.id, file, attachment.previewUrl);
     });
+    return filesToAdd.length;
   };
 
-  const saveToken = async (value: string) => {
-    const token = await saveWorkosToken(value);
-    setWorkosToken(token);
+  const retryAttachment = (contextItemId: string) => {
+    const item = draftContextItems.find((candidate) => candidate.id === contextItemId);
+    if (!item || (item.kind !== 'file' && item.kind !== 'image') || item.status !== 'failed') return;
+    if (!workosConnection || !isWorkosFileUploadConfigured(workosConnection)) {
+      setConnectionIssue(workosConnection?.transport === 'internal-v2'
+        ? '请先完整配置 WorkOS 内部连接凭证。'
+        : '请先配置 WorkOS 公开 v1 API Token。');
+      setSettingsOpen(true);
+      return;
+    }
+    const file = attachmentFilesRef.current.get(item.attachment.id);
+    if (!file) {
+      const picker = document.createElement('input');
+      picker.type = 'file';
+      picker.accept = attachmentAcceptForChannel(workosConnection.transport);
+      picker.onchange = () => {
+        const replacement = picker.files?.[0];
+        if (!replacement) return;
+        const validationIssue = attachmentValidationError(replacement, workosConnection.transport);
+        if (validationIssue) {
+          setConnectionIssue(validationIssue);
+          return;
+        }
+        const oldPreview = item.attachment.previewUrl;
+        let previewUrl: string | undefined;
+        if (isImageFile(replacement.name, replacement.type)) {
+          try {
+            previewUrl = URL.createObjectURL(replacement);
+            attachmentPreviewUrlsRef.current.add(previewUrl);
+          } catch {
+            // The upload can continue without a local preview.
+          }
+        }
+        if (oldPreview) {
+          URL.revokeObjectURL(oldPreview);
+          attachmentPreviewUrlsRef.current.delete(oldPreview);
+        }
+        attachmentFilesRef.current.set(item.attachment.id, replacement);
+        updateConversation(activeConversation.id, (conversation) => ({
+          ...conversation,
+          draftContextItems: updateAttachmentContextItem(
+            conversation.draftContextItems,
+            item.attachment.id,
+            (attachment) => ({
+              ...attachment,
+              filename: replacement.name,
+              sizeLabel: formatFileSize(replacement.size),
+              mime: replacement.type || undefined,
+              previewUrl,
+              uploadTransport: workosConnection.transport,
+              errorMessage: undefined,
+            }),
+          ),
+        }));
+        uploadAttachment(activeConversation.id, item.attachment.id, replacement, previewUrl);
+      };
+      picker.click();
+      return;
+    }
+    const validationIssue = workosConnection
+      ? attachmentValidationError(file, workosConnection.transport)
+      : '连接配置尚未读取完成。';
+    if (validationIssue) {
+      setConnectionIssue(validationIssue);
+      return;
+    }
+    uploadAttachment(activeConversation.id, item.attachment.id, file, item.attachment.previewUrl);
+  };
+
+  const saveConnection = async (settings: WorkosConnectionSettings) => {
+    stopAllRequests();
+    const saved = await saveWorkosConnectionSettings(settings);
+    setWorkosConnection(saved);
     setConnectionIssue(null);
   };
 
-  const removeToken = async () => {
+  const testConnection = async (settings: WorkosConnectionSettings) => {
+    await validateWorkosConnection(settings);
+    setConnectionIssue(null);
+  };
+
+  const removeCredentials = async (kind: WorkosConnectionSettings['transport']) => {
     stopAllRequests();
-    await removeWorkosToken();
-    setWorkosToken('');
-    setConnectionIssue('Token 已从本机移除。');
+    const saved = await removeWorkosCredentials(kind);
+    setWorkosConnection(saved);
+    setConnectionIssue(kind === 'public-v1' ? 'v1 API Token 已从本机移除。' : 'v2 登录凭证已从本机移除。');
   };
 
   const changeSelectionBubble = (enabled: boolean) => {
@@ -1049,6 +1350,10 @@ export default function App() {
   const clearHistory = () => {
     if (!workspaceHydrated) return;
     stopAllRequests();
+    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    attachmentPreviewUrlsRef.current.clear();
+    attachmentFilesRef.current.clear();
+    attachmentUploadsRef.current.clear();
     const conversation = createConversation(currentPage);
     const tab = createOpenTab(conversation.id);
     setWorkspace({ conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id });
@@ -1056,60 +1361,121 @@ export default function App() {
     setSettingsOpen(false);
   };
 
-  const changeCurrentPageReference = (included: boolean) => {
-    if (!currentPage.url) return;
+  const changeContextItemIncluded = (id: string, included: boolean) => {
     patchActiveConversation({
-      draftPageReference: setPageReferenceIncluded(currentPage, included),
+      draftContextItems: contextItemIncluded(draftContextItems, id, included),
     });
   };
 
+  const branchParent = activeConversation.branch
+    ? workspace.conversations.find((conversation) => conversation.id === activeConversation.branch?.parentConversationId)
+    : undefined;
+  const branchSourceMessage = branchParent && activeConversation.branch?.sourceMessageId
+    ? branchParent.messages.find((message) => message.id === activeConversation.branch?.sourceMessageId)
+    : undefined;
+  const branchParentAlreadyOpen = Boolean(
+    branchParent && workspace.openTabs.some((tab) => tab.conversationId === branchParent.id),
+  );
+  const branchOriginUnavailableReason = !branchParent
+    ? '原会话记录不存在'
+    : branchParent.archivedAt
+      ? '原会话已归档，请先在历史中恢复'
+      : !branchParentAlreadyOpen && workspace.openTabs.length >= MAX_OPEN_TABS
+        ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+        : undefined;
+  const branchOrigin = activeConversation.branch
+    ? {
+        title: branchParent?.title ?? '原会话',
+        timestamp: branchSourceMessage?.respondedAt ?? branchSourceMessage?.createdAt,
+        available: branchOriginUnavailableReason === undefined,
+        unavailableReason: branchOriginUnavailableReason,
+      }
+    : undefined;
+
   return (
     <div className="app-shell">
-      <TopBar tabCount={workspace.openTabs.length} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
         messages={activeConversation.messages}
-        onUseStarter={(value) => patchActiveConversation({ draftInput: value })}
+        branchOrigin={branchOrigin}
+        branchUnavailableReason={runSummary
+          ? '请等待当前回答结束后再创建分支'
+          : workspace.openTabs.length >= MAX_OPEN_TABS
+            ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+            : undefined}
+        onUseStarter={(value) => {
+          patchActiveConversation({ draftInput: value });
+          setComposerFocusRequest((request) => request + 1);
+        }}
+        onEditUserMessage={(message) => {
+          patchActiveConversation({ draftInput: message.content });
+          setComposerFocusRequest((request) => request + 1);
+        }}
         onRetry={retryMessage}
         onBranch={branchFromMessage}
+        onOpenBranchOrigin={() => {
+          if (branchParent) selectHistory(branchParent.id);
+        }}
+        onAddAssistantQuote={(quote) => {
+          updateConversation(activeConversation.id, (conversation) => {
+            const alreadyAdded = conversation.draftContextItems.some((item) => item.kind === 'selection'
+              && item.selection.sourceMessageId === quote.sourceMessageId
+              && item.selection.text === quote.text);
+            return alreadyAdded
+              ? conversation
+              : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
+          });
+        }}
       />
       <Composer
         tabs={workspace.openTabs}
         conversations={workspace.conversations}
         activeTabId={activeOpenTab.id}
         input={activeConversation.draftInput}
-        quotes={activeConversation.draftQuotes}
-        attachments={activeConversation.draftAttachments}
-        currentPage={displayedPage}
-        currentPageIncluded={pageReferenceIncluded}
-        currentPageIssue={pageIssue}
+        focusRequestId={composerFocusRequest}
+        contextItems={draftContextItems}
         activeConversationIds={activeConversationIds}
         runSummary={runSummary}
         historyOpen={historyOpen}
-        tokenState={!workspaceHydrated || workosToken === null ? 'loading' : workosToken ? 'configured' : 'missing'}
-        fileUploadEnabled={Boolean(workosToken)}
+        connectionState={!workspaceHydrated || workosConnection === null ? 'loading' : activeConnectionConfigured ? 'configured' : 'missing'}
+        fileUploadEnabled={Boolean(workosConnection && isWorkosFileUploadConfigured(workosConnection))}
+        fileAccept={workosConnection
+          ? attachmentAcceptForChannel(workosConnection.transport)
+          : attachmentAcceptForChannel('public-v1')}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
-        onAddTab={addTab}
         onCloseTab={closeTab}
-        onNewConversation={newConversation}
+        onNewConversation={startNewConversation}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
-        onRemoveQuote={(id) => patchActiveConversation({
-          draftQuotes: activeConversation.draftQuotes.filter((quote) => quote.id !== id),
-        })}
-        onRemoveAttachment={(id) => patchActiveConversation({
-          draftAttachments: activeConversation.draftAttachments.filter((attachment) => attachment.id !== id),
-        })}
-        onCurrentPageIncludedChange={changeCurrentPageReference}
+        onContextIncludedChange={changeContextItemIncluded}
+        onRetryAttachment={retryAttachment}
+        onRemoveContextItem={(id) => {
+          const removed = draftContextItems.find((item) => item.id === id);
+          if (removed && (removed.kind === 'file' || removed.kind === 'image') && removed.attachment.previewUrl) {
+            URL.revokeObjectURL(removed.attachment.previewUrl);
+            attachmentPreviewUrlsRef.current.delete(removed.attachment.previewUrl);
+          }
+          if (removed && (removed.kind === 'file' || removed.kind === 'image')) {
+            attachmentFilesRef.current.delete(removed.attachment.id);
+          }
+          patchActiveConversation({
+            draftContextItems: removeContextItem(draftContextItems, id),
+          });
+        }}
         onFilesSelected={addAttachments}
         onAttachmentUnavailable={() => {
-          if (workosToken === null) {
+          if (workosConnection === null) {
             setConnectionIssue('正在读取连接配置，请稍后再添加附件。');
             return;
           }
-          setConnectionIssue('请先保存 WorkOS Token，再添加附件。');
+          setConnectionIssue(workosConnection.transport === 'internal-v2'
+            ? '请先完整配置 WorkOS 内部连接凭证。'
+            : '请先配置 WorkOS 公开 v1 API Token。');
           setSettingsOpen(true);
         }}
+        smartSelectionActive={smartSelectionActive}
+        onStartSmartSelection={startSmartSelection}
         onSend={sendMessage}
         onStop={() => {
           if (runSummary) stopRequest(activeConversation.id, runSummary.activeMessageId);
@@ -1121,6 +1487,7 @@ export default function App() {
         conversations={workspace.conversations}
         openTabs={workspace.openTabs}
         activeId={activeConversation.id}
+        maxTabs={MAX_OPEN_TABS}
         onClose={() => setHistoryOpen(false)}
         onSelect={selectHistory}
         onArchive={archiveConversation}
@@ -1128,11 +1495,12 @@ export default function App() {
       />
       <SettingsDrawer
         open={settingsOpen}
-        savedToken={workosToken ?? ''}
+        settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
         connectionIssue={connectionIssue}
         bubbleEnabled={selectionBubbleEnabled}
-        onSaveToken={saveToken}
-        onRemoveToken={removeToken}
+        onSaveConnection={saveConnection}
+        onTestConnection={testConnection}
+        onRemoveCredentials={removeCredentials}
         onBubbleEnabledChange={changeSelectionBubble}
         onClose={() => setSettingsOpen(false)}
         onClearHistory={() => setClearDialogOpen(true)}

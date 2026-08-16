@@ -1,5 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { validateAgentUuid, type WorkosConnectionSettings } from '../../services/workosConnection';
+import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate';
+import type { WorkosTransportKind } from '../../services/workosTransport';
+import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
+import { uploadChannelCapabilities } from '../fileTypes';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface HistoryPopoverProps {
@@ -7,6 +12,7 @@ interface HistoryPopoverProps {
   conversations: Conversation[];
   openTabs: OpenConversationTab[];
   activeId: string;
+  maxTabs: number;
   onClose: () => void;
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
@@ -18,6 +24,7 @@ export function HistoryPopover({
   conversations,
   openTabs,
   activeId,
+  maxTabs,
   onClose,
   onSelect,
   onArchive,
@@ -27,6 +34,7 @@ export function HistoryPopover({
   const activeConversations = conversations.filter((conversation) => !conversation.archivedAt);
   const archivedConversations = conversations.filter((conversation) => conversation.archivedAt);
   const visibleConversations = view === 'active' ? activeConversations : archivedConversations;
+  const conversationForest = buildConversationForest(visibleConversations);
 
   useEffect(() => {
     if (!open) return;
@@ -39,6 +47,68 @@ export function HistoryPopover({
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const renderConversationNode = (node: ConversationTreeNode): ReactNode => {
+    const { conversation, children } = node;
+    const openIndex = openTabs.findIndex((tab) => tab.conversationId === conversation.id);
+    const canOpen = view !== 'archived' && (openIndex >= 0 || openTabs.length < maxTabs);
+    const detail = openIndex >= 0
+      ? `${conversation.subtitle} · 已在工作页 ${openIndex + 1}`
+      : !canOpen && view !== 'archived'
+        ? `${conversation.subtitle} · 请先关闭一个工作页`
+        : conversation.subtitle;
+    return (
+      <li className={`conversation-tree-node${conversation.branch ? ' is-branch' : ''}`} key={conversation.id}>
+        <div className={`conversation-item${conversation.id === activeId ? ' is-active' : ''}`}>
+          <button
+            className="conversation-open-button"
+            type="button"
+            onClick={() => onSelect(conversation.id)}
+            disabled={!canOpen}
+            title={!canOpen && view !== 'archived' ? `最多打开 ${maxTabs} 个工作页，请先关闭一个` : undefined}
+          >
+            <span className="conversation-icon" aria-hidden="true">
+              <KoboyoIcon name={conversation.branch ? 'fork' : 'quote'} size={14} />
+            </span>
+            <span className="conversation-copy">
+              <strong>{conversation.title}</strong>
+              <small>{detail}</small>
+            </span>
+            <span className="conversation-tab-count" title={`${conversation.pages.length} 个页面来源`}>
+              {conversation.pages.length}
+            </span>
+          </button>
+          {view === 'active' ? (
+            <button
+              className="conversation-row-action pressable"
+              type="button"
+              onClick={() => onArchive(conversation.id)}
+              disabled={openIndex >= 0}
+              aria-label={`归档会话：${conversation.title}`}
+              title={openIndex >= 0 ? '请先关闭对应工作页' : '归档会话'}
+            >
+              <KoboyoIcon name="archive" size={13} />
+            </button>
+          ) : (
+            <button
+              className="conversation-row-action pressable"
+              type="button"
+              onClick={() => onRestore(conversation.id)}
+              aria-label={`恢复会话：${conversation.title}`}
+              title="恢复到历史会话"
+            >
+              <KoboyoIcon name="cycle" size={13} />
+            </button>
+          )}
+        </div>
+        {children.length > 0 && (
+          <ol className="conversation-tree-children">
+            {children.map((child) => renderConversationNode(child))}
+          </ol>
+        )}
+      </li>
+    );
+  };
 
   return (
     <div className="history-popover-layer">
@@ -79,58 +149,11 @@ export function HistoryPopover({
               <span>{view === 'active' ? '还没有历史会话' : '归档中没有会话'}</span>
             </div>
           )}
-          {visibleConversations.map((conversation) => {
-            const openIndex = openTabs.findIndex((tab) => tab.conversationId === conversation.id);
-            const detail = openIndex >= 0
-              ? `${conversation.subtitle} · 已在 Tab ${openIndex + 1}`
-              : conversation.subtitle;
-            return (
-              <div
-                className={`conversation-item${conversation.id === activeId ? ' is-active' : ''}`}
-                key={conversation.id}
-              >
-                <button
-                  className="conversation-open-button"
-                  type="button"
-                  onClick={() => onSelect(conversation.id)}
-                  disabled={view === 'archived'}
-                >
-                  <span className="conversation-icon" aria-hidden="true">
-                    <KoboyoIcon name={conversation.branch ? 'message-square-plus' : 'quote'} size={14} />
-                  </span>
-                  <span className="conversation-copy">
-                    <strong>{conversation.title}</strong>
-                    <small>{detail}</small>
-                  </span>
-                  <span className="conversation-tab-count" title={`${conversation.pages.length} 个页面来源`}>
-                    {conversation.pages.length}
-                  </span>
-                </button>
-                {view === 'active' ? (
-                  <button
-                    className="conversation-row-action pressable"
-                    type="button"
-                    onClick={() => onArchive(conversation.id)}
-                    disabled={openIndex >= 0}
-                    aria-label={`归档会话：${conversation.title}`}
-                    title={openIndex >= 0 ? '请先关闭对应 Tab' : '归档会话'}
-                  >
-                    <KoboyoIcon name="archive" size={13} />
-                  </button>
-                ) : (
-                  <button
-                    className="conversation-row-action pressable"
-                    type="button"
-                    onClick={() => onRestore(conversation.id)}
-                    aria-label={`恢复会话：${conversation.title}`}
-                    title="恢复到历史会话"
-                  >
-                    <KoboyoIcon name="cycle" size={13} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
+          {visibleConversations.length > 0 && (
+            <ol className="conversation-tree">
+              {conversationForest.map((node) => renderConversationNode(node))}
+            </ol>
+          )}
         </nav>
       </aside>
     </div>
@@ -139,11 +162,12 @@ export function HistoryPopover({
 
 interface SettingsDrawerProps {
   open: boolean;
-  savedToken: string;
+  settings: WorkosConnectionSettings;
   connectionIssue: string | null;
   bubbleEnabled: boolean;
-  onSaveToken: (token: string) => Promise<void>;
-  onRemoveToken: () => Promise<void>;
+  onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
+  onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
+  onRemoveCredentials: (kind: WorkosTransportKind) => Promise<void>;
   onBubbleEnabledChange: (enabled: boolean) => void;
   onClose: () => void;
   onClearHistory: () => void;
@@ -151,37 +175,80 @@ interface SettingsDrawerProps {
 
 export function SettingsDrawer({
   open,
-  savedToken,
+  settings,
   connectionIssue,
   bubbleEnabled,
-  onSaveToken,
-  onRemoveToken,
+  onSaveConnection,
+  onTestConnection,
+  onRemoveCredentials,
   onBubbleEnabledChange,
   onClose,
   onClearHistory,
 }: SettingsDrawerProps) {
   const [showToken, setShowToken] = useState(false);
-  const [token, setToken] = useState(savedToken);
+  const [draft, setDraft] = useState(settings);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'passed' | 'error'>('idle');
+  const [copyTemplateState, setCopyTemplateState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setToken(savedToken);
+    setDraft(settings);
     setShowToken(false);
     setSaveState('idle');
+    setTestState('idle');
+    setCopyTemplateState('idle');
     setLocalError(null);
-  }, [open, savedToken]);
+  }, [open, settings]);
 
-  const submitToken = () => {
+  const patchDraft = (patch: Partial<WorkosConnectionSettings>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+    setSaveState('idle');
+    setTestState('idle');
+    setLocalError(null);
+  };
+
+  const submitConnection = () => {
     setSaveState('saving');
     setLocalError(null);
-    void onSaveToken(token)
+    void onSaveConnection(draft)
       .then(() => setSaveState('saved'))
       .catch((error: unknown) => {
         setSaveState('error');
         setLocalError(error instanceof Error ? error.message : 'Token 保存失败。');
       });
+  };
+
+  const testConnection = () => {
+    setTestState('testing');
+    setLocalError(null);
+    void onTestConnection(draft)
+      .then(() => setTestState('passed'))
+      .catch((error: unknown) => {
+        setTestState('error');
+        setLocalError(error instanceof Error ? error.message : '连接测试失败。');
+      });
+  };
+
+  const agentUuidError = draft.agentUuid.trim() ? validateAgentUuid(draft.agentUuid) : null;
+  const activeConfigured = validateAgentUuid(draft.agentUuid) === null && (draft.transport === 'public-v1'
+    ? Boolean(draft.publicApiToken.trim())
+    : Boolean(
+        draft.internalV2.accessToken.trim()
+        && draft.internalV2.userUuid.trim()
+        && draft.internalV2.organizationUuid.trim(),
+      ));
+
+  const copyAgentTemplate = async () => {
+    try {
+      await navigator.clipboard.writeText(YEMAI_AGENT_MD_TEMPLATE);
+      setCopyTemplateState('copied');
+      window.setTimeout(() => setCopyTemplateState('idle'), 1600);
+    } catch {
+      setCopyTemplateState('error');
+      window.setTimeout(() => setCopyTemplateState('idle'), 2000);
+    }
   };
 
   if (!open) return null;
@@ -205,57 +272,198 @@ export function SettingsDrawer({
             className="settings-section"
             onSubmit={(event) => {
               event.preventDefault();
-              submitToken();
+              submitConnection();
             }}
           >
-            <label htmlFor="workos-token">WorkOS Token</label>
-            <div className="token-field">
+            <label htmlFor="workos-agent-uuid">Agent UUID</label>
+            <div className="agent-uuid-field">
               <input
-                id="workos-token"
-                name="workosToken"
-                type={showToken ? 'text' : 'password'}
-                value={token}
-                onChange={(event) => {
-                  setToken(event.target.value);
-                  setSaveState('idle');
-                  setLocalError(null);
-                }}
-                placeholder="输入你的 AP_… Token"
+                id="workos-agent-uuid"
+                name="workosAgentUuid"
+                value={draft.agentUuid}
+                onChange={(event) => patchDraft({ agentUuid: event.target.value })}
+                placeholder="例如：409b06a1-…"
                 autoComplete="off"
                 spellCheck={false}
+                aria-describedby="workos-agent-uuid-help"
+                aria-invalid={Boolean(agentUuidError)}
               />
-              <button className="token-visibility pressable" type="button" onClick={() => setShowToken((value) => !value)} aria-label={showToken ? '隐藏 Token' : '显示 Token'}>
-                <KoboyoIcon name={showToken ? 'eye-off' : 'eye'} size={16} />
+            </div>
+            <p className="field-help" id="workos-agent-uuid-help">v1 与 v2 共用。更换后，下一条消息会连接新 Agent，并携带当前会话的可见上下文。</p>
+            {agentUuidError && <p className="token-error" role="alert">{agentUuidError}</p>}
+
+            <label>连接通道</label>
+            <div className="transport-picker" role="radiogroup" aria-label="WorkOS 连接通道">
+              <button
+                className={draft.transport === 'public-v1' ? 'is-active' : ''}
+                type="button"
+                role="radio"
+                aria-checked={draft.transport === 'public-v1'}
+                onClick={() => patchDraft({ transport: 'public-v1' })}
+              >
+                <strong>官方 API</strong>
+                <small>v1 · 单 Token</small>
+              </button>
+              <button
+                className={draft.transport === 'internal-v2' ? 'is-active' : ''}
+                type="button"
+                role="radio"
+                aria-checked={draft.transport === 'internal-v2'}
+                onClick={() => patchDraft({ transport: 'internal-v2' })}
+              >
+                <strong>实验性实时连接</strong>
+                <small>v2 · 多轮流式</small>
               </button>
             </div>
-            <p className="field-help">Token 仅保存在本机可信扩展上下文，不会发送给网页内容脚本。</p>
+            <div className="transport-capabilities" aria-label="当前连接支持的附件类型">
+              <span>当前连接支持</span>
+              <ul>
+                {uploadChannelCapabilities(draft.transport).map((capability) => (
+                  <li key={capability}>
+                    <KoboyoIcon name="solid-checkmark" size={10} />
+                    {capability}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {draft.transport === 'public-v1' ? (
+              <>
+                <label htmlFor="workos-token">WorkOS API Token</label>
+                <div className="token-field">
+                  <input
+                    id="workos-token"
+                    name="workosToken"
+                    type={showToken ? 'text' : 'password'}
+                    value={draft.publicApiToken}
+                    onChange={(event) => patchDraft({ publicApiToken: event.target.value })}
+                    placeholder="输入你的 AP_… Token"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button className="token-visibility pressable" type="button" onClick={() => setShowToken((value) => !value)} aria-label={showToken ? '隐藏 Token' : '显示 Token'}>
+                    <KoboyoIcon name={showToken ? 'eye-off' : 'eye'} size={16} />
+                  </button>
+                </div>
+                <p className="field-help">官方配置简单，但 WorkOS 当前的 v1 多轮流式存在已确认问题。</p>
+              </>
+            ) : (
+              <>
+                <div className="experimental-note">
+                  <strong>个人实验通道</strong>
+                  <p>使用 WorkOS 当前网页端协议。接口正式开放前，平台更新可能导致连接失效。</p>
+                </div>
+                <label htmlFor="workos-v2-token">登录 Access Token</label>
+                <div className="token-field">
+                  <input
+                    id="workos-v2-token"
+                    name="workosV2Token"
+                    type={showToken ? 'text' : 'password'}
+                    value={draft.internalV2.accessToken}
+                    onChange={(event) => patchDraft({
+                      internalV2: { ...draft.internalV2, accessToken: event.target.value },
+                    })}
+                    placeholder="WorkOS 网页端 Access Token"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button className="token-visibility pressable" type="button" onClick={() => setShowToken((value) => !value)} aria-label={showToken ? '隐藏 Token' : '显示 Token'}>
+                    <KoboyoIcon name={showToken ? 'eye-off' : 'eye'} size={16} />
+                  </button>
+                </div>
+                <div className="identity-grid">
+                  <label htmlFor="workos-user-uuid">
+                    <span>User UUID</span>
+                    <input
+                      id="workos-user-uuid"
+                      value={draft.internalV2.userUuid}
+                      onChange={(event) => patchDraft({
+                        internalV2: { ...draft.internalV2, userUuid: event.target.value },
+                      })}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label htmlFor="workos-organization-uuid">
+                    <span>Organization UUID</span>
+                    <input
+                      id="workos-organization-uuid"
+                      value={draft.internalV2.organizationUuid}
+                      onChange={(event) => patchDraft({
+                        internalV2: { ...draft.internalV2, organizationUuid: event.target.value },
+                      })}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+                <p className="field-help">身份标识会在每次请求前按 WorkOS 网页端规则加密，只保存在本机扩展中。</p>
+              </>
+            )}
             {(localError || connectionIssue) && (
               <p className="token-error" role="alert">{localError ?? connectionIssue}</p>
             )}
-            <button
-              className="save-token-button pressable"
-              type="submit"
-              disabled={!token.trim() || saveState === 'saving'}
-            >
-              {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存在本机' : '保存 Token'}
-            </button>
-            {savedToken && (
+            <div className="connection-actions">
+              <button
+                className="secondary-button pressable"
+                type="button"
+                disabled={!activeConfigured || testState === 'testing'}
+                onClick={testConnection}
+              >
+                {testState === 'testing' ? '正在测试…' : testState === 'passed' ? '连接正常' : '测试连接'}
+              </button>
+              <button
+                className="save-token-button pressable"
+                type="submit"
+                disabled={!activeConfigured || saveState === 'saving'}
+              >
+                {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存在本机' : '保存连接'}
+              </button>
+            </div>
+            {activeConfigured && (
               <button
                 className="remove-token-button pressable"
                 type="button"
                 onClick={() => {
-                  void onRemoveToken()
+                  void onRemoveCredentials(draft.transport)
                     .then(() => {
-                      setToken('');
+                      setDraft((current) => current.transport === 'public-v1'
+                        ? { ...current, publicApiToken: '' }
+                        : { ...current, internalV2: { accessToken: '', userUuid: '', organizationUuid: '' } });
                       setSaveState('idle');
+                      setTestState('idle');
                     })
-                    .catch((error: unknown) => setLocalError(error instanceof Error ? error.message : 'Token 移除失败。'));
+                    .catch((error: unknown) => setLocalError(error instanceof Error ? error.message : '连接凭证移除失败。'));
                 }}
               >
-                移除 Token
+                移除当前通道凭证
               </button>
             )}
           </form>
+
+          <section className="settings-section agent-template-section">
+            <div className="agent-template-heading">
+              <div>
+                <strong>Agent.md 推荐模板</strong>
+                <p>复制到 WorkOS Agent 的最高优先级人设中，让 Agent 正确理解页脉的上下文和安全边界。</p>
+              </div>
+              <button
+                className="copy-template-button pressable"
+                type="button"
+                onClick={() => void copyAgentTemplate()}
+                aria-label={copyTemplateState === 'copied' ? 'Agent.md 模板已复制' : '复制 Agent.md 推荐模板'}
+              >
+                <KoboyoIcon name={copyTemplateState === 'copied' ? 'solid-checkmark' : 'copy'} size={13} />
+                <span aria-live="polite">
+                  {copyTemplateState === 'copied' ? '已复制' : copyTemplateState === 'error' ? '复制失败' : '复制模板'}
+                </span>
+              </button>
+            </div>
+            <details className="agent-template-preview">
+              <summary>查看完整模板</summary>
+              <pre><code>{YEMAI_AGENT_MD_TEMPLATE}</code></pre>
+            </details>
+          </section>
 
           <section className="settings-section settings-section--row">
             <div>

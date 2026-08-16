@@ -89,10 +89,13 @@ function renderSelection(reference: SelectionReference, heading: ContentHeading)
   const context = [reference.selection.prefix, reference.selection.text, reference.selection.suffix]
     .filter(Boolean)
     .join('\n');
+  const selectionLabel = reference.source.access_hint === 'local_document'
+    ? '回答中的选中内容（引用资料）'
+    : '用户选中的原文（外部资料）';
   return [
     ...sourceLines(reference.source),
     '',
-    `${heading} 用户选中的原文（外部资料）`,
+    `${heading} ${selectionLabel}`,
     '',
     quoted(context),
     ...(reference.selection.truncated ? ['', '> 选中内容已截断。'] : []),

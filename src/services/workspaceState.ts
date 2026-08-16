@@ -1,6 +1,7 @@
 import type {
   ChatMessage,
   Conversation,
+  ContextItem,
   DraftAttachment,
   OpenConversationTab,
   PageContext,
@@ -8,8 +9,9 @@ import type {
   RunActivity,
   WorkspaceState,
 } from '../sidepanel/types';
+import { legacyDraftContextItems } from '../sidepanel/contextItems';
 
-export const WORKSPACE_STATE_VERSION = 4;
+export const WORKSPACE_STATE_VERSION = 5;
 export const MAX_OPEN_TABS = 10;
 
 export interface WorkspaceSnapshot extends WorkspaceState {
@@ -37,6 +39,17 @@ interface LegacyConversation {
   activeTabId: string;
   tabs: LegacyConversationTab[];
 }
+
+interface LegacyConversationV4 extends Omit<Conversation, 'draftContextItems'> {
+  draftQuotes: QuoteReference[];
+  draftAttachments: DraftAttachment[];
+  draftPageReference: {
+    url: string;
+    mode: 'included' | 'excluded';
+  };
+}
+
+type LegacyConversationV2 = Omit<LegacyConversationV4, 'draftPageReference'>;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -100,7 +113,9 @@ function isQuote(value: unknown): value is QuoteReference {
     && typeof value.text === 'string'
     && typeof value.pageTitle === 'string'
     && typeof value.pageUrl === 'string'
-    && typeof value.createdAt === 'number';
+    && typeof value.createdAt === 'number'
+    && (value.origin === undefined || value.origin === 'page' || value.origin === 'assistant')
+    && (value.sourceMessageId === undefined || typeof value.sourceMessageId === 'string');
 }
 
 function isAttachment(value: unknown): value is DraftAttachment {
@@ -109,14 +124,63 @@ function isAttachment(value: unknown): value is DraftAttachment {
     && typeof value.filename === 'string'
     && typeof value.sizeLabel === 'string'
     && typeof value.status === 'string'
+    && (value.mime === undefined || typeof value.mime === 'string')
     && (value.url === undefined || typeof value.url === 'string')
+    && (value.uploadTransport === undefined || value.uploadTransport === 'public-v1' || value.uploadTransport === 'internal-v2')
     && (value.errorMessage === undefined || typeof value.errorMessage === 'string');
+}
+
+function isContextItem(value: unknown): value is ContextItem {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.kind !== 'string'
+    || typeof value.included !== 'boolean'
+    || !['preparing', 'ready', 'failed'].includes(value.status as string)
+    || typeof value.createdAt !== 'number'
+    || (value.issue !== undefined && typeof value.issue !== 'string')) return false;
+
+  if (value.kind === 'page') {
+    return isPage(value.page)
+      && (value.role === 'current' || value.role === 'referenced')
+      && (value.delivery === undefined || ['introduce', 'update', 'reuse'].includes(value.delivery as string));
+  }
+  if (value.kind === 'selection') return isQuote(value.selection);
+  if (value.kind === 'file' || value.kind === 'image') return isAttachment(value.attachment);
+  if (value.kind === 'memory') {
+    return isRecord(value.memory)
+      && typeof value.memory.title === 'string'
+      && typeof value.memory.excerpt === 'string'
+      && (value.memory.sourceId === undefined || typeof value.memory.sourceId === 'string');
+  }
+  if (value.kind === 'link') {
+    return isRecord(value.link)
+      && typeof value.link.title === 'string'
+      && typeof value.link.url === 'string'
+      && (value.link.site === undefined || typeof value.link.site === 'string');
+  }
+  return false;
 }
 
 function recoverAttachment(attachment: DraftAttachment): DraftAttachment {
   return attachment.status === 'uploading'
-    ? { ...attachment, status: 'failed', errorMessage: '上传在浏览器关闭前未完成，请删除后重新添加。' }
+    ? { ...attachment, status: 'failed', errorMessage: '上传在浏览器关闭前未完成，请重新选择原文件。' }
     : attachment;
+}
+
+function cleanAttachment(attachment: DraftAttachment): DraftAttachment {
+  const { previewUrl: _previewUrl, ...persisted } = attachment;
+  return persisted;
+}
+
+function recoverContextItem(item: ContextItem): ContextItem {
+  if (item.kind !== 'file' && item.kind !== 'image') return item;
+  const attachment = recoverAttachment(item.attachment);
+  return {
+    ...item,
+    status: attachment.status === 'uploading' ? 'preparing' : attachment.status,
+    issue: attachment.errorMessage,
+    attachment,
+  };
 }
 
 function isActivity(value: unknown): value is RunActivity {
@@ -133,12 +197,14 @@ function isMessage(value: unknown): value is ChatMessage {
     && (value.role === 'user' || value.role === 'assistant')
     && typeof value.content === 'string'
     && typeof value.createdAt === 'number'
+    && (value.respondedAt === undefined || typeof value.respondedAt === 'number')
     && typeof value.status === 'string'
     && (value.pageContext === undefined || isPage(value.pageContext))
     && (value.pageContextMode === undefined || ['manifest', 'reuse', 'snapshot'].includes(value.pageContextMode as string))
     && (value.pageContextDelivery === undefined || ['introduce', 'update', 'reuse'].includes(value.pageContextDelivery as string))
     && (value.pageContextIssue === undefined || typeof value.pageContextIssue === 'string')
     && (value.activities === undefined || (Array.isArray(value.activities) && value.activities.every(isActivity)))
+    && (value.contextItems === undefined || (Array.isArray(value.contextItems) && value.contextItems.every(isContextItem)))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isQuote)))
     && (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment)));
 }
@@ -151,9 +217,11 @@ function isBranch(value: unknown) {
     && typeof value.ordinal === 'number';
 }
 
-function isConversationV2(value: unknown): value is Omit<Conversation, 'draftPageReference'> {
+function isConversationBase(value: unknown): value is UnknownRecord {
   return isRecord(value)
     && typeof value.id === 'string'
+    && (value.remoteTransport === undefined || value.remoteTransport === 'public-v1' || value.remoteTransport === 'internal-v2')
+    && (value.remoteAgentUuid === undefined || typeof value.remoteAgentUuid === 'string')
     && typeof value.title === 'string'
     && typeof value.subtitle === 'string'
     && typeof value.updatedAt === 'number'
@@ -165,16 +233,30 @@ function isConversationV2(value: unknown): value is Omit<Conversation, 'draftPag
     && value.pages.every(isPage)
     && Array.isArray(value.messages)
     && value.messages.every(isMessage)
-    && typeof value.draftInput === 'string'
+    && typeof value.draftInput === 'string';
+}
+
+function isConversation(value: unknown): value is Conversation {
+  return isConversationBase(value)
+    && Array.isArray(value.draftContextItems)
+    && value.draftContextItems.every(isContextItem);
+}
+
+function isConversationV4(value: unknown): value is LegacyConversationV4 {
+  return isConversationBase(value)
+    && Array.isArray(value.draftQuotes)
+    && value.draftQuotes.every(isQuote)
+    && Array.isArray(value.draftAttachments)
+    && value.draftAttachments.every(isAttachment)
+    && isDraftPageReference(value.draftPageReference);
+}
+
+function isConversationV2(value: unknown): value is LegacyConversationV2 {
+  return isConversationBase(value)
     && Array.isArray(value.draftQuotes)
     && value.draftQuotes.every(isQuote)
     && Array.isArray(value.draftAttachments)
     && value.draftAttachments.every(isAttachment);
-}
-
-function isConversation(value: unknown): value is Conversation {
-  return isConversationV2(value)
-    && isDraftPageReference((value as unknown as UnknownRecord).draftPageReference);
 }
 
 function isOpenTab(value: unknown): value is OpenConversationTab {
@@ -275,9 +357,12 @@ function migrateLegacyConversations(legacyConversations: LegacyConversation[]) {
       pages: pages.length ? pages : [{ ...activeTab.page }],
       messages,
       draftInput: activeTab.draftInput,
-      draftQuotes: activeTab.draftQuotes,
-      draftAttachments: activeTab.draftAttachments,
-      draftPageReference: { url: activeTab.page.url, mode: 'included' },
+      draftContextItems: legacyDraftContextItems(
+        activeTab.page,
+        { url: activeTab.page.url, mode: 'included' },
+        activeTab.draftQuotes,
+        activeTab.draftAttachments,
+      ),
     };
     return { conversation, baseTitle: title.baseTitle, depth: title.depth };
   });
@@ -332,9 +417,12 @@ function migrateLegacyConversations(legacyConversations: LegacyConversation[]) {
         pages: [{ ...tab.page }],
         messages: [],
         draftInput: tab.draftInput,
-        draftQuotes: tab.draftQuotes,
-        draftAttachments: tab.draftAttachments,
-        draftPageReference: { url: tab.page.url, mode: 'included' },
+        draftContextItems: legacyDraftContextItems(
+          tab.page,
+          { url: tab.page.url, mode: 'included' },
+          tab.draftQuotes,
+          tab.draftAttachments,
+        ),
       }));
   });
 
@@ -349,7 +437,10 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Dat
     messages: conversation.messages.map((message) => ({
       ...message,
       pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
+      attachments: message.attachments?.map(cleanAttachment),
+      contextItems: message.contextItems?.map(cleanContextItem),
     })),
+    draftContextItems: conversation.draftContextItems.map(cleanContextItem),
   }));
   return {
     version: WORKSPACE_STATE_VERSION,
@@ -381,7 +472,17 @@ function cleanPageContext(page: PageContext): PageContext {
   };
 }
 
-function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
+function cleanContextItem(item: ContextItem): ContextItem {
+  if (item.kind === 'page') return { ...item, page: cleanPageContext(item.page) };
+  if (item.kind === 'selection') return { ...item, selection: { ...item.selection } };
+  if (item.kind === 'file' || item.kind === 'image') {
+    return { ...item, attachment: cleanAttachment(item.attachment) };
+  }
+  if (item.kind === 'memory') return { ...item, memory: { ...item.memory } };
+  return { ...item, link: { ...item.link } };
+}
+
+function normalizeWorkspace<T extends { id: string }>(
   value: UnknownRecord,
   recoveredAt: number,
   validator: (conversation: unknown) => conversation is T,
@@ -403,7 +504,7 @@ function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
       page: cleanPageContext(conversation.page),
       pages: conversation.pages.map(cleanPageContext),
       messages: conversation.messages.map((message) => recoverMessage(message, recoveredAt)),
-      draftAttachments: conversation.draftAttachments.map(recoverAttachment),
+      draftContextItems: conversation.draftContextItems.map(recoverContextItem),
     }));
   const conversationIds = new Set(conversations.map((conversation) => conversation.id));
   const openConversationIds = new Set<string>();
@@ -424,19 +525,44 @@ function normalizeWorkspace<T extends Omit<Conversation, 'draftPageReference'>>(
   return createWorkspaceSnapshot({ conversations: normalizedConversations, openTabs, activeOpenTabId }, value.savedAt);
 }
 
-function normalizeV4(value: UnknownRecord, recoveredAt: number) {
+function normalizeV5(value: UnknownRecord, recoveredAt: number) {
   return normalizeWorkspace(value, recoveredAt, isConversation, (conversation) => conversation as Conversation);
+}
+
+function migrateV4Conversation(conversation: LegacyConversationV4): Conversation {
+  const { draftQuotes, draftAttachments, draftPageReference, ...current } = conversation;
+  return {
+    ...current,
+    draftContextItems: legacyDraftContextItems(
+      conversation.page,
+      draftPageReference,
+      draftQuotes,
+      draftAttachments,
+    ),
+  };
+}
+
+function normalizeV4(value: UnknownRecord, recoveredAt: number) {
+  return normalizeWorkspace(value, recoveredAt, isConversationV4, migrateV4Conversation);
 }
 
 function normalizeV3(value: UnknownRecord, recoveredAt: number) {
-  return normalizeWorkspace(value, recoveredAt, isConversation, (conversation) => conversation as Conversation);
+  return normalizeWorkspace(value, recoveredAt, isConversationV4, migrateV4Conversation);
 }
 
 function normalizeV2(value: UnknownRecord, recoveredAt: number) {
-  return normalizeWorkspace(value, recoveredAt, isConversationV2, (conversation) => ({
-    ...conversation,
-    draftPageReference: { url: conversation.page.url, mode: 'included' },
-  }));
+  return normalizeWorkspace(value, recoveredAt, isConversationV2, (conversation) => {
+    const { draftQuotes, draftAttachments, ...current } = conversation;
+    return {
+      ...current,
+      draftContextItems: legacyDraftContextItems(
+        conversation.page,
+        undefined,
+        draftQuotes,
+        draftAttachments,
+      ),
+    };
+  });
 }
 
 function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapshot | null {
@@ -450,7 +576,7 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
   const conversations = migrateLegacyConversations(legacyConversations).map((conversation) => ({
     ...conversation,
     messages: conversation.messages.map((message) => recoverMessage(message, recoveredAt)),
-    draftAttachments: conversation.draftAttachments.map(recoverAttachment),
+    draftContextItems: conversation.draftContextItems.map(recoverContextItem),
   }));
   const activeConversationId = conversations.some((conversation) => conversation.id === value.activeConversationId)
     ? value.activeConversationId
@@ -469,7 +595,8 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
 
 export function normalizeWorkspaceSnapshot(value: unknown, recoveredAt = Date.now()): WorkspaceSnapshot | null {
   if (!isRecord(value)) return null;
-  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV4(value, recoveredAt);
+  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV5(value, recoveredAt);
+  if (value.version === 4) return normalizeV4(value, recoveredAt);
   if (value.version === 3) return normalizeV3(value, recoveredAt);
   if (value.version === 2) return normalizeV2(value, recoveredAt);
   if (value.version === 1) return normalizeV1(value, recoveredAt);

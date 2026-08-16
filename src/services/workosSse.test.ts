@@ -5,6 +5,10 @@ function nestedEvent(event: unknown) {
   return `data: ${JSON.stringify({ data: JSON.stringify(event) })}\n\n`;
 }
 
+function runEvent(runId: string, eventName: string, event: unknown) {
+  return `event: ${eventName}\ndata: ${JSON.stringify({ runId, data: JSON.stringify(event) })}\n\n`;
+}
+
 describe('WorkosSseParser', () => {
   it('parses fragmented nested SSE data and emits only text parts', () => {
     const onText = vi.fn();
@@ -64,6 +68,53 @@ describe('WorkosSseParser', () => {
     }));
 
     expect(onText).toHaveBeenLastCalledWith('你好！');
+  });
+
+  it('ignores stale events and only completes the expected v2 run', () => {
+    const onText = vi.fn();
+    const onComplete = vi.fn();
+    const parser = new WorkosSseParser({ onText, onComplete }, { expectedRunId: 'run-current' });
+
+    parser.push(runEvent('run-old', 'xybot-stream-complete', {}));
+    expect(parser.isComplete).toBe(false);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    parser.push(runEvent('run-current', 'message', {
+      type: 'message.part.updated',
+      properties: { part: { id: 'answer', type: 'text', text: '当前回答' } },
+    }));
+    parser.push(runEvent('run-current', 'xybot-stream-complete', {}));
+
+    expect(onText).toHaveBeenLastCalledWith('当前回答');
+    expect(parser.isComplete).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
+  it('accepts v2 envelopes whose data payload is already an object', () => {
+    const onText = vi.fn();
+    const parser = new WorkosSseParser({ onText }, { expectedRunId: 'run-object' });
+    parser.push(`event: message\ndata: ${JSON.stringify({
+      runId: 'run-object',
+      data: {
+        type: 'message.part.updated',
+        properties: { part: { id: 'answer', type: 'text', text: '对象载荷' } },
+      },
+    })}\n\n`);
+    expect(onText).toHaveBeenLastCalledWith('对象载荷');
+  });
+
+  it('accepts text events without a run id on a run-scoped subscription', () => {
+    const onText = vi.fn();
+    const parser = new WorkosSseParser({ onText }, { expectedRunId: 'run-current' });
+
+    parser.push(`event: message\ndata: ${JSON.stringify({
+      data: JSON.stringify({
+        type: 'message.part.updated',
+        properties: { part: { id: 'answer', type: 'text', text: '正文仍应显示' } },
+      }),
+    })}\n\n`);
+
+    expect(onText).toHaveBeenLastCalledWith('正文仍应显示');
   });
 
   it('reports failed terminal events without exposing unrelated payloads', () => {

@@ -1,0 +1,16 @@
+import { describe, expect, it } from 'vitest';
+import { YEMAI_AGENT_MD_TEMPLATE } from './recommendedAgentTemplate';
+
+describe('recommended Agent.md template', () => {
+  it('documents the protocol, source behavior and trust boundary', () => {
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('[YEMAI_CONTEXT_V1]');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('[END_YEMAI_CONTEXT]');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('信任边界');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('来源 URL');
+  });
+
+  it('is a complete markdown file ready for direct copying', () => {
+    expect(YEMAI_AGENT_MD_TEMPLATE.startsWith('# 页脉阅读助手')).toBe(true);
+    expect(YEMAI_AGENT_MD_TEMPLATE.endsWith('\n')).toBe(true);
+  });
+});

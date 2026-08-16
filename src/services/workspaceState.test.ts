@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Conversation, WorkspaceState } from '../sidepanel/types';
+import { attachmentContextItem, pageContextItem } from '../sidepanel/contextItems';
 import { createWorkspaceSnapshot, normalizeWorkspaceSnapshot, WORKSPACE_STATE_VERSION } from './workspaceState';
 
 const page = { title: '文章', site: 'example.com', url: 'https://example.com', status: 'read' as const };
@@ -8,6 +9,7 @@ function conversation(): Conversation {
   return {
     id: 'conversation-1',
     remoteUuid: 'remote-1',
+    remoteAgentUuid: '11111111-1111-4111-8111-111111111111',
     title: '持久化测试',
     subtitle: '1 个页面 · 刚刚',
     updatedAt: 10,
@@ -18,14 +20,25 @@ function conversation(): Conversation {
       role: 'assistant',
       content: '未完成回答',
       createdAt: 11,
+      respondedAt: 13,
       status: 'streaming',
       stage: 'streaming',
       activities: [{ id: 'tool-1', kind: 'tool', title: '搜索', status: 'running', startedAt: 12 }],
     }],
     draftInput: '尚未发送的草稿',
-    draftQuotes: [],
-    draftAttachments: [],
-    draftPageReference: { url: page.url, mode: 'included' },
+    draftContextItems: [
+      pageContextItem(page),
+      attachmentContextItem({
+        id: 'attachment-1',
+        filename: '粘贴图片 1.png',
+        sizeLabel: '12 KB',
+        status: 'ready',
+        mime: 'image/png',
+        url: 'https://example.com/image.png',
+        previewUrl: 'blob:temporary-preview',
+        uploadTransport: 'internal-v2',
+      }),
+    ],
   };
 }
 
@@ -37,15 +50,25 @@ function workspace(): WorkspaceState {
   };
 }
 
-describe('workspace state v4', () => {
+describe('workspace state v5', () => {
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
-    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(workspace(), 100), 200);
+    const snapshot = createWorkspaceSnapshot(workspace(), 100);
+    const restored = normalizeWorkspaceSnapshot(snapshot, 200);
 
+    expect(JSON.stringify(snapshot)).not.toContain('blob:temporary-preview');
     expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
     expect(restored?.activeOpenTabId).toBe('open-1');
     expect(restored?.openTabs[0]?.conversationId).toBe('conversation-1');
     expect(restored?.conversations[0]?.remoteUuid).toBe('remote-1');
+    expect(restored?.conversations[0]?.remoteAgentUuid).toBe('11111111-1111-4111-8111-111111111111');
     expect(restored?.conversations[0]?.draftInput).toBe('尚未发送的草稿');
+    const attachment = restored?.conversations[0]?.draftContextItems.find((item) => item.kind === 'image');
+    expect(attachment?.kind === 'image' ? attachment.attachment : undefined).toMatchObject({
+      mime: 'image/png',
+      uploadTransport: 'internal-v2',
+    });
+    expect(attachment?.kind === 'image' ? attachment.attachment.previewUrl : undefined).toBeUndefined();
+    expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
   });
 
   it('marks interrupted streams and tools as stopped after reload', () => {
@@ -144,7 +167,10 @@ describe('v1 migration', () => {
     expect(main?.messages.map((message) => message.id)).toEqual(['m1', 'm2']);
     expect(main?.messages[0]?.pageContext?.url).toBe('https://example.com/2');
     expect(main?.pages).toHaveLength(2);
-    expect(main?.draftPageReference).toEqual({ url: 'https://example.com/2', mode: 'included' });
+    expect(main?.draftContextItems.find((item) => item.kind === 'page')).toMatchObject({
+      included: true,
+      page: { url: 'https://example.com/2' },
+    });
     expect(migratedDraft?.draftInput).toBe('另一个页面的草稿');
     expect(migratedDraft?.remoteUuid).toBeUndefined();
   });
@@ -204,15 +230,43 @@ describe('v2 migration', () => {
   it('adds the default current-page reference to stored conversations', () => {
     const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
     stored.version = 2;
-    stored.conversations = (stored.conversations as Conversation[]).map(({ draftPageReference: _reference, ...item }) => item);
+    stored.conversations = (stored.conversations as Conversation[]).map(({ draftContextItems: _items, ...item }) => ({
+      ...item,
+      draftQuotes: [],
+      draftAttachments: [],
+    }));
 
     const restored = normalizeWorkspaceSnapshot(stored);
 
     expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
-    expect(restored?.conversations[0]?.draftPageReference).toEqual({
-      url: 'https://example.com',
-      mode: 'included',
+    expect(restored?.conversations[0]?.draftContextItems[0]).toMatchObject({
+      kind: 'page',
+      included: true,
+      page: { url: 'https://example.com' },
     });
+  });
+});
+
+describe('v4 migration', () => {
+  it('converts separate page, selection and attachment drafts into context items', () => {
+    const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
+    stored.version = 4;
+    stored.conversations = (stored.conversations as Conversation[]).map(({ draftContextItems: _items, ...item }) => ({
+      ...item,
+      draftQuotes: [],
+      draftAttachments: [{
+        id: 'legacy-file',
+        filename: 'legacy.md',
+        sizeLabel: '4 KB',
+        status: 'ready',
+        url: 'https://example.com/legacy.md',
+      }],
+      draftPageReference: { url: item.page.url, mode: 'excluded' },
+    }));
+
+    const restored = normalizeWorkspaceSnapshot(stored);
+    expect(restored?.conversations[0]?.draftContextItems.map((item) => item.kind)).toEqual(['page', 'file']);
+    expect(restored?.conversations[0]?.draftContextItems[0]?.included).toBe(false);
   });
 });
 
@@ -220,6 +274,12 @@ describe('v3 migration', () => {
   it('upgrades the snapshot while preserving the existing source ledger', () => {
     const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
     stored.version = 3;
+    stored.conversations = (stored.conversations as Conversation[]).map(({ draftContextItems: _items, ...item }) => ({
+      ...item,
+      draftQuotes: [],
+      draftAttachments: [],
+      draftPageReference: { url: item.page.url, mode: 'included' },
+    }));
     const restored = normalizeWorkspaceSnapshot(stored);
 
     expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);

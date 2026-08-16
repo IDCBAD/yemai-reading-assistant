@@ -1,50 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
-import type { AgentRunSummary, Conversation, DraftAttachment, OpenConversationTab, PageContext, QuoteReference } from '../types';
+import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } from '../types';
+import { extractClipboardImages, namePastedImages } from '../clipboardImages';
 import { AgentRunStatus } from './AgentRunStatus';
+import { ContextWorkbench } from './ContextWorkbench';
 import { KoboyoIcon } from './KoboyoIcon';
-import { PageFavicon } from './PageFavicon';
 
 interface ComposerProps {
   tabs: OpenConversationTab[];
   conversations: Conversation[];
   activeTabId: string;
   input: string;
-  quotes: QuoteReference[];
-  attachments: DraftAttachment[];
-  currentPage: PageContext;
-  currentPageIncluded: boolean;
-  currentPageIssue: string | null;
+  focusRequestId: number;
+  contextItems: ContextItem[];
   activeConversationIds: Set<string>;
   runSummary: AgentRunSummary | null;
   historyOpen: boolean;
-  tokenState: 'loading' | 'configured' | 'missing';
+  connectionState: 'loading' | 'configured' | 'missing';
   fileUploadEnabled: boolean;
+  fileAccept: string;
   maxTabs: number;
   onSelectTab: (tabId: string) => void;
-  onAddTab: () => void;
   onCloseTab: (tabId: string) => void;
   onNewConversation: () => void;
   onToggleHistory: () => void;
   onInputChange: (value: string) => void;
-  onRemoveQuote: (id: string) => void;
-  onRemoveAttachment: (id: string) => void;
-  onCurrentPageIncludedChange: (included: boolean) => void;
-  onFilesSelected: (files: FileList | null) => void;
+  onContextIncludedChange: (id: string, included: boolean) => void;
+  onRemoveContextItem: (id: string) => void;
+  onRetryAttachment: (id: string) => void;
+  onFilesSelected: (files: File[]) => number | void;
   onAttachmentUnavailable: () => void;
+  smartSelectionActive: boolean;
+  onStartSmartSelection: () => void;
   onSend: () => void;
   onStop: () => void;
-}
-
-function AttachmentState({ attachment }: { attachment: DraftAttachment }) {
-  if (attachment.status === 'uploading') {
-    return <span className="attachment-progress" aria-label="正在上传" />;
-  }
-  if (attachment.status === 'failed') {
-    return <span className="attachment-error" aria-label="上传失败" title={attachment.errorMessage}>!</span>;
-  }
-  return <KoboyoIcon name="solid-checkmark" size={12} className="attachment-ready" />;
 }
 
 interface TabMenuState {
@@ -58,46 +48,53 @@ export function Composer({
   conversations,
   activeTabId,
   input,
-  quotes,
-  attachments,
-  currentPage,
-  currentPageIncluded,
-  currentPageIssue,
+  focusRequestId,
+  contextItems,
   activeConversationIds,
   runSummary,
   historyOpen,
-  tokenState,
+  connectionState,
   fileUploadEnabled,
+  fileAccept,
   maxTabs,
   onSelectTab,
-  onAddTab,
   onCloseTab,
   onNewConversation,
   onToggleHistory,
   onInputChange,
-  onRemoveQuote,
-  onRemoveAttachment,
-  onCurrentPageIncludedChange,
+  onContextIncludedChange,
+  onRemoveContextItem,
+  onRetryAttachment,
   onFilesSelected,
   onAttachmentUnavailable,
+  smartSelectionActive,
+  onStartSmartSelection,
   onSend,
   onStop,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pasteAnnouncementTimerRef = useRef<number | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
-  const [contextExpanded, setContextExpanded] = useState(false);
+  const [pasteAnnouncement, setPasteAnnouncement] = useState('');
+  const [dragDepth, setDragDepth] = useState(0);
   const canAddTab = tabs.length < maxTabs;
-  const contextItemCount = quotes.length + attachments.length;
-  const visibleQuotes = contextExpanded ? quotes : quotes.slice(-1);
-  const visibleAttachments = contextExpanded ? attachments : attachments.slice(-1);
+  const contextItemCount = contextItems.length;
+  const selections = contextItems.filter((item) => item.kind === 'selection' && item.included);
+  const attachments = contextItems
+    .filter((item): item is Extract<ContextItem, { kind: 'file' | 'image' }> => item.kind === 'file' || item.kind === 'image')
+    .map((item) => item.attachment);
   const hasContent =
     input.trim().length > 0 ||
-    quotes.length > 0 ||
-    attachments.some((attachment) => attachment.status === 'ready');
-  const hasUploadingAttachments = attachments.some((attachment) => attachment.status === 'uploading');
+    selections.length > 0 ||
+    contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
+  const hasUploadingAttachments = contextItems.some(
+    (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
+  );
   const canSend = hasContent && !hasUploadingAttachments;
+  const isDraggingFiles = dragDepth > 0;
   const composerState = [
     runSummary ? 'is-running' : 'is-idle',
     contextItemCount > 0 ? 'has-context' : '',
@@ -132,8 +129,41 @@ export function Composer({
   }, [activeTabId]);
 
   useEffect(() => {
-    if (contextItemCount <= 1) setContextExpanded(false);
-  }, [contextItemCount]);
+    if (focusRequestId === 0) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const textarea = inputRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [focusRequestId]);
+
+  useEffect(() => () => {
+    if (pasteAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(pasteAnnouncementTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const clearFileDrag = () => setDragDepth(0);
+    window.addEventListener('drop', clearFileDrag);
+    window.addEventListener('dragend', clearFileDrag);
+    window.addEventListener('blur', clearFileDrag);
+    return () => {
+      window.removeEventListener('drop', clearFileDrag);
+      window.removeEventListener('dragend', clearFileDrag);
+      window.removeEventListener('blur', clearFileDrag);
+    };
+  }, []);
+
+  const announcePaste = (message: string) => {
+    setPasteAnnouncement(message);
+    if (pasteAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(pasteAnnouncementTimerRef.current);
+    }
+    pasteAnnouncementTimerRef.current = window.setTimeout(() => setPasteAnnouncement(''), 2200);
+  };
 
   const openTabMenu = (tabId: string, target: HTMLButtonElement) => {
     const bounds = target.getBoundingClientRect();
@@ -165,9 +195,46 @@ export function Composer({
         active={Boolean(runSummary)}
         borderRadius={16}
       >
-        <div className="composer-deck">
+        <div
+          className={`composer-deck${isDraggingFiles ? ' is-dragging-files' : ''}`}
+          onDragEnter={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth((value) => value + 1);
+          }}
+          onDragOver={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = fileUploadEnabled ? 'copy' : 'none';
+          }}
+          onDragLeave={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth((value) => Math.max(0, value - 1));
+          }}
+          onDrop={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+            event.preventDefault();
+            setDragDepth(0);
+            const files = Array.from(event.dataTransfer.files);
+            if (!files.length) return;
+            if (!fileUploadEnabled) {
+              onAttachmentUnavailable();
+              announcePaste('文件未添加，需要先配置附件上传连接。');
+              return;
+            }
+            const addedCount = onFilesSelected(files) ?? 0;
+            if (addedCount > 0) announcePaste(`已添加 ${addedCount} 个附件。`);
+          }}
+        >
+        {isDraggingFiles && (
+          <div className="composer-drop-overlay" aria-hidden="true">
+            <KoboyoIcon name="paperclip" size={17} />
+            <strong>{fileUploadEnabled ? '释放以加入本次提问' : '需要先配置附件上传'}</strong>
+          </div>
+        )}
         <div className="tab-command-row">
-          <div className="tab-list" role="tablist" aria-label="已打开的独立会话">
+          <div className="tab-list" role="tablist" aria-label="已打开的会话工作页">
             {tabs.map((tab, index) => {
               const conversation = conversations.find((item) => item.id === tab.conversationId);
               return (
@@ -181,7 +248,7 @@ export function Composer({
                   role="tab"
                   aria-selected={tab.id === activeTabId}
                   aria-haspopup="menu"
-                  title={`${conversation?.title ?? '新的阅读对话'}，右键关闭`}
+                  title={`${conversation?.branch ? `分支 ${conversation.branch.ordinal} · ` : ''}${conversation?.title ?? '新的阅读对话'}，右键关闭`}
                   onClick={() => onSelectTab(tab.id)}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -196,6 +263,9 @@ export function Composer({
                   key={tab.id}
                 >
                   <span>{index + 1}</span>
+                  {conversation?.branch && (
+                    <KoboyoIcon name="fork" size={7} className="workspace-tab-branch" />
+                  )}
                   {activeConversationIds.has(tab.conversationId) && (
                     <i className="tab-stream-dot" aria-label="正在生成" />
                   )}
@@ -208,15 +278,12 @@ export function Composer({
             <button
               className="workbench-button pressable"
               type="button"
-              onClick={onAddTab}
-              aria-label={canAddTab ? '新增独立会话标签页' : `最多打开 ${maxTabs} 个标签页`}
-              title={canAddTab ? '新增独立会话标签页' : `最多打开 ${maxTabs} 个标签页，请先关闭一个`}
+              onClick={onNewConversation}
+              aria-label={canAddTab ? '新对话' : `最多打开 ${maxTabs} 个工作页`}
+              title={canAddTab ? '新对话：从空白开始' : `最多打开 ${maxTabs} 个工作页，请先关闭一个`}
               disabled={!canAddTab}
             >
               <KoboyoIcon name="plus" size={16} />
-            </button>
-            <button className="workbench-button pressable" type="button" onClick={onNewConversation} aria-label="在当前标签中新建对话" title="在当前标签中新建对话">
-              <KoboyoIcon name="message-square-plus" size={17} />
             </button>
             <button
               className={`workbench-button pressable${historyOpen ? ' is-active' : ''}`}
@@ -231,103 +298,55 @@ export function Composer({
           </div>
         </div>
 
-        {currentPage.url && (
-          <div
-            className={`current-page-context current-page-context--${currentPage.status}${currentPageIssue ? ' has-issue' : ''}${currentPageIncluded ? '' : ' is-excluded'}`}
-            aria-label={currentPageIncluded ? '本次提问引用的当前页面' : '当前页面未加入本次提问'}
-            aria-live="polite"
-          >
-            <PageFavicon
-              url={currentPage.url}
-              title={currentPage.title}
-              site={currentPage.site}
-              size={16}
-            />
-            <span className="current-page-copy">
-              <small>{!currentPageIncluded ? '未引用' : currentPageIssue ? '当前页未能读取' : currentPage.status === 'reading' ? '正在准备当前页' : '当前页'}</small>
-              <strong title={`${currentPage.title} · ${currentPage.site}`}>{currentPage.title}</strong>
-            </span>
-            {currentPageIncluded && currentPage.status === 'reading' && <span className="page-context-progress" aria-hidden="true" />}
-            <button
-              className="current-page-toggle pressable"
-              type="button"
-              onClick={() => onCurrentPageIncludedChange(!currentPageIncluded)}
-              aria-label={currentPageIncluded ? '取消引用当前页' : '恢复引用当前页'}
-              aria-pressed={currentPageIncluded}
-              title={currentPageIncluded ? '取消引用' : '恢复引用'}
-            >
-              <KoboyoIcon name={currentPageIncluded ? 'link' : 'link-off'} size={15} />
-            </button>
-          </div>
-        )}
-
-        {contextItemCount > 0 && (
-          <div className={`draft-context${contextExpanded ? ' is-expanded' : ''}`} aria-label="待发送的引用和附件">
-            <div className="draft-context-header">
-              <span className="draft-context-summary">
-                {quotes.length > 0 && `已引用 ${quotes.length} 段`}
-                {quotes.length > 0 && attachments.length > 0 && ' · '}
-                {attachments.length > 0 && `${attachments.length} 个附件`}
-              </span>
-              {contextItemCount > 1 && (
-                <button
-                  className="draft-context-toggle pressable"
-                  type="button"
-                  onClick={() => setContextExpanded((expanded) => !expanded)}
-                  aria-expanded={contextExpanded}
-                >
-                  {contextExpanded ? '收起' : '查看全部'}
-                </button>
-              )}
-            </div>
-            <div className="draft-context-list">
-            {visibleQuotes.map((quote) => (
-              <div className="draft-chip draft-chip--quote" key={quote.id}>
-                <KoboyoIcon name="quote" size={13} />
-                <span className="draft-chip-copy">
-                  <strong title={quote.pageTitle}>{quote.pageTitle}</strong>
-                  <span title={quote.text}>{quote.text}</span>
-                </span>
-                <button className="chip-remove pressable" type="button" onClick={() => onRemoveQuote(quote.id)} aria-label={`删除引用：${quote.text}`}>
-                  <KoboyoIcon name="cross" size={11} />
-                </button>
-              </div>
-            ))}
-            {visibleAttachments.map((attachment) => (
-              <div className="draft-chip draft-chip--file" key={attachment.id}>
-                <KoboyoIcon name="file" size={13} />
-                <span className="draft-chip-copy">
-                  <strong>附件 · {attachment.sizeLabel}</strong>
-                  <span title={attachment.filename}>{attachment.filename}</span>
-                </span>
-                <AttachmentState attachment={attachment} />
-                <button className="chip-remove pressable" type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`删除附件：${attachment.filename}`}>
-                  <KoboyoIcon name="cross" size={11} />
-                </button>
-              </div>
-            ))}
-            </div>
-          </div>
-        )}
+        <ContextWorkbench
+          items={contextItems}
+          onIncludedChange={onContextIncludedChange}
+          onRemove={onRemoveContextItem}
+          onRetryAttachment={onRetryAttachment}
+        />
 
         <div className="composer-input-wrap">
           <textarea
+            ref={inputRef}
             name="agent-question"
             autoComplete="off"
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
+            onPaste={(event) => {
+              const clipboardImages = extractClipboardImages(event.clipboardData);
+              if (clipboardImages.length === 0) return;
+
+              event.preventDefault();
+              if (!fileUploadEnabled) {
+                onAttachmentUnavailable();
+                announcePaste('图片未添加，需要先配置附件上传连接。');
+                return;
+              }
+
+              const namedImages = namePastedImages(
+                clipboardImages,
+                attachments.map((attachment) => attachment.filename),
+              );
+              const addedCount = onFilesSelected(namedImages) ?? 0;
+              if (addedCount > 0) {
+                announcePaste(`已添加 ${addedCount} 张粘贴图片。`);
+              }
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 if (canSend) onSend();
               }
             }}
-            placeholder={quotes.length > 0
-              ? `针对已引用的 ${quotes.length} 段内容提问…`
-              : '继续追问，或引用新的内容…'}
+            placeholder={selections.length > 0
+              ? `针对已引用的 ${selections.length} 段内容提问…`
+              : '继续追问，或粘贴图片提问…'}
             rows={2}
             aria-label="输入问题"
+            aria-describedby="composer-paste-hint composer-paste-status"
           />
+          <span className="visually-hidden" id="composer-paste-hint">支持直接粘贴剪贴板中的图片。</span>
+          <span className="visually-hidden" id="composer-paste-status" aria-live="polite">{pasteAnnouncement}</span>
           <div className="composer-toolbar">
             <div className="composer-tools">
               <input
@@ -337,10 +356,10 @@ export function Composer({
                 tabIndex={-1}
                 aria-hidden="true"
                 name="attachments"
-                accept=".pdf,.doc,.docx,.txt,.md,image/*"
+                accept={fileAccept}
                 multiple
                 onChange={(event) => {
-                  onFilesSelected(event.target.files);
+                  onFilesSelected(Array.from(event.target.files ?? []));
                   event.currentTarget.value = '';
                 }}
               />
@@ -351,19 +370,27 @@ export function Composer({
                   if (fileUploadEnabled) fileInputRef.current?.click();
                   else onAttachmentUnavailable();
                 }}
-                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 Token'}
-                title={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置 Token'}
+                aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置当前 WorkOS 连接'}
+                title={fileUploadEnabled ? '添加附件，也可以直接粘贴图片' : '添加附件，需要先配置当前 WorkOS 连接'}
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>
-              {!currentPage.url && currentPageIssue && (
-                <span className="page-reference-unavailable" title={currentPageIssue}>当前页不可读取</span>
+              <button
+                className={`composer-tool pressable${smartSelectionActive ? ' is-active' : ''}`}
+                type="button"
+                onClick={onStartSmartSelection}
+                disabled={smartSelectionActive}
+                aria-label={smartSelectionActive ? '正在智能框选网页内容' : '智能框选网页内容并引用'}
+                title={smartSelectionActive ? '移动鼠标选择内容块，点击引用，按 Esc 取消' : '智能框选'}
+              >
+                <KoboyoIcon name="selection" size={17} />
+              </button>
+              {connectionState === 'missing' && (
+                <span className="composer-scope composer-scope--missing" role="status">
+                  <i aria-hidden="true" />
+                  需要连接
+                </span>
               )}
-              <span className={`composer-scope composer-scope--${tokenState}`}>
-                <i aria-hidden="true" />
-                {tokenState === 'loading' ? '读取配置' : tokenState === 'configured' ? 'Token 已配置' : '需要 Token'}
-                {' · '}Tab {tabs.findIndex((tab) => tab.id === activeTabId) + 1}/{maxTabs}
-              </span>
             </div>
             <div className="composer-status-actions">
               <AgentRunStatus summary={runSummary} />
@@ -398,13 +425,15 @@ export function Composer({
           <button
             type="button"
             role="menuitem"
+            disabled={tabs.length === 1}
+            title={tabs.length === 1 ? '至少保留一个工作页' : '关闭工作页'}
             onClick={() => {
               onCloseTab(tabMenu.tabId);
               setTabMenu(null);
             }}
           >
             <KoboyoIcon name="cross" size={12} />
-            关闭标签页
+            {tabs.length === 1 ? '至少保留一个工作页' : '关闭工作页'}
           </button>
         </div>,
         document.body,

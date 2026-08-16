@@ -1,19 +1,84 @@
-import { isValidElement, useEffect, useRef, useState } from 'react';
+import { isValidElement, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage, RunActivity, RunActivityStatus } from '../types';
+import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
+import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
+import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
+import { formatMessageTimestamp } from '../messageTimestamp';
+import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
+import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { YemaiMark } from './YemaiMark';
+import { AnswerContextTrace } from './AnswerContextTrace';
 
 interface MessageListProps {
   messages: ChatMessage[];
+  branchOrigin?: {
+    title: string;
+    timestamp?: number;
+    available: boolean;
+    unavailableReason?: string;
+  };
+  branchUnavailableReason?: string;
   onUseStarter: (value: string) => void;
+  onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
+  onOpenBranchOrigin: () => void;
+  onAddAssistantQuote: (quote: QuoteReference) => void;
 }
 
-const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
+const STARTERS = [
+  {
+    label: '介绍一下你的能力',
+    prompt: '介绍一下你的能力',
+  },
+  {
+    label: '总览当前网页',
+    prompt: '总览当前网页：请先用一句话概括主题，再按层级列出内容大纲，最后提炼 3 个关键结论。',
+  },
+  {
+    label: '提炼值得记住的内容',
+    prompt: '请从当前网页中提炼最值得记住的 3—5 个要点，并说明它们为什么重要。',
+  },
+];
+const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
+
+interface AssistantSelectionAction {
+  messageId: string;
+  text: string;
+  left: number;
+  top: number;
+}
+
+function selectionInsideMessage(selection: Selection, container: HTMLElement) {
+  if (!selection.rangeCount || selection.isCollapsed) return false;
+  return container.contains(selection.getRangeAt(0).commonAncestorContainer);
+}
+
+function MessageTime({
+  timestamp,
+  label,
+  className = '',
+}: {
+  timestamp: number;
+  label: string;
+  className?: string;
+}) {
+  const formatted = formatMessageTimestamp(timestamp);
+  return (
+    <time
+      className={`message-time${className ? ` ${className}` : ''}`}
+      dateTime={formatted.dateTime}
+      title={formatted.fullLabel}
+      aria-label={`${label}${formatted.fullLabel}`}
+    >
+      {formatted.label}
+    </time>
+  );
+}
 
 function CodeBlock({ children }: { children: string }) {
   const [copied, setCopied] = useState(false);
@@ -121,12 +186,16 @@ function getRunNote(message: ChatMessage) {
 
 function AssistantMessage({
   message,
+  contextSources,
   onRetry,
   onBranch,
+  branchUnavailableReason,
 }: {
   message: ChatMessage;
+  contextSources: AnswerContextSource[];
   onRetry: () => void;
   onBranch: () => void;
+  branchUnavailableReason?: string;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const runNote = getRunNote(message);
@@ -144,7 +213,7 @@ function AssistantMessage({
   const footerAvailable = actionsAvailable || message.status === 'failed';
 
   return (
-    <article className="message message--assistant">
+    <article className="message message--assistant" data-assistant-message-id={message.id}>
       <div className="assistant-rail" aria-hidden="true">
         <span className="assistant-mark">
           <YemaiMark />
@@ -153,7 +222,7 @@ function AssistantMessage({
       </div>
       <div className="message-content">
         {message.activities && message.activities.length > 0 && <RunActivityPanel activities={message.activities} />}
-        <div className="markdown-body">
+        <div className="markdown-body" data-assistant-selectable="true">
           {!message.content && runNote && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
@@ -176,6 +245,9 @@ function AssistantMessage({
           </ReactMarkdown>
           {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
         </div>
+        {Boolean(message.content) && message.status !== 'streaming' && (
+          <AnswerContextTrace sources={contextSources} />
+        )}
         {footerAvailable && (
           <div className="assistant-footer" aria-label="回答操作">
             {message.status === 'failed' && (
@@ -186,7 +258,7 @@ function AssistantMessage({
                 aria-label={message.content ? '重试回答' : '重新发送'}
                 title={message.content ? '重试回答' : '重新发送'}
               >
-                <KoboyoIcon name="cycle" size={13} />
+                <KoboyoIcon name="cycle" size={14} />
               </button>
             )}
             {actionsAvailable && (
@@ -198,18 +270,26 @@ function AssistantMessage({
                   aria-label={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
                   title={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
                 >
-                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={13} />
+                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
                 </button>
                 <button
                   className="assistant-action pressable"
                   type="button"
                   onClick={onBranch}
-                  aria-label="从这条回答创建会话分支"
-                  title="从这条回答创建会话分支"
+                  disabled={Boolean(branchUnavailableReason)}
+                  aria-label={branchUnavailableReason ? `无法创建分支：${branchUnavailableReason}` : '从这里分支'}
+                  title={branchUnavailableReason ?? '从这里分支：保留此前内容，探索另一条思路'}
                 >
-                  <KoboyoIcon name="message-square-plus" size={13} />
+                  <KoboyoIcon name="fork" size={14} />
                 </button>
               </>
+            )}
+            {(message.respondedAt || message.content) && (
+              <MessageTime
+                timestamp={message.respondedAt ?? message.createdAt}
+                label="Agent 回答于"
+                className="message-time--assistant"
+              />
             )}
           </div>
         )}
@@ -218,55 +298,466 @@ function AssistantMessage({
   );
 }
 
-function UserMessage({ message }: { message: ChatMessage }) {
+interface HoveredAttachment {
+  attachment: DraftAttachment;
+  anchor: DOMRect;
+  placement: 'above' | 'below';
+}
+
+function imagePreviewStyle(preview: HoveredAttachment): CSSProperties & { '--image-preview-max-height': string } {
+  const gutter = 12;
+  const gap = 8;
+  const width = Math.min(380, window.innerWidth - gutter * 2);
+  const left = Math.max(gutter, Math.min(preview.anchor.left, window.innerWidth - width - gutter));
+  const availableHeight = preview.placement === 'below'
+    ? window.innerHeight - preview.anchor.bottom - gap - gutter
+    : preview.anchor.top - gap - gutter;
+  const imageMaxHeight = Math.max(80, Math.min(availableHeight - 18, window.innerHeight * 0.7, 540));
+  return {
+    width,
+    left,
+    maxHeight: Math.max(98, availableHeight),
+    '--image-preview-max-height': `${imageMaxHeight}px`,
+    ...(preview.placement === 'below'
+      ? { top: preview.anchor.bottom + gap }
+      : { bottom: window.innerHeight - preview.anchor.top + gap }),
+  };
+}
+
+function fileDetailStyle(preview: HoveredAttachment): CSSProperties {
+  const gutter = 12;
+  const gap = 8;
+  const width = Math.min(310, window.innerWidth - gutter * 2);
+  const left = Math.max(gutter, Math.min(preview.anchor.left, window.innerWidth - width - gutter));
+  return {
+    width,
+    left,
+    ...(preview.placement === 'below'
+      ? { top: preview.anchor.bottom + gap }
+      : { bottom: window.innerHeight - preview.anchor.top + gap }),
+  };
+}
+
+function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
+  const [hoveredImage, setHoveredImage] = useState<HoveredAttachment | null>(null);
+  const [hoveredFile, setHoveredFile] = useState<HoveredAttachment | null>(null);
+  const [activeImage, setActiveImage] = useState<DraftAttachment | null>(null);
+  const showPreviewTimerRef = useRef<number | null>(null);
+  const hidePreviewTimerRef = useRef<number | null>(null);
+  const suppressFocusPreviewRef = useRef(false);
+  const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const imageAttachments = attachments.filter((attachment) =>
+    isImageFile(attachment.filename, attachment.mime)
+    && Boolean(attachment.previewUrl ?? attachment.url)
+    && !failedImageIds.has(attachment.id));
+  const fileAttachments = attachments.filter((attachment) => !imageAttachments.includes(attachment));
+
+  const clearPreviewTimers = () => {
+    if (showPreviewTimerRef.current !== null) window.clearTimeout(showPreviewTimerRef.current);
+    if (hidePreviewTimerRef.current !== null) window.clearTimeout(hidePreviewTimerRef.current);
+    showPreviewTimerRef.current = null;
+    hidePreviewTimerRef.current = null;
+  };
+
+  const closeHoverPreview = () => {
+    if (showPreviewTimerRef.current !== null) window.clearTimeout(showPreviewTimerRef.current);
+    showPreviewTimerRef.current = null;
+    hidePreviewTimerRef.current = window.setTimeout(() => {
+      setHoveredImage(null);
+      setHoveredFile(null);
+      hidePreviewTimerRef.current = null;
+    }, 120);
+  };
+
+  const keepHoverPreviewOpen = () => {
+    if (hidePreviewTimerRef.current !== null) window.clearTimeout(hidePreviewTimerRef.current);
+    hidePreviewTimerRef.current = null;
+  };
+
+  const openHoverPreview = (
+    attachment: DraftAttachment,
+    trigger: HTMLButtonElement,
+    kind: 'image' | 'file',
+    immediate = false,
+  ) => {
+    clearPreviewTimers();
+    const anchor = trigger.getBoundingClientRect();
+    const availableBelow = window.innerHeight - anchor.bottom;
+    const availableAbove = anchor.top;
+    const placement = availableBelow >= Math.min(360, window.innerHeight * 0.58) || availableBelow >= availableAbove
+      ? 'below' as const
+      : 'above' as const;
+    const show = () => {
+      const preview = { attachment, anchor, placement };
+      if (kind === 'image') {
+        setHoveredFile(null);
+        setHoveredImage(preview);
+      } else {
+        setHoveredImage(null);
+        setHoveredFile(preview);
+      }
+      showPreviewTimerRef.current = null;
+    };
+    if (immediate || hoveredImage || hoveredFile) show();
+    else showPreviewTimerRef.current = window.setTimeout(show, 220);
+  };
+
+  const closeImage = () => {
+    setActiveImage(null);
+    window.requestAnimationFrame(() => {
+      suppressFocusPreviewRef.current = true;
+      activeTriggerRef.current?.focus();
+      window.requestAnimationFrame(() => {
+        suppressFocusPreviewRef.current = false;
+      });
+    });
+  };
+
+  const openImage = (attachment: DraftAttachment, trigger: HTMLButtonElement) => {
+    clearPreviewTimers();
+    setHoveredImage(null);
+    setHoveredFile(null);
+    activeTriggerRef.current = trigger;
+    setActiveImage(attachment);
+  };
+
+  useEffect(() => () => clearPreviewTimers(), []);
+
+  useEffect(() => {
+    if (!hoveredImage && !hoveredFile) return;
+    const closeForViewportChange = () => {
+      clearPreviewTimers();
+      setHoveredImage(null);
+      setHoveredFile(null);
+    };
+    const closeWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeForViewportChange();
+    };
+    window.addEventListener('resize', closeForViewportChange);
+    window.addEventListener('scroll', closeForViewportChange, true);
+    window.addEventListener('keydown', closeWithKeyboard);
+    return () => {
+      window.removeEventListener('resize', closeForViewportChange);
+      window.removeEventListener('scroll', closeForViewportChange, true);
+      window.removeEventListener('keydown', closeWithKeyboard);
+    };
+  }, [hoveredFile, hoveredImage]);
+
+  useEffect(() => {
+    if (!activeImage) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeImage();
+      }
+    };
+    window.addEventListener('keydown', closeWithKeyboard);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeWithKeyboard);
+    };
+  }, [activeImage]);
+
+  const markImageFailed = (attachment: DraftAttachment) => {
+    setFailedImageIds((current) => new Set(current).add(attachment.id));
+    if (hoveredImage?.attachment.id === attachment.id) setHoveredImage(null);
+    if (activeImage?.id === attachment.id) closeImage();
+  };
+
+  return (
+    <>
+      {imageAttachments.length > 0 && (
+        <span className="sent-inline-attachments">
+          {imageAttachments.map((attachment) => (
+            <button
+              className="sent-attachment-token sent-attachment-token--image pressable"
+              type="button"
+              key={attachment.id}
+              aria-label={`图片附件：${attachment.filename}，悬浮预览，点击查看大图`}
+              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget, 'image')}
+              onMouseLeave={closeHoverPreview}
+              onFocus={(event) => {
+                if (!suppressFocusPreviewRef.current) openHoverPreview(attachment, event.currentTarget, 'image', true);
+              }}
+              onBlur={closeHoverPreview}
+              onClick={(event) => {
+                openImage(attachment, event.currentTarget);
+              }}
+            >
+              <img
+                src={attachment.previewUrl ?? attachment.url}
+                alt={attachment.filename}
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onError={() => markImageFailed(attachment)}
+              />
+              <span>{attachment.filename}</span>
+            </button>
+          ))}
+        </span>
+      )}
+      {fileAttachments.length > 0 && (
+        <span className="sent-inline-attachments">
+          {fileAttachments.map((attachment) => (
+            <button
+              className="sent-attachment-token sent-attachment-token--file"
+              type="button"
+              key={attachment.id}
+              aria-label={`文件附件：${attachment.filename}，悬浮查看详情`}
+              onMouseEnter={(event) => openHoverPreview(attachment, event.currentTarget, 'file')}
+              onMouseLeave={closeHoverPreview}
+              onFocus={(event) => openHoverPreview(attachment, event.currentTarget, 'file', true)}
+              onBlur={closeHoverPreview}
+            >
+              <FileTypeIcon filename={attachment.filename} mime={attachment.mime} variant="token" />
+              <span>{attachment.filename}</span>
+            </button>
+          ))}
+        </span>
+      )}
+      {hoveredImage && createPortal(
+        <div
+          className={`image-hover-preview is-${hoveredImage.placement}`}
+          style={imagePreviewStyle(hoveredImage)}
+          aria-hidden="true"
+          onMouseEnter={keepHoverPreviewOpen}
+          onMouseLeave={closeHoverPreview}
+        >
+          <img
+            src={hoveredImage.attachment.previewUrl ?? hoveredImage.attachment.url}
+            alt=""
+            decoding="async"
+            draggable={false}
+            onError={() => markImageFailed(hoveredImage.attachment)}
+          />
+        </div>,
+        document.body,
+      )}
+      {hoveredFile && createPortal(
+        <div
+          className={`file-hover-detail is-${hoveredFile.placement}`}
+          style={fileDetailStyle(hoveredFile)}
+          role="tooltip"
+          onMouseEnter={keepHoverPreviewOpen}
+          onMouseLeave={closeHoverPreview}
+        >
+          <FileTypeIcon
+            filename={hoveredFile.attachment.filename}
+            mime={hoveredFile.attachment.mime}
+            variant="draft"
+          />
+          <span>
+            <strong>{hoveredFile.attachment.filename}</strong>
+            <small>
+              {getFileType(hoveredFile.attachment.filename, hoveredFile.attachment.mime).description}
+              {' · '}{attachmentFormatLabel(hoveredFile.attachment.filename, hoveredFile.attachment.mime)}
+              {' · '}{hoveredFile.attachment.sizeLabel}
+            </small>
+            <em>已通过{uploadChannelLabel(hoveredFile.attachment.uploadTransport)}上传</em>
+          </span>
+        </div>,
+        document.body,
+      )}
+      {(activeImage?.previewUrl ?? activeImage?.url) && createPortal(
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`图片预览：${activeImage.filename}`}
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeImage();
+          }}
+        >
+          <button
+            className="image-lightbox-close pressable"
+            type="button"
+            onClick={closeImage}
+            onKeyDown={(event) => {
+              if (event.key === 'Tab') event.preventDefault();
+            }}
+            aria-label="关闭图片预览"
+            title="关闭"
+            autoFocus
+          >
+            <KoboyoIcon name="cross" size={15} />
+          </button>
+          <img
+            src={activeImage.previewUrl ?? activeImage.url}
+            alt={activeImage.filename}
+            decoding="async"
+            onError={() => markImageFailed(activeImage)}
+          />
+          <span className="image-lightbox-caption">{activeImage.filename}</span>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => void }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const messageContextItems = contextItemsFromMessage(message);
+  const pageItem = contextPage(messageContextItems);
+  const references = contextSelections(messageContextItems);
+  const attachments = contextAttachments(messageContextItems);
+  const copyQuestion = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1400);
+    } catch {
+      setCopyState('failed');
+      window.setTimeout(() => setCopyState('idle'), 1800);
+    }
+  };
   return (
     <article className="message message--user">
       <div className="user-message-stack">
-        {message.pageContext && (
+        {pageItem && (
           <div
-            className={`sent-page-context sent-page-context--${message.pageContext.status}${message.pageContextIssue ? ' has-issue' : ''}`}
-            title={message.pageContextIssue ?? message.pageContext.url}
+            className={`sent-page-context sent-page-context--${pageItem.page.status}${pageItem.issue ? ' has-issue' : ''}`}
+            title={pageItem.issue ?? pageItem.page.url}
           >
             <PageFavicon
-              url={message.pageContext.url}
-              title={message.pageContext.title}
-              site={message.pageContext.site}
+              url={pageItem.page.url}
+              title={pageItem.page.title}
+              site={pageItem.page.site}
               size={14}
             />
             <span>
-              {message.pageContextIssue
+              {pageItem.issue
                 ? '当前页仅以链接加入'
-                : `${message.pageContext.title} · ${message.pageContext.site}`}
+                : `${pageItem.page.title} · ${pageItem.page.site}`}
             </span>
-            {message.pageContext.status === 'reading' && <i aria-label="正在准备当前页" />}
+            {pageItem.status === 'preparing' && <i aria-label="正在准备当前页" />}
           </div>
         )}
         <div className="user-message-card">
-        {message.references?.map((reference) => (
+        {references.map((reference) => (
           <blockquote className="sent-reference" key={reference.id}>
             <KoboyoIcon name="quote" size={13} />
             <span>{reference.text}</span>
           </blockquote>
         ))}
-        {message.attachments && message.attachments.length > 0 && (
-          <div className="sent-attachments">
-            {message.attachments.map((attachment) => (
-              <span key={attachment.id}>
-                <KoboyoIcon name="file" size={13} />
-                {attachment.filename}
-              </span>
-            ))}
-          </div>
+        {attachments.length > 0 && (
+          <SentAttachments attachments={attachments} />
         )}
-        {message.content && <p>{message.content}</p>}
+        {attachments.length > 0 && message.content && ' '}
+        {message.content && <span className="user-message-text">{message.content}</span>}
+        </div>
+        <div className="user-message-actions" aria-label="提问操作">
+          <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
+          {message.content && (
+            <>
+              <button
+                className="user-message-action pressable"
+                type="button"
+                onClick={copyQuestion}
+                aria-label={copyState === 'copied' ? '已复制提问' : copyState === 'failed' ? '复制失败' : '复制提问'}
+                title={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制提问'}
+              >
+                <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
+              </button>
+              <button
+                className="user-message-action pressable"
+                type="button"
+                onClick={onEdit}
+                aria-label="编辑提问到输入框"
+                title="编辑提问"
+              >
+                <KoboyoIcon name="edit" size={14} />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </article>
   );
 }
 
-export function MessageList({ messages, onUseStarter, onRetry, onBranch }: MessageListProps) {
+export function MessageList({
+  messages,
+  branchOrigin,
+  branchUnavailableReason,
+  onUseStarter,
+  onEditUserMessage,
+  onRetry,
+  onBranch,
+  onOpenBranchOrigin,
+  onAddAssistantQuote,
+}: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLElement>(null);
+  const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
+  const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
+
+  useEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
+
+    const updateSelection = () => {
+      window.requestAnimationFrame(() => {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || !selection.rangeCount) {
+          setSelectionAction(null);
+          return;
+        }
+        const anchorElement = selection.anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? selection.anchorNode as Element
+          : selection.anchorNode?.parentElement;
+        const selectable = anchorElement?.closest<HTMLElement>('[data-assistant-selectable="true"]');
+        const article = selectable?.closest<HTMLElement>('[data-assistant-message-id]');
+        if (!selectable || !article || !selectionInsideMessage(selection, selectable)) {
+          setSelectionAction(null);
+          return;
+        }
+        const text = selection.toString().replace(/\s+/gu, ' ').trim();
+        if (!text) {
+          setSelectionAction(null);
+          return;
+        }
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        setSelectionAction({
+          messageId: article.dataset.assistantMessageId ?? '',
+          text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - 108)),
+          top: Math.max(8, rect.top - 39),
+        });
+      });
+    };
+    const clearSelectionAction = () => setSelectionAction(null);
+    const clearCollapsedSelection = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) setSelectionAction(null);
+    };
+    const clearFromOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || root.contains(target)) return;
+      if (target instanceof Element && target.closest('.assistant-selection-action')) return;
+      setSelectionAction(null);
+    };
+    root.addEventListener('pointerup', updateSelection);
+    root.addEventListener('keyup', updateSelection);
+    root.addEventListener('scroll', clearSelectionAction, { passive: true });
+    document.addEventListener('selectionchange', clearCollapsedSelection);
+    document.addEventListener('pointerdown', clearFromOutside);
+    window.addEventListener('resize', clearSelectionAction);
+    return () => {
+      root.removeEventListener('pointerup', updateSelection);
+      root.removeEventListener('keyup', updateSelection);
+      root.removeEventListener('scroll', clearSelectionAction);
+      document.removeEventListener('selectionchange', clearCollapsedSelection);
+      document.removeEventListener('pointerdown', clearFromOutside);
+      window.removeEventListener('resize', clearSelectionAction);
+    };
+  }, [messages]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
@@ -279,11 +770,11 @@ export function MessageList({ messages, onUseStarter, onRetry, onBranch }: Messa
           <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
           <span className="empty-kicker">读过的，终会连起来。</span>
           <h2>从当前页面开始</h2>
-          <p>当前 Tab 对应一条独立会话，问题、引用、草稿和 Agent 记忆都只属于这里。</p>
+          <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
           <div className="starter-list">
             {STARTERS.map((starter) => (
-              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter)} key={starter}>
-                {starter}
+              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.label}>
+                {starter.label}
               </button>
             ))}
           </div>
@@ -293,21 +784,69 @@ export function MessageList({ messages, onUseStarter, onRetry, onBranch }: Messa
   }
 
   return (
-    <main className="messages" aria-live="polite">
-      <div className="conversation-date">今天 · 当前工作页</div>
+    <main className="messages" aria-live="polite" ref={messagesRef}>
+      {branchOrigin && (
+        <button
+          className="branch-origin"
+          type="button"
+          onClick={onOpenBranchOrigin}
+          disabled={!branchOrigin.available}
+          title={branchOrigin.available ? '查看原会话' : branchOrigin.unavailableReason}
+        >
+          <KoboyoIcon name="fork" size={13} />
+          <span>
+            从「{branchOrigin.title}」
+            {branchOrigin.timestamp && (
+              <time dateTime={new Date(branchOrigin.timestamp).toISOString()}>
+                {formatMessageTimestamp(branchOrigin.timestamp).label}
+              </time>
+            )}
+            的回答分支
+          </span>
+          <strong>{branchOrigin.available ? '查看原会话' : '暂不可打开'}</strong>
+        </button>
+      )}
       {messages.map((message) =>
         message.role === 'assistant' ? (
           <AssistantMessage
             message={message}
+            contextSources={answerContexts.get(message.id) ?? []}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
+            branchUnavailableReason={branchUnavailableReason}
             key={message.id}
           />
         ) : (
-          <UserMessage message={message} key={message.id} />
+          <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
         ),
       )}
       <div ref={endRef} />
+      {selectionAction && createPortal(
+        <button
+          className="assistant-selection-action pressable"
+          type="button"
+          style={{ left: selectionAction.left, top: selectionAction.top }}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (!messages.some((message) => message.id === selectionAction.messageId)) return;
+            onAddAssistantQuote({
+              id: `quote-assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              text: selectionAction.text,
+              pageTitle: '页脉回答',
+              pageUrl: '',
+              createdAt: Date.now(),
+              origin: 'assistant',
+              sourceMessageId: selectionAction.messageId,
+            });
+            window.getSelection()?.removeAllRanges();
+            setSelectionAction(null);
+          }}
+        >
+          <KoboyoIcon name="quote" size={12} />
+          添加到对话
+        </button>,
+        document.body,
+      )}
     </main>
   );
 }

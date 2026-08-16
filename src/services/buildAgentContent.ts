@@ -104,17 +104,20 @@ function pageReference(
 function quoteReference(quote: QuoteReference, page?: PreparedPageReference): SelectionReference {
   const quoteUrl = normalizeSourceUrl(quote.pageUrl);
   const pageUrl = page?.source.url ? normalizeSourceUrl(page.source.url) : undefined;
-  const sharesPageSource = Boolean(page && pageUrl === quoteUrl);
+  const isAssistantQuote = quote.origin === 'assistant';
+  const sharesPageSource = Boolean(!isAssistantQuote && page && pageUrl === quoteUrl);
   return {
     mode: 'selection',
-    delivery: sharesPageSource ? 'reuse' : 'introduce',
+    delivery: sharesPageSource || isAssistantQuote ? 'reuse' : 'introduce',
     source: {
-      source_id: sharesPageSource ? page!.source.source_id : createStableSourceId(quote.pageUrl),
+      source_id: isAssistantQuote
+        ? `assistant-${quote.sourceMessageId ?? quote.id}`
+        : sharesPageSource ? page!.source.source_id : createStableSourceId(quote.pageUrl),
       kind: 'selected_text',
       title: quote.pageTitle,
-      url: quote.pageUrl,
+      ...(!isAssistantQuote && quote.pageUrl ? { url: quote.pageUrl } : {}),
       page_type: sharesPageSource ? page!.source.page_type : 'unknown',
-      access_hint: sharesPageSource ? page!.source.access_hint : 'unknown',
+      access_hint: isAssistantQuote ? 'local_document' : sharesPageSource ? page!.source.access_hint : 'unknown',
       ...(sharesPageSource && page!.source.revision_id ? { revision_id: page!.source.revision_id } : {}),
       captured_at: new Date(quote.createdAt).toISOString(),
     },

@@ -1,4 +1,5 @@
 import type { Conversation, PageContext, QuoteReference, WorkspaceState } from './types';
+import { legacyDraftContextItems } from './contextItems';
 
 export const CURRENT_PAGE: PageContext = {
   title: '引言',
@@ -35,9 +36,7 @@ const INITIAL_CONVERSATION: Conversation = {
   pages: [CURRENT_PAGE],
   messages: [],
   draftInput: '',
-  draftQuotes: [],
-  draftAttachments: [],
-  draftPageReference: { url: CURRENT_PAGE.url, mode: 'included' },
+  draftContextItems: legacyDraftContextItems(CURRENT_PAGE, undefined),
 };
 
 export const INITIAL_WORKSPACE: WorkspaceState = {

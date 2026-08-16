@@ -100,6 +100,8 @@ type ExtensionMessage =
 interface LocalConversation {
   id: string;
   remoteUuid?: string;
+  remoteTransport?: 'public-v1' | 'internal-v2';
+  remoteAgentUuid?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -170,20 +172,24 @@ interface SelectionQuote {
 
 `remoteUuid`、消息、草稿和页面来源全部属于会话。插件 Tab 只保存 `conversationId`，是会话的打开窗口，不承载独立 Agent 记忆。一个会话最多在一个插件 Tab 中打开；从历史选择已打开会话时直接激活对应 Tab。
 
-同一插件 Tab 在浏览器页面变化后继续指向同一会话，新页面进入该会话的 `pages` 来源集合。创建新的插件 Tab 才会创建新的本地草稿会话，因此不同插件 Tab 的请求不会共享 `conversationUuid`，也不会产生不可见的跨 Tab 记忆污染。
+同一工作页在浏览器页面变化后继续指向同一会话，新页面进入该会话的 `pages` 来源集合。“新对话”同时创建新的本地草稿会话和工作页，因此不同会话的请求不会共享 `conversationUuid`，也不会产生不可见的跨工作页记忆污染。
 
 会话分支会创建新的 `LocalConversation`，复制当前会话在分支点之前的可见消息，并保存一次性的 `pendingBranchContext`。分支不复制原 `remoteUuid`。下一次发送时先懒创建新的远端会话，再把 `pendingBranchContext` 与新问题合并到首轮请求中；服务端开始返回文本或工具事件后即清除这份一次性上下文，避免后续请求重复注入。
 
 基础标题和分支关系分开存储。`title` 不追加重复的“· 分支”；历史和顶栏根据 `ConversationBranch.ordinal` 渲染分支徽标或副标题。
+
+历史视图根据 `parentConversationId` 生成展示用会话树；缺失父节点或异常循环会被提升为根节点，避免陈旧本地元数据使会话不可访问。分支工作页通过 `sourceMessageId` 定位父会话中的分支点，并提供返回父会话的轻量入口。
 
 ### 6.1 Tab 操作约束
 
 - `openTabs.length` 硬上限为 10。
 - 达到上限时 `+` 为 disabled，不能只在事件处理器里静默拒绝。
 - Tab 条横向滚动，激活、新建或历史定位后调用 `scrollIntoView({ block: 'nearest', inline: 'nearest' })`。
-- `+` 创建 `OpenConversationTab + LocalConversation`。
-- “新对话”创建新的 `LocalConversation` 并替换当前 `OpenConversationTab.conversationId`；旧会话仍在历史索引中。
-- 历史选择未打开会话时替换当前 Tab 的 `conversationId`；已打开会话则只激活对应 Tab。
+- `+` 是唯一的“新对话”入口，同时创建 `OpenConversationTab + LocalConversation`。
+- 新建会话、创建分支和打开历史会话都不得替换当前 `OpenConversationTab.conversationId`。
+- 历史选择未打开会话时创建新的 `OpenConversationTab`；已打开会话则只激活对应工作页。
+- 达到上限后不创建后台会话，也不把新会话悄悄塞入当前工作页。
+- 最后一个工作页不可关闭，关闭动作不得隐式创建空白会话。
 - 关闭 Tab 只移除 `OpenConversationTab`，不删除 `LocalConversation`。
 - 分支在未达上限时新建 Tab；达到上限时复用当前 Tab 打开新分支。
 
@@ -226,34 +232,54 @@ await chrome.storage.local.setAccessLevel({
 
 浏览器重启后可以丢弃这些数据。
 
-## 8. WorkOS API 客户端
+## 8. WorkOS 传输层
 
-Agent ID 固定为：
+旧版默认 Agent UUID 为：
 
 ```text
 409b06a1-2e2a-4d8c-af3c-ec831c0c6449
 ```
 
-客户端提供三个能力：
+它只用于旧配置迁移和首次默认值，不再是运行时固定常量。当前 Agent UUID 保存在 `workosConnectionSettings.agentUuid`，由 v1/v2 Transport 共用，并在创建远程 Conversation 时显式传入。
+
+上层对话逻辑只依赖统一的 `WorkosTransport`：
 
 ```ts
-createConversation(token): Promise<string>
-uploadFile(token, file): Promise<{ fileReadUrl: string }>
-executeStream(token, conversationUuid, request, callbacks): Promise<void>
+interface WorkosTransport {
+  kind: 'public-v1' | 'internal-v2'
+  createConversation(signal?): Promise<string>
+  executeStream(conversationUuid, request, callbacks, signal?): Promise<void>
+}
 ```
+
+当前实现保留两条可切换通道：
+
+- `PublicV1Transport`：官方公开 v1 API，认证只需要 `AP_...` Token。
+- `InternalV2Transport`：WorkOS 网页端 v2 协议，先订阅 SSE、再提交消息，并以 `runId` 关联本轮事件。
+
+附件上传暂时不属于统一执行传输：它仍调用 v1 公开上传接口，并要求单独配置 v1 API Token。迁移原因、风险和删除条件见 [WorkOS v2 可切换传输通道迁移方案](./WORKOS_V2_TRANSPORT_MIGRATION.md)。
+
+输入框的粘贴图片与附件按钮复用同一条上传管道：`Composer` 只负责从 `ClipboardEvent.clipboardData` 中提取图片、生成可读文件名并交给上层；`App` 统一完成数量和大小校验、v1 文件上传、草稿状态更新以及发送时的 URL/MIME 组装。没有图片的粘贴事件不会被拦截，因此文本输入仍保持原生行为。
+
+图片上传期间使用 `URL.createObjectURL(file)` 提供即时预览；远端 `fileReadUrl` 确认可显示后切换为远端地址并调用 `URL.revokeObjectURL()`。本地 `blob:` 地址被明确排除在工作区快照之外，删除附件、清空历史和 Side Panel 卸载时也会释放，避免把图片数据写入 `chrome.storage.local` 或长期占用内存。已发送图片渲染为行内附件 Token；完整图片只在 Token 悬浮、聚焦或点击时挂载，悬浮预览根据视口空间自动选择向上或向下展开，并在滚动、缩放或移出安全区域时关闭。远端图片不可显示时降级为普通文件 Chip。
+
+附件上传与对话传输分别由 `WorkosFileUploader` 和 `WorkosTransport` 承担。公开 v1 连接使用 multipart 文件接口；内部 v2 连接使用网页端临时地址协议：先向 WorkOS 申请 `uploadUrl` 与 `readUrl`，再以文件原始 MIME 对 `uploadUrl` 执行 OSS PUT，发送时只使用 `readUrl`。签名 URL 不进入本地会话存储。两条上传通道拥有各自的格式白名单，文件类型图标只负责识别，不代表当前通道必然允许上传。
 
 当前代码位置：
 
 ```text
-src/services/tokenStorage.ts
+src/services/workosConnection.ts
+src/services/workosTransport.ts
+src/services/workosTransportFactory.ts
 src/services/workosClient.ts
+src/services/workosInternalV2.ts
 src/services/workosSse.ts
 src/services/buildAgentContent.ts
 ```
 
-SSE 由 Side Panel 直接持有，停止生成使用 `AbortController`。这避免了 MV3 Service Worker 休眠导致长连接中断。Token 不传入 Content Script，也不会写入日志或错误文本。
+SSE 由 Side Panel 直接持有，停止生成使用 `AbortController`。这避免了 MV3 Service Worker 休眠导致长连接中断。连接凭证不传入 Content Script，也不会写入日志、会话或错误文本。
 
-### 8.1 创建会话
+### 8.1 v1 创建会话
 
 ```text
 POST /oapi/agent/v1/agents/{agentId}/conversations
@@ -277,7 +303,7 @@ Content-Type: multipart/form-data
 }
 ```
 
-### 8.3 SSE 执行
+### 8.3 v1 SSE 执行
 
 ```text
 POST /oapi/agent/v1/conversations/{conversationUuid}/execute/stream
@@ -298,11 +324,23 @@ SSE `data` 中还包含序列化后的第二层 JSON。解析器需要：
 8. 识别 `xybot-stream-complete` 后关闭本地运行状态。
 9. 将工具 part 或工具生命周期事件投影为稳定的工具 ID、名称、状态和起止时间。
 
+### 8.4 v2 顺序流执行
+
+v2 将消息提交和流式订阅拆开。每轮必须：
+
+1. `GET /api/agent/v2/conversations/{conversationUuid}/events/messages/subscribe` 建立 SSE；
+2. `POST /api/agent/v2/conversations/{conversationUuid}/queue/submit` 提交本轮消息；
+3. 从提交响应递归读取 `runId`；
+4. 忽略明确携带其他 `runId` 的历史事件；
+5. 只由当前 `runId` 的完成事件结束本轮。
+
+部分正文事件可能不携带 `runId`，因此解析器不能把“缺少 runId”和“runId 明确不匹配”视为同一种情况。订阅与提交共享同一个 `AbortController`；失败后不得自动切换 v1 重发，以免 Agent 或工具重复执行。
+
 内部 reasoning、Agent 配置和部署事件不得写入用户消息。工具事件只能进入安全投影；工具参数、完整输出、调试元数据和原始事件均不得进入 React 消息状态。侧边栏以可折叠的“运行过程”展示工具名称、运行状态和可计算的耗时，不展示模型原始思维链。
 
 `run.terminal` 的正常终态需要兼容 `success / succeeded / completed / finished / done / ok` 等常见表达。存在正文但终态异常时仍保留正文，并降级显示为部分失败提示；不得用高强调错误卡遮断已经可读的回答。
 
-### 8.4 会话分支上下文
+### 8.5 会话分支与通道切换上下文
 
 WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的可见记录序列化为 JSON，并用 `<conversation_branch_context>` 包裹后放入新会话的第一条请求。序列化范围包括：
 
@@ -313,6 +351,8 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 序列化范围明确排除工具活动、错误调试信息、内部 reasoning 和工具输入输出。分支创建本身不调用 API；用户真正继续提问时才创建远端会话。
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
+
+远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。旧版本中缺少 `remoteAgentUuid` 的远程会话按原默认 UUID 解释，避免升级时无故重建。
 
 ## 9. 页面抽取
 
@@ -338,7 +378,7 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 
 插件内部使用 `yemai.context.v1` JSON Envelope，WorkOS 适配器再把它渲染成有明确标题和普通文本 URL 的 Markdown。用户问题始终是一级字段，不再埋在完整页面正文之后。
 
-内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。
+内部 Envelope 保留 `source_id`、`revision_id`、页面类型、访问提示和交付模式，供插件决定如何组装上下文；发给 WorkOS Agent 的文本投影只包含本轮回答所需的动态信息，例如标题、URL、引用状态和实际资料。协议的信任边界、网页读取条件、引用原则和回答行为固定配置在 WorkOS Agent 的 Agent.md / System Prompt 中，不在每轮用户消息里重复发送。设置页从 `recommendedAgentTemplate.ts` 读取推荐模板并复制到剪贴板；[WORKOS_AGENT_PROMPT.md](./WORKOS_AGENT_PROMPT.md) 解释模板用途和插件侧配套边界。
 
 当前页交付模式包括：
 
