@@ -2,11 +2,10 @@ import { KoboyoIcon } from './KoboyoIcon';
 import { YemaiMark } from './YemaiMark';
 
 interface TopBarProps {
-  tabCount: number;
   onOpenSettings: () => void;
 }
 
-export function TopBar({ tabCount, onOpenSettings }: TopBarProps) {
+export function TopBar({ onOpenSettings }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="brand-lockup">
@@ -17,7 +16,6 @@ export function TopBar({ tabCount, onOpenSettings }: TopBarProps) {
       </div>
 
       <div className="topbar-meta">
-        <span>{tabCount} 个工作页</span>
         <button
           className="icon-button pressable"
           type="button"

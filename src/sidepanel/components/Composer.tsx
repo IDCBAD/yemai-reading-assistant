@@ -12,6 +12,7 @@ interface ComposerProps {
   conversations: Conversation[];
   activeTabId: string;
   input: string;
+  focusRequestId: number;
   contextItems: ContextItem[];
   activeConversationIds: Set<string>;
   runSummary: AgentRunSummary | null;
@@ -30,6 +31,8 @@ interface ComposerProps {
   onRetryAttachment: (id: string) => void;
   onFilesSelected: (files: File[]) => number | void;
   onAttachmentUnavailable: () => void;
+  smartSelectionActive: boolean;
+  onStartSmartSelection: () => void;
   onSend: () => void;
   onStop: () => void;
 }
@@ -45,6 +48,7 @@ export function Composer({
   conversations,
   activeTabId,
   input,
+  focusRequestId,
   contextItems,
   activeConversationIds,
   runSummary,
@@ -63,10 +67,13 @@ export function Composer({
   onRetryAttachment,
   onFilesSelected,
   onAttachmentUnavailable,
+  smartSelectionActive,
+  onStartSmartSelection,
   onSend,
   onStop,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const pasteAnnouncementTimerRef = useRef<number | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
@@ -120,6 +127,17 @@ export function Composer({
   useEffect(() => {
     tabButtonsRef.current.get(activeTabId)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTabId]);
+
+  useEffect(() => {
+    if (focusRequestId === 0) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const textarea = inputRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [focusRequestId]);
 
   useEffect(() => () => {
     if (pasteAnnouncementTimerRef.current !== null) {
@@ -289,6 +307,7 @@ export function Composer({
 
         <div className="composer-input-wrap">
           <textarea
+            ref={inputRef}
             name="agent-question"
             autoComplete="off"
             value={input}
@@ -356,11 +375,22 @@ export function Composer({
               >
                 <KoboyoIcon name="paperclip" size={17} />
               </button>
-              <span className={`composer-scope composer-scope--${connectionState}`}>
-                <i aria-hidden="true" />
-                {connectionState === 'loading' ? '读取配置' : connectionState === 'configured' ? '连接已配置' : '需要连接'}
-                {' · '}Tab {tabs.findIndex((tab) => tab.id === activeTabId) + 1}/{maxTabs}
-              </span>
+              <button
+                className={`composer-tool pressable${smartSelectionActive ? ' is-active' : ''}`}
+                type="button"
+                onClick={onStartSmartSelection}
+                disabled={smartSelectionActive}
+                aria-label={smartSelectionActive ? '正在智能框选网页内容' : '智能框选网页内容并引用'}
+                title={smartSelectionActive ? '移动鼠标选择内容块，点击引用，按 Esc 取消' : '智能框选'}
+              >
+                <KoboyoIcon name="selection" size={17} />
+              </button>
+              {connectionState === 'missing' && (
+                <span className="composer-scope composer-scope--missing" role="status">
+                  <i aria-hidden="true" />
+                  需要连接
+                </span>
+              )}
             </div>
             <div className="composer-status-actions">
               <AgentRunStatus summary={runSummary} />

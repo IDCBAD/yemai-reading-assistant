@@ -23,13 +23,27 @@ interface MessageListProps {
   };
   branchUnavailableReason?: string;
   onUseStarter: (value: string) => void;
+  onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
   onOpenBranchOrigin: () => void;
   onAddAssistantQuote: (quote: QuoteReference) => void;
 }
 
-const STARTERS = ['介绍一下你的能力', '解释我加入的引用', '给我一条学习 Agent 的路线'];
+const STARTERS = [
+  {
+    label: '介绍一下你的能力',
+    prompt: '介绍一下你的能力',
+  },
+  {
+    label: '总览当前网页',
+    prompt: '总览当前网页：请先用一句话概括主题，再按层级列出内容大纲，最后提炼 3 个关键结论。',
+  },
+  {
+    label: '提炼值得记住的内容',
+    prompt: '请从当前网页中提炼最值得记住的 3—5 个要点，并说明它们为什么重要。',
+  },
+];
 const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
 
 interface AssistantSelectionAction {
@@ -587,11 +601,22 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
   );
 }
 
-function UserMessage({ message }: { message: ChatMessage }) {
+function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => void }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const messageContextItems = contextItemsFromMessage(message);
   const pageItem = contextPage(messageContextItems);
   const references = contextSelections(messageContextItems);
   const attachments = contextAttachments(messageContextItems);
+  const copyQuestion = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1400);
+    } catch {
+      setCopyState('failed');
+      window.setTimeout(() => setCopyState('idle'), 1800);
+    }
+  };
   return (
     <article className="message message--user">
       <div className="user-message-stack">
@@ -627,7 +652,31 @@ function UserMessage({ message }: { message: ChatMessage }) {
         {attachments.length > 0 && message.content && ' '}
         {message.content && <span className="user-message-text">{message.content}</span>}
         </div>
-        <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
+        <div className="user-message-actions" aria-label="提问操作">
+          <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
+          {message.content && (
+            <>
+              <button
+                className="user-message-action pressable"
+                type="button"
+                onClick={copyQuestion}
+                aria-label={copyState === 'copied' ? '已复制提问' : copyState === 'failed' ? '复制失败' : '复制提问'}
+                title={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制提问'}
+              >
+                <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
+              </button>
+              <button
+                className="user-message-action pressable"
+                type="button"
+                onClick={onEdit}
+                aria-label="编辑提问到输入框"
+                title="编辑提问"
+              >
+                <KoboyoIcon name="edit" size={14} />
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -638,6 +687,7 @@ export function MessageList({
   branchOrigin,
   branchUnavailableReason,
   onUseStarter,
+  onEditUserMessage,
   onRetry,
   onBranch,
   onOpenBranchOrigin,
@@ -723,8 +773,8 @@ export function MessageList({
           <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
           <div className="starter-list">
             {STARTERS.map((starter) => (
-              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter)} key={starter}>
-                {starter}
+              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.label}>
+                {starter.label}
               </button>
             ))}
           </div>
@@ -735,7 +785,6 @@ export function MessageList({
 
   return (
     <main className="messages" aria-live="polite" ref={messagesRef}>
-      <div className="conversation-date">今天 · 当前工作页</div>
       {branchOrigin && (
         <button
           className="branch-origin"
@@ -768,7 +817,7 @@ export function MessageList({
             key={message.id}
           />
         ) : (
-          <UserMessage message={message} key={message.id} />
+          <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
         ),
       )}
       <div ref={endRef} />

@@ -12,3 +12,10 @@ export function shouldRefreshPageMetadataForTab(
   if (activeTabId === undefined || updatedTabId !== activeTabId) return false;
   return change.status === 'complete' || Boolean(change.url || change.title);
 }
+
+export function shouldApplyContentPageChange(
+  senderTabId: number | undefined,
+  activeTabId: number | undefined,
+) {
+  return senderTabId !== undefined && senderTabId === activeTabId;
+}

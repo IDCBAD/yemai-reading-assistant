@@ -65,7 +65,11 @@ import {
   isImageFile,
 } from './fileTypes';
 import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
-import { shouldRefreshPageMetadataForTab, type BrowserTabChange } from './pageMetadataSync';
+import {
+  shouldApplyContentPageChange,
+  shouldRefreshPageMetadataForTab,
+  type BrowserTabChange,
+} from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
 import type {
   ChatMessage,
@@ -179,6 +183,8 @@ export default function App() {
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
+  const [smartSelectionActive, setSmartSelectionActive] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
@@ -460,6 +466,37 @@ export default function App() {
     });
   }, [activeConversation.id, updateConversation]);
 
+  const startSmartSelection = useCallback(async () => {
+    setSmartSelectionActive(true);
+    setPageIssue(null);
+    const request: ExtensionRequest = {
+      type: 'selection:smart-active',
+      tabId: activeBrowserTabIdRef.current,
+    };
+    const response = await browser.runtime.sendMessage(request).catch(() => null) as { ok: boolean; error?: string } | null;
+    if (!response?.ok) {
+      setSmartSelectionActive(false);
+      setPageIssue(response?.error ?? '无法在当前网页开始智能框选。');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!smartSelectionActive) return;
+    const cancelWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      const request: ExtensionRequest = {
+        type: 'selection:smart-cancel-active',
+        tabId: activeBrowserTabIdRef.current,
+      };
+      void browser.runtime.sendMessage(request).catch(() => undefined);
+      setSmartSelectionActive(false);
+    };
+    window.addEventListener('keydown', cancelWithEscape, true);
+    return () => window.removeEventListener('keydown', cancelWithEscape, true);
+  }, [smartSelectionActive]);
+
   useEffect(() => {
     const port = browser.runtime.connect({ name: 'yebian-sidepanel' });
     return () => port.disconnect();
@@ -467,14 +504,31 @@ export default function App() {
 
   useEffect(() => {
     if (!workspaceHydrated) return;
-    const onRuntimeMessage = (message: ExtensionEvent) => {
+    const onRuntimeMessage = (
+      message: ExtensionEvent,
+      sender: { tab?: { id?: number } },
+    ) => {
       if (message?.type === 'selection:available') void consumePendingQuotes();
+      if (message?.type === 'selection:smart-finished') setSmartSelectionActive(false);
+      if (message?.type === 'page:changed') {
+        const senderTabId = sender.tab?.id;
+        if (!shouldApplyContentPageChange(senderTabId, activeBrowserTabIdRef.current)) return undefined;
+        const page: PageContext = {
+          ...message.page,
+          browserTabId: senderTabId,
+          status: 'not-read',
+        };
+        pendingPageSnapshotsRef.current.delete(pageSnapshotKey(activeConversation.id, page.url));
+        setPageMetadataRevision((revision) => revision + 1);
+        setCurrentPage(page);
+        setPageIssue(null);
+      }
       return undefined;
     };
     browser.runtime.onMessage.addListener(onRuntimeMessage);
     void consumePendingQuotes();
     return () => browser.runtime.onMessage.removeListener(onRuntimeMessage);
-  }, [consumePendingQuotes, workspaceHydrated]);
+  }, [activeConversation.id, consumePendingQuotes, workspaceHydrated]);
 
   useEffect(() => {
     const onActivated = (activeInfo: { tabId: number }) => {
@@ -1340,7 +1394,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <TopBar tabCount={workspace.openTabs.length} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
         messages={activeConversation.messages}
         branchOrigin={branchOrigin}
@@ -1349,7 +1403,14 @@ export default function App() {
           : workspace.openTabs.length >= MAX_OPEN_TABS
             ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
             : undefined}
-        onUseStarter={(value) => patchActiveConversation({ draftInput: value })}
+        onUseStarter={(value) => {
+          patchActiveConversation({ draftInput: value });
+          setComposerFocusRequest((request) => request + 1);
+        }}
+        onEditUserMessage={(message) => {
+          patchActiveConversation({ draftInput: message.content });
+          setComposerFocusRequest((request) => request + 1);
+        }}
         onRetry={retryMessage}
         onBranch={branchFromMessage}
         onOpenBranchOrigin={() => {
@@ -1371,6 +1432,7 @@ export default function App() {
         conversations={workspace.conversations}
         activeTabId={activeOpenTab.id}
         input={activeConversation.draftInput}
+        focusRequestId={composerFocusRequest}
         contextItems={draftContextItems}
         activeConversationIds={activeConversationIds}
         runSummary={runSummary}
@@ -1412,6 +1474,8 @@ export default function App() {
             : '请先配置 WorkOS 公开 v1 API Token。');
           setSettingsOpen(true);
         }}
+        smartSelectionActive={smartSelectionActive}
+        onStartSmartSelection={startSmartSelection}
         onSend={sendMessage}
         onStop={() => {
           if (runSummary) stopRequest(activeConversation.id, runSummary.activeMessageId);
