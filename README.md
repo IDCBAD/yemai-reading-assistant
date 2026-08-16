@@ -155,6 +155,8 @@ flowchart LR
 
 ## 设计与技术文档
 
+- [版本变更记录](CHANGELOG.md)
+- [发布验证清单](docs/RELEASE_CHECKLIST.md)
 - [产品需求与 MVP 范围](docs/PRODUCT_SPEC.md)
 - [技术架构设计](docs/TECHNICAL_DESIGN.md)
 - [统一上下文工作台架构](docs/context-workbench-architecture.md)
@@ -165,7 +167,7 @@ flowchart LR
 
 ## 当前状态
 
-当前 `main` 是经过类型检查、自动化测试和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
+当前稳定版本为 [`v0.1.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check
