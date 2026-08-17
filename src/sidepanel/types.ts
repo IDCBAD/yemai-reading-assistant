@@ -115,6 +115,7 @@ export type ContextItem =
 
 export type MessageStatus = 'queued' | 'running' | 'streaming' | 'complete' | 'stopped' | 'failed';
 export type MessageStage = 'queued' | 'reading-page' | 'creating-conversation' | 'waiting-first-token' | 'streaming';
+export type MessagePresentation = 'page-overview';
 export type AgentOrbState = 'searching' | 'listening' | 'working' | 'composing' | 'shaping';
 export type RunActivityStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -143,6 +144,7 @@ export interface ChatMessage {
   createdAt: number;
   respondedAt?: number;
   status: MessageStatus;
+  presentation?: MessagePresentation;
   stage?: MessageStage;
   errorMessage?: string;
   activities?: RunActivity[];

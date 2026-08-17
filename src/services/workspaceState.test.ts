@@ -22,6 +22,7 @@ function conversation(): Conversation {
       createdAt: 11,
       respondedAt: 13,
       status: 'streaming',
+      presentation: 'page-overview',
       stage: 'streaming',
       activities: [{ id: 'tool-1', kind: 'tool', title: '搜索', status: 'running', startedAt: 12 }],
     }],
@@ -69,6 +70,7 @@ describe('workspace state v5', () => {
     });
     expect(attachment?.kind === 'image' ? attachment.attachment.previewUrl : undefined).toBeUndefined();
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
+    expect(restored?.conversations[0]?.messages[0]?.presentation).toBe('page-overview');
   });
 
   it('marks interrupted streams and tools as stopped after reload', () => {

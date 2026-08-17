@@ -2,6 +2,26 @@
 
 本项目的主要版本变化记录在此。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+暂无。
+
+## [0.2.0] - 2026-08-17
+
+页脉总览视图与安装体验升级版本。
+
+### 新增
+
+- 将“总览当前网页”升级为稳定的五段式输出协议：一句话主题、内容大纲、关键结论、重要概念和值得追问。
+- 为网页总览增加证据边界，要求区分页面事实与合理推断，并在信息不足时明确说明。
+- 为符合协议的网页总览增加专属视图，使用可表达嵌套层级的弧形分支，并支持悬浮反馈与一键填入后续问题。
+- 当网页总览结构不完整时保留普通 Markdown 展示，避免解析失败影响回答阅读。
+
+### 调整
+
+- 将 Release 资产限定为不含仓库文档和源码的 Chrome 扩展 ZIP。
+- 在 README 和 Release 说明中补充从下载 ZIP 到 `chrome://extensions` 加载已解压扩展的完整步骤。
+
 ## [0.1.0] - 2026-08-17
 
 页脉首个稳定版本，完成从网页阅读、上下文组织到 WorkOS Agent 连续对话的基本闭环。
@@ -48,4 +68,6 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0

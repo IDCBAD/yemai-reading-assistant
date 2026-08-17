@@ -71,6 +71,7 @@ import {
   type BrowserTabChange,
 } from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
+import { PAGE_OVERVIEW_PROMPT } from './starterActions';
 import type {
   ChatMessage,
   Conversation,
@@ -993,12 +994,16 @@ export default function App() {
     const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
     const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
     const needsPageRead = includeCurrentPage;
+    const presentation = activeConversation.draftInput.trim() === PAGE_OVERVIEW_PROMPT
+      ? 'page-overview' as const
+      : undefined;
     const userMessage: ChatMessage = {
       id: makeId('message'),
       role: 'user',
       content: activeConversation.draftInput.trim(),
       createdAt: now,
       status: 'complete',
+      presentation,
       contextItems: createContextSnapshot(draftContextItems).map((item) =>
         item.kind === 'page'
           ? {
@@ -1016,6 +1021,7 @@ export default function App() {
       status: 'queued',
       stage: 'queued',
       activities: [],
+      presentation,
     };
 
     updateConversation(conversationAtSend.id, (conversation) => ({

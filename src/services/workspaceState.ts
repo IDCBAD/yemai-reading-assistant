@@ -199,6 +199,7 @@ function isMessage(value: unknown): value is ChatMessage {
     && typeof value.createdAt === 'number'
     && (value.respondedAt === undefined || typeof value.respondedAt === 'number')
     && typeof value.status === 'string'
+    && (value.presentation === undefined || value.presentation === 'page-overview')
     && (value.pageContext === undefined || isPage(value.pageContext))
     && (value.pageContextMode === undefined || ['manifest', 'reuse', 'snapshot'].includes(value.pageContextMode as string))
     && (value.pageContextDelivery === undefined || ['introduce', 'update', 'reuse'].includes(value.pageContextDelivery as string))

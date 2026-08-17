@@ -43,6 +43,20 @@
 
 页面只是会话的上下文来源，不会因为浏览器跳转而自动创建新会话。同一页面内容版本在同一会话中默认只注入一次，避免反复发送相同正文。
 
+## 从 GitHub Release 安装到 Chrome
+
+普通用户不需要安装 Node.js，也不需要下载源码或 `docs` 文档。请在 GitHub Release 页面操作：
+
+1. 在页面底部的 **Assets** 中下载 `yemai-reading-assistant-版本号-chrome.zip`。
+2. 将 ZIP 解压到一个固定文件夹。不要直接选择 ZIP 文件本身。
+3. 在 Chrome 地址栏打开 `chrome://extensions`。
+4. 打开右上角的“开发者模式”。
+5. 点击“加载已解压的扩展程序”，选择解压后、内部包含 `manifest.json` 的文件夹。
+6. 将“页脉”固定到 Chrome 工具栏，打开任意普通网页后点击扩展图标即可打开 Side Panel。
+7. 首次使用时，在“连接与隐私”中填写 WorkOS Agent UUID 和对应连接凭证。
+
+Release ZIP 只包含运行扩展所需的构建文件，不包含仓库源码、测试文件或 `docs` 目录。
+
 ## 安装与运行
 
 ### 环境要求
@@ -52,7 +66,7 @@
 - 为获得原生 Side Panel 隐藏与恢复体验，推荐使用最新稳定版 Chrome
 - 可用的 WorkOS Agent UUID 及对应连接凭证
 
-### 构建扩展
+### 从源码构建扩展
 
 ```bash
 npm install
@@ -167,7 +181,7 @@ flowchart LR
 
 ## 当前状态
 
-当前稳定版本为 [`v0.1.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
+当前稳定版本为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check

@@ -7,9 +7,12 @@ import { contextAttachments, contextItemsFromMessage, contextPage, contextSelect
 import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
+import { STARTER_ACTIONS } from '../starterActions';
+import { parsePageOverview } from '../pageOverview';
 import { FileTypeIcon } from './FileTypeIcon';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
+import { PageOverviewCard } from './PageOverviewCard';
 import { YemaiMark } from './YemaiMark';
 import { AnswerContextTrace } from './AnswerContextTrace';
 
@@ -30,20 +33,6 @@ interface MessageListProps {
   onAddAssistantQuote: (quote: QuoteReference) => void;
 }
 
-const STARTERS = [
-  {
-    label: '介绍一下你的能力',
-    prompt: '介绍一下你的能力',
-  },
-  {
-    label: '总览当前网页',
-    prompt: '总览当前网页：请先用一句话概括主题，再按层级列出内容大纲，最后提炼 3 个关键结论。',
-  },
-  {
-    label: '提炼值得记住的内容',
-    prompt: '请从当前网页中提炼最值得记住的 3—5 个要点，并说明它们为什么重要。',
-  },
-];
 const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
 
 interface AssistantSelectionAction {
@@ -187,18 +176,27 @@ function getRunNote(message: ChatMessage) {
 function AssistantMessage({
   message,
   contextSources,
+  onUseFollowUp,
   onRetry,
   onBranch,
   branchUnavailableReason,
 }: {
   message: ChatMessage;
   contextSources: AnswerContextSource[];
+  onUseFollowUp: (question: string) => void;
   onRetry: () => void;
   onBranch: () => void;
   branchUnavailableReason?: string;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const runNote = getRunNote(message);
+  const pageOverview = useMemo(() => (
+    message.presentation === 'page-overview'
+    && message.status !== 'streaming'
+    && message.content
+      ? parsePageOverview(message.content)
+      : null
+  ), [message.content, message.presentation, message.status]);
   const copyMarkdown = async () => {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -222,27 +220,34 @@ function AssistantMessage({
       </div>
       <div className="message-content">
         {message.activities && message.activities.length > 0 && <RunActivityPanel activities={message.activities} />}
-        <div className="markdown-body" data-assistant-selectable="true">
+        <div
+          className={`markdown-body${pageOverview ? ' markdown-body--page-overview' : ''}`}
+          data-assistant-selectable="true"
+        >
           {!message.content && runNote && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
             </div>
           )}
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              pre({ children }) {
-                const child = isValidElement<{ children?: unknown }>(children) ? children : null;
-                const value = String(child?.props.children ?? '').replace(/\n$/, '');
-                return <CodeBlock>{value}</CodeBlock>;
-              },
-              code({ children }) {
-                return <code className="inline-code">{children}</code>;
-              },
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          {pageOverview ? (
+            <PageOverviewCard overview={pageOverview} onUseFollowUp={onUseFollowUp} />
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                pre({ children }) {
+                  const child = isValidElement<{ children?: unknown }>(children) ? children : null;
+                  const value = String(child?.props.children ?? '').replace(/\n$/, '');
+                  return <CodeBlock>{value}</CodeBlock>;
+                },
+                code({ children }) {
+                  return <code className="inline-code">{children}</code>;
+                },
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
           {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
         </div>
         {Boolean(message.content) && message.status !== 'streaming' && (
@@ -772,8 +777,8 @@ export function MessageList({
           <h2>从当前页面开始</h2>
           <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
           <div className="starter-list">
-            {STARTERS.map((starter) => (
-              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.label}>
+            {STARTER_ACTIONS.map((starter) => (
+              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.id}>
                 {starter.label}
               </button>
             ))}
@@ -811,6 +816,7 @@ export function MessageList({
           <AssistantMessage
             message={message}
             contextSources={answerContexts.get(message.id) ?? []}
+            onUseFollowUp={onUseStarter}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
             branchUnavailableReason={branchUnavailableReason}
