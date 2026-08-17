@@ -27,6 +27,7 @@ const credentials = {
   userUuid: 'user-1',
   organizationUuid: 'org-1',
 };
+const agentUuid = '11111111-1111-4111-8111-111111111111';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -51,7 +52,7 @@ describe('InternalV2Transport', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const transport = new InternalV2Transport(credentials, '11111111-1111-4111-8111-111111111111');
+    const transport = new InternalV2Transport(credentials, agentUuid);
     await expect(transport.createConversation()).resolves.toBe('conversation-v2');
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       agentUuid: '11111111-1111-4111-8111-111111111111',
@@ -92,7 +93,7 @@ describe('InternalV2Transport', () => {
     vi.stubGlobal('fetch', fetchMock);
     const onText = vi.fn();
 
-    const transport = new InternalV2Transport(credentials);
+    const transport = new InternalV2Transport(credentials, agentUuid);
     await transport.executeStream('conversation-v2', { content: '继续提问' }, { onText });
 
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/events/messages/subscribe');
@@ -107,7 +108,7 @@ describe('InternalV2Transport', () => {
       msg: 'login-token must stay private',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
-    const transport = new InternalV2Transport(credentials);
+    const transport = new InternalV2Transport(credentials, agentUuid);
     await expect(transport.createConversation()).rejects.toEqual(expect.objectContaining({
       message: 'WorkOS v2 登录凭证无效或已过期，请在设置中更新。',
       status: 401,

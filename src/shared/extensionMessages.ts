@@ -1,4 +1,5 @@
 import type { PageContext, QuoteReference } from '../sidepanel/types';
+import type { WorkosCredentialsResponse } from './workosCredentials';
 
 export interface PageSnapshot extends PageContext {
   pageId: string;
@@ -16,6 +17,7 @@ export type ExtensionRequest =
   | { type: 'selection:consume' }
   | { type: 'selection:smart-active'; tabId?: number }
   | { type: 'selection:smart-cancel-active'; tabId?: number }
+  | { type: 'workos:import-login-credentials' }
   | {
       type: 'selection:smart-finish';
       outcome: 'committed' | 'cancelled';
@@ -29,7 +31,8 @@ export type ContentRequest =
   | { type: 'page:get-metadata' }
   | { type: 'page:extract' }
   | { type: 'selection:smart-start' }
-  | { type: 'selection:smart-cancel' };
+  | { type: 'selection:smart-cancel' }
+  | { type: 'workos:read-login-credentials' };
 
 export type ExtensionEvent =
   | { type: 'selection:available' }
@@ -54,3 +57,5 @@ export interface CommandResponse {
   ok: boolean;
   error?: string;
 }
+
+export type { WorkosCredentialsResponse };

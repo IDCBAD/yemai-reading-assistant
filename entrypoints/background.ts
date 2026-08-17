@@ -7,9 +7,11 @@ import type {
   PageResponse,
   PanelStatusResponse,
   SelectionConsumeResponse,
+  WorkosCredentialsResponse,
 } from '../src/shared/extensionMessages';
 import type { QuoteReference } from '../src/sidepanel/types';
 import { hasDefiniteUrlMismatch, isDefinitelyUnsupportedPage } from '../src/shared/tabTarget';
+import { WORKOS_APP_URL_PATTERN } from '../src/shared/workosCredentials';
 
 const PENDING_QUOTES_KEY = 'pendingSelectionQuotes';
 const SELECTION_BUBBLE_KEY = 'selectionBubbleEnabled';
@@ -164,6 +166,38 @@ export default defineBackground(() => {
     return { page: null, error: '无法连接当前网页，请刷新页面后重试。' };
   };
 
+  const importWorkosCredentials = async (): Promise<WorkosCredentialsResponse> => {
+    const tabs = await browser.tabs.query({ url: WORKOS_APP_URL_PATTERN }).catch(() => []);
+    const availableTabs = tabs
+      .flatMap((tab) => tab.id === undefined ? [] : [{ ...tab, id: tab.id }])
+      .sort((left, right) => Number(right.active) - Number(left.active));
+    if (!availableTabs.length) {
+      return {
+        ok: false,
+        error: '没有找到已打开的 WorkOS 页面。请先登录影刀 AI WorkOS，再返回重试。',
+      };
+    }
+
+    let lastResponse: WorkosCredentialsResponse | undefined;
+    for (const tab of availableTabs) {
+      try {
+        const response = await browser.tabs.sendMessage(
+          tab.id,
+          { type: 'workos:read-login-credentials' } satisfies ContentRequest,
+        ) as WorkosCredentialsResponse;
+        if (response?.ok) return response;
+        if (response && typeof response === 'object') lastResponse = response;
+      } catch {
+        // Continue to another WorkOS tab when one has not finished loading its content script.
+      }
+    }
+
+    return lastResponse ?? {
+      ok: false,
+      error: '无法读取 WorkOS 登录信息，请刷新 WorkOS 页面后重试。',
+    };
+  };
+
   const startSmartSelection = async (tabId?: number): Promise<CommandResponse> => {
     const tab = tabId === undefined
       ? (await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0]
@@ -287,6 +321,22 @@ export default defineBackground(() => {
         await browser.runtime.sendMessage(event).catch(() => undefined);
         sendResponse({ ok: true });
       }).catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+    if (message.type === 'workos:import-login-credentials') {
+      if (sender.tab?.id !== undefined) {
+        sendResponse({
+          ok: false,
+          error: '只能从页脉设置页发起 WorkOS 登录信息导入。',
+        } satisfies WorkosCredentialsResponse);
+        return false;
+      }
+      void importWorkosCredentials()
+        .then(sendResponse)
+        .catch(() => sendResponse({
+          ok: false,
+          error: '扩展后台读取 WorkOS 登录信息失败。',
+        } satisfies WorkosCredentialsResponse));
       return true;
     }
     const isSelectionConsume = message.type === 'selection:consume';

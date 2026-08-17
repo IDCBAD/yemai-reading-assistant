@@ -1,24 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_WORKOS_AGENT_UUID, hasWorkosRemoteTargetChanged } from './workosTransport';
+import { hasWorkosRemoteTargetChanged } from './workosTransport';
+
+const agentUuid = '11111111-1111-4111-8111-111111111111';
 
 describe('WorkOS remote target identity', () => {
-  it('treats legacy remote metadata as the original v1 Agent', () => {
+  it('requires a new conversation when legacy remote metadata has no Agent identity', () => {
     expect(hasWorkosRemoteTargetChanged(
       'remote-1',
       undefined,
       undefined,
       'public-v1',
-      DEFAULT_WORKOS_AGENT_UUID,
-    )).toBe(false);
+      agentUuid,
+    )).toBe(true);
   });
 
   it('requires a new remote conversation after changing the Agent UUID', () => {
     expect(hasWorkosRemoteTargetChanged(
       'remote-1',
       'internal-v2',
-      DEFAULT_WORKOS_AGENT_UUID,
+      agentUuid,
       'internal-v2',
-      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
     )).toBe(true);
   });
 

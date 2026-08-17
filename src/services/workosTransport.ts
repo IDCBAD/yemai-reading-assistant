@@ -1,6 +1,5 @@
 import type { WorkosSseCallbacks } from './workosSse';
 
-export const DEFAULT_WORKOS_AGENT_UUID = '409b06a1-2e2a-4d8c-af3c-ec831c0c6449';
 export const WORKOS_API_ORIGIN = 'https://power-api.yingdao.com';
 
 export type WorkosTransportKind = 'public-v1' | 'internal-v2';
@@ -14,7 +13,7 @@ export function hasWorkosRemoteTargetChanged(
 ) {
   if (!remoteUuid) return false;
   return (remoteTransport ?? 'public-v1') !== nextTransport
-    || (remoteAgentUuid ?? DEFAULT_WORKOS_AGENT_UUID) !== nextAgentUuid;
+    || (remoteAgentUuid ?? '') !== nextAgentUuid;
 }
 
 export interface ExecuteRequest {

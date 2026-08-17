@@ -32,7 +32,10 @@ describe('public v1 transport primitives', () => {
       });
     });
     vi.stubGlobal('fetch', fetchMock);
-    await expect(createWorkosConversation('AP_token')).resolves.toBe('conversation-v1');
+    await expect(createWorkosConversation(
+      'AP_token',
+      '11111111-1111-4111-8111-111111111111',
+    )).resolves.toBe('conversation-v1');
   });
 
   it('creates the conversation under the configured Agent UUID', async () => {
@@ -47,7 +50,6 @@ describe('public v1 transport primitives', () => {
 
     await expect(createWorkosConversation(
       'AP_token',
-      undefined,
       '11111111-1111-4111-8111-111111111111',
     )).resolves.toBe('custom-agent-conversation');
   });

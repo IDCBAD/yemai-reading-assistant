@@ -1,5 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { validateAgentUuid, type WorkosConnectionSettings } from '../../services/workosConnection';
+import {
+  validateAgentUuid,
+  type InternalV2Credentials,
+  type WorkosConnectionSettings,
+} from '../../services/workosConnection';
 import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate';
 import type { WorkosTransportKind } from '../../services/workosTransport';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
@@ -167,6 +171,7 @@ interface SettingsDrawerProps {
   bubbleEnabled: boolean;
   onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
+  onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
   onRemoveCredentials: (kind: WorkosTransportKind) => Promise<void>;
   onBubbleEnabledChange: (enabled: boolean) => void;
   onClose: () => void;
@@ -180,6 +185,7 @@ export function SettingsDrawer({
   bubbleEnabled,
   onSaveConnection,
   onTestConnection,
+  onImportWorkosCredentials,
   onRemoveCredentials,
   onBubbleEnabledChange,
   onClose,
@@ -189,6 +195,7 @@ export function SettingsDrawer({
   const [draft, setDraft] = useState(settings);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [testState, setTestState] = useState<'idle' | 'testing' | 'passed' | 'error'>('idle');
+  const [importState, setImportState] = useState<'idle' | 'importing' | 'imported' | 'error'>('idle');
   const [copyTemplateState, setCopyTemplateState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -198,6 +205,7 @@ export function SettingsDrawer({
     setShowToken(false);
     setSaveState('idle');
     setTestState('idle');
+    setImportState('idle');
     setCopyTemplateState('idle');
     setLocalError(null);
   }, [open, settings]);
@@ -206,6 +214,7 @@ export function SettingsDrawer({
     setDraft((current) => ({ ...current, ...patch }));
     setSaveState('idle');
     setTestState('idle');
+    setImportState('idle');
     setLocalError(null);
   };
 
@@ -228,6 +237,22 @@ export function SettingsDrawer({
       .catch((error: unknown) => {
         setTestState('error');
         setLocalError(error instanceof Error ? error.message : '连接测试失败。');
+      });
+  };
+
+  const importWorkosCredentials = () => {
+    setImportState('importing');
+    setSaveState('idle');
+    setTestState('idle');
+    setLocalError(null);
+    void onImportWorkosCredentials()
+      .then((credentials) => {
+        setDraft((current) => ({ ...current, internalV2: credentials }));
+        setImportState('imported');
+      })
+      .catch((error: unknown) => {
+        setImportState('error');
+        setLocalError(error instanceof Error ? error.message : 'WorkOS 登录信息读取失败。');
       });
   };
 
@@ -282,7 +307,7 @@ export function SettingsDrawer({
                 name="workosAgentUuid"
                 value={draft.agentUuid}
                 onChange={(event) => patchDraft({ agentUuid: event.target.value })}
-                placeholder="例如：409b06a1-…"
+                placeholder="粘贴你自己的 Agent UUID"
                 autoComplete="off"
                 spellCheck={false}
                 aria-describedby="workos-agent-uuid-help"
@@ -353,6 +378,40 @@ export function SettingsDrawer({
                   <strong>个人实验通道</strong>
                   <p>使用 WorkOS 当前网页端协议。接口正式开放前，平台更新可能导致连接失效。</p>
                 </div>
+                <div className={`credential-import is-${importState}`}>
+                  <div>
+                    <strong>WorkOS 登录信息</strong>
+                    <p>读取 3 项固定字段，只填入当前表单。</p>
+                  </div>
+                  <button
+                    className="credential-import-button pressable"
+                    type="button"
+                    disabled={importState === 'importing'}
+                    onClick={importWorkosCredentials}
+                    aria-live="polite"
+                  >
+                    <KoboyoIcon
+                      name={importState === 'importing'
+                        ? 'cycle'
+                        : importState === 'imported'
+                          ? 'solid-checkmark'
+                          : importState === 'error'
+                            ? 'cross'
+                            : 'globe'}
+                      size={13}
+                      className={importState === 'importing' ? 'is-spinning' : ''}
+                    />
+                    <span>
+                      {importState === 'importing'
+                        ? '正在读取…'
+                        : importState === 'imported'
+                          ? '已填入'
+                          : importState === 'error'
+                            ? '重新获取'
+                            : '从 WorkOS 获取'}
+                    </span>
+                  </button>
+                </div>
                 <label htmlFor="workos-v2-token">登录 Access Token</label>
                 <div className="token-field">
                   <input
@@ -405,12 +464,24 @@ export function SettingsDrawer({
             )}
             <div className="connection-actions">
               <button
-                className="secondary-button pressable"
+                className={`secondary-button connection-test-button is-${testState} pressable`}
                 type="button"
                 disabled={!activeConfigured || testState === 'testing'}
                 onClick={testConnection}
+                aria-live="polite"
               >
-                {testState === 'testing' ? '正在测试…' : testState === 'passed' ? '连接正常' : '测试连接'}
+                {testState === 'testing' && <KoboyoIcon name="cycle" size={13} className="is-spinning" />}
+                {testState === 'passed' && <KoboyoIcon name="solid-checkmark" size={13} />}
+                {testState === 'error' && <KoboyoIcon name="cross" size={13} />}
+                <span>
+                  {testState === 'testing'
+                    ? '正在测试…'
+                    : testState === 'passed'
+                      ? '连接正常'
+                      : testState === 'error'
+                        ? '连接失败'
+                        : '测试连接'}
+                </span>
               </button>
               <button
                 className="save-token-button pressable"
@@ -478,8 +549,8 @@ export function SettingsDrawer({
           <section className="security-note">
             <KoboyoIcon name="shield-check" size={18} />
             <div>
-              <strong>网页无法读取 Token</strong>
-              <p>Token 不会发送给内容脚本，也不会进入聊天正文。</p>
+              <strong>凭据仅在本机流转</strong>
+              <p>只有主动获取时才读取 WorkOS 的 3 个固定字段；不会进入聊天正文，也不会自动保存。</p>
             </div>
           </section>
 

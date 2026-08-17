@@ -10,6 +10,7 @@ export default defineConfig({
     minimum_chrome_version: '116',
     permissions: ['sidePanel', 'storage', 'favicon'],
     host_permissions: [
+      'https://aipower.yingdao.com/*',
       'https://power-api.yingdao.com/*',
       'https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*',
     ],

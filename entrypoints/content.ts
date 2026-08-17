@@ -16,6 +16,7 @@ import type {
   PanelStatusResponse,
 } from '../src/shared/extensionMessages';
 import type { QuoteReference } from '../src/sidepanel/types';
+import { readWorkosLoginCredentials } from '../src/shared/workosCredentials';
 
 const MIN_SELECTION_LENGTH = 2;
 const MAX_SELECTION_LENGTH = 8_000;
@@ -557,6 +558,13 @@ export default defineContentScript({
       if (message?.type === 'selection:smart-cancel') {
         if (smartSelectionPhase !== 'inactive') finishSmartSelection('cancelled');
         sendResponse({ ok: true } satisfies CommandResponse);
+        return false;
+      }
+      if (message?.type === 'workos:read-login-credentials') {
+        sendResponse(readWorkosLoginCredentials(
+          window.location.origin,
+          (key) => window.localStorage.getItem(key),
+        ));
         return false;
       }
       return false;
