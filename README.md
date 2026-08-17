@@ -183,7 +183,7 @@ flowchart LR
 
 ## 当前状态
 
-当前稳定版本为 [`v0.1.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
+当前稳定版本为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check

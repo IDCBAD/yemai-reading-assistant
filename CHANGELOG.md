@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+暂无。
+
+## [0.2.0] - 2026-08-17
+
+页脉连接安全与首次配置体验升级版本。
+
 ### 调整
 
 - 新安装默认选择实验性实时连接；已有用户明确保存的连接通道继续保留。
@@ -68,5 +74,6 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0
