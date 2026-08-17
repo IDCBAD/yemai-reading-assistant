@@ -6,9 +6,9 @@
 
 暂无。
 
-## [0.2.0] - 2026-08-17
+## [0.1.0] - 2026-08-17
 
-页脉总览视图与安装体验升级版本。
+页脉首个稳定版本，完成从网页阅读、上下文组织到 WorkOS Agent 连续对话的基本闭环。
 
 ### 新增
 
@@ -16,18 +16,6 @@
 - 为网页总览增加证据边界，要求区分页面事实与合理推断，并在信息不足时明确说明。
 - 为符合协议的网页总览增加专属视图，使用可表达嵌套层级的弧形分支，并支持悬浮反馈与一键填入后续问题。
 - 当网页总览结构不完整时保留普通 Markdown 展示，避免解析失败影响回答阅读。
-
-### 调整
-
-- 将 Release 资产限定为不含仓库文档和源码的 Chrome 扩展 ZIP。
-- 在 README 和 Release 说明中补充从下载 ZIP 到 `chrome://extensions` 加载已解压扩展的完整步骤。
-
-## [0.1.0] - 2026-08-17
-
-页脉首个稳定版本，完成从网页阅读、上下文组织到 WorkOS Agent 连续对话的基本闭环。
-
-### 新增
-
 - 基于 Chrome Manifest V3 和原生 Side Panel API 的阅读工作区。
 - WorkOS 官方 API 与实验性实时连接两种可切换通道。
 - Agent UUID 和连接凭证配置、连接测试与本地可信上下文存储。
@@ -48,6 +36,8 @@
 
 ### 调整
 
+- 将 Release 资产限定为不含仓库文档和源码的 Chrome 扩展 ZIP。
+- 在 README 和 Release 说明中补充从下载 ZIP 到 `chrome://extensions` 加载已解压扩展的完整步骤。
 - 将会话定义为“阅读任务或学习主题”，网页作为可追踪的上下文来源。
 - 同一页面内容版本在同一会话中默认只注入一次，减少重复上下文。
 - 统一页面、选区和附件在草稿、消息、分支与历史恢复中的数据模型。
@@ -68,6 +58,5 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0
