@@ -1,8 +1,9 @@
 import { browser } from 'wxt/browser';
-import { DEFAULT_WORKOS_AGENT_UUID, type WorkosTransportKind } from './workosTransport';
+import type { WorkosTransportKind } from './workosTransport';
 
 const SETTINGS_KEY = 'workosConnectionSettings';
 const LEGACY_TOKEN_KEY = 'workosToken';
+export const WORKOS_CONNECTION_SETTINGS_VERSION = 2;
 
 export interface InternalV2Credentials {
   accessToken: string;
@@ -11,6 +12,7 @@ export interface InternalV2Credentials {
 }
 
 export interface WorkosConnectionSettings {
+  schemaVersion: typeof WORKOS_CONNECTION_SETTINGS_VERSION;
   agentUuid: string;
   transport: WorkosTransportKind;
   publicApiToken: string;
@@ -18,8 +20,9 @@ export interface WorkosConnectionSettings {
 }
 
 export const EMPTY_WORKOS_CONNECTION_SETTINGS: WorkosConnectionSettings = {
-  agentUuid: DEFAULT_WORKOS_AGENT_UUID,
-  transport: 'public-v1',
+  schemaVersion: WORKOS_CONNECTION_SETTINGS_VERSION,
+  agentUuid: '',
+  transport: 'internal-v2',
   publicApiToken: '',
   internalV2: {
     accessToken: '',
@@ -33,17 +36,29 @@ function clean(value: unknown) {
 }
 
 export function normalizeWorkosConnectionSettings(value: unknown, legacyToken: unknown = ''): WorkosConnectionSettings {
+  const normalizedLegacyToken = clean(legacyToken);
   if (!value || typeof value !== 'object') {
-    return { ...EMPTY_WORKOS_CONNECTION_SETTINGS, publicApiToken: clean(legacyToken) };
+    return {
+      ...EMPTY_WORKOS_CONNECTION_SETTINGS,
+      transport: normalizedLegacyToken ? 'public-v1' : EMPTY_WORKOS_CONNECTION_SETTINGS.transport,
+      publicApiToken: normalizedLegacyToken,
+    };
   }
   const record = value as Record<string, unknown>;
   const internal = record.internalV2 && typeof record.internalV2 === 'object'
     ? record.internalV2 as Record<string, unknown>
     : {};
+  const publicApiToken = clean(record.publicApiToken) || normalizedLegacyToken;
+  const transport = record.transport === 'public-v1' || record.transport === 'internal-v2'
+    ? record.transport
+    : publicApiToken
+      ? 'public-v1'
+      : EMPTY_WORKOS_CONNECTION_SETTINGS.transport;
   return {
-    agentUuid: clean(record.agentUuid) || DEFAULT_WORKOS_AGENT_UUID,
-    transport: record.transport === 'internal-v2' ? 'internal-v2' : 'public-v1',
-    publicApiToken: clean(record.publicApiToken) || clean(legacyToken),
+    schemaVersion: WORKOS_CONNECTION_SETTINGS_VERSION,
+    agentUuid: record.schemaVersion === WORKOS_CONNECTION_SETTINGS_VERSION ? clean(record.agentUuid) : '',
+    transport,
+    publicApiToken,
     internalV2: {
       accessToken: clean(internal.accessToken),
       userUuid: clean(internal.userUuid),

@@ -93,10 +93,12 @@ npm run dev
 
 | 通道 | 所需信息 | 适用情况 |
 | --- | --- | --- |
-| 官方 API | Agent UUID、以 `AP_` 开头的 API Token | 接口稳定，推荐优先使用 |
-| 实验性实时连接 | Agent UUID、Access Token、User UUID、Organization UUID | 支持更多 WorkOS 网页端能力，但可能随平台更新失效 |
+| 实验性实时连接（默认） | Agent UUID、Access Token、User UUID、Organization UUID | 当前支持多轮流式与更多网页端能力，但可能随平台更新失效 |
+| 官方 API | Agent UUID、以 `AP_` 开头的 API Token | 配置更简单；当前多轮流式存在已确认问题，恢复后再调整默认通道 |
 
-设置页同时提供可复制的 `Agent.md` 推荐模板，用于约束上下文协议、回答方式和安全边界。保存连接后，第一条消息才会创建远端会话。
+安装包不包含任何默认 Agent UUID。每位用户必须填写自己的 Agent UUID。设置页同时提供可复制的 `Agent.md` 推荐模板，用于约束上下文协议、回答方式和安全边界。保存连接后，第一条消息才会创建远端会话。
+
+实验性实时连接可以通过“从 WorkOS 获取”读取当前 Chrome 中已登录的影刀 AI WorkOS 会话。该操作只在用户主动点击后，从 `https://aipower.yingdao.com` 读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定字段并填入设置草稿；不会扫描其他本地存储、自动保存凭据或发送聊天消息。用户仍需测试连接并手动保存。
 
 ## 附件支持
 

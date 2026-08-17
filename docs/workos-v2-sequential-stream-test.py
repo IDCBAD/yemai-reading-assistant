@@ -36,10 +36,7 @@ API_BASE = "https://power-api.yingdao.com"
 ACCESS_TOKEN = os.environ.get("WORKOS_V2_ACCESS_TOKEN", "")
 USER_UUID = os.environ.get("WORKOS_V2_USER_UUID", "")
 ORGANIZATION_UUID = os.environ.get("WORKOS_V2_ORGANIZATION_UUID", "")
-AGENT_UUID = os.environ.get(
-    "WORKOS_AGENT_UUID",
-    "409b06a1-2e2a-4d8c-af3c-ec831c0c6449",
-)
+AGENT_UUID = os.environ.get("WORKOS_AGENT_UUID", "")
 
 ROUND_GAP_SECONDS = 5
 SSE_TIMEOUT_SECONDS = 90
@@ -91,6 +88,8 @@ def response_json(response: requests.Response) -> dict[str, Any] | None:
 
 
 def create_conversation(session: requests.Session) -> str:
+    if not AGENT_UUID:
+        raise ValueError("请设置 WORKOS_AGENT_UUID 环境变量")
     url = f"{API_BASE.rstrip('/')}/api/agent/v2/conversations/create"
     payload = {
         "agentType": "custom_agent",

@@ -1,14 +1,13 @@
 import { WorkosSseParser, type WorkosSseCallbacks } from './workosSse';
 import {
   errorMessageForStatus,
-  DEFAULT_WORKOS_AGENT_UUID,
   WORKOS_API_ORIGIN,
   WorkosApiError,
   type ExecuteRequest,
   type WorkosTransport,
 } from './workosTransport';
 
-export { DEFAULT_WORKOS_AGENT_UUID, WorkosApiError } from './workosTransport';
+export { WorkosApiError } from './workosTransport';
 export type { ExecuteRequest } from './workosTransport';
 
 async function responseError(response: Response) {
@@ -33,8 +32,8 @@ function headers(token: string) {
 
 export async function createWorkosConversation(
   token: string,
+  agentUuid: string,
   signal?: AbortSignal,
-  agentUuid = DEFAULT_WORKOS_AGENT_UUID,
 ) {
   let response: Response;
   try {
@@ -131,11 +130,11 @@ export class PublicV1Transport implements WorkosTransport {
 
   constructor(
     private readonly token: string,
-    private readonly agentUuid = DEFAULT_WORKOS_AGENT_UUID,
+    private readonly agentUuid: string,
   ) {}
 
   createConversation(signal?: AbortSignal) {
-    return createWorkosConversation(this.token, signal, this.agentUuid);
+    return createWorkosConversation(this.token, this.agentUuid, signal);
   }
 
   executeStream(

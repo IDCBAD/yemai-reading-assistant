@@ -13,6 +13,7 @@ import {
   loadWorkosConnectionSettings,
   removeWorkosCredentials,
   saveWorkosConnectionSettings,
+  type InternalV2Credentials,
   type WorkosConnectionSettings,
 } from '../services/workosConnection';
 import {
@@ -30,6 +31,7 @@ import type {
   PageResponse,
   PageSnapshot,
   SelectionConsumeResponse,
+  WorkosCredentialsResponse,
 } from '../shared/extensionMessages';
 import {
   ConversationRequestCoordinator,
@@ -1339,6 +1341,15 @@ export default function App() {
     setConnectionIssue(null);
   };
 
+  const importWorkosLoginCredentials = async (): Promise<InternalV2Credentials> => {
+    const request: ExtensionRequest = { type: 'workos:import-login-credentials' };
+    const response = await browser.runtime.sendMessage(request).catch(() => null) as WorkosCredentialsResponse | null;
+    if (!response?.ok) {
+      throw new Error(response?.error ?? '无法读取 WorkOS 登录信息。');
+    }
+    return response.credentials;
+  };
+
   const removeCredentials = async (kind: WorkosConnectionSettings['transport']) => {
     stopAllRequests();
     const saved = await removeWorkosCredentials(kind);
@@ -1447,7 +1458,7 @@ export default function App() {
         fileUploadEnabled={Boolean(workosConnection && isWorkosFileUploadConfigured(workosConnection))}
         fileAccept={workosConnection
           ? attachmentAcceptForChannel(workosConnection.transport)
-          : attachmentAcceptForChannel('public-v1')}
+          : attachmentAcceptForChannel(EMPTY_WORKOS_CONNECTION_SETTINGS.transport)}
         maxTabs={MAX_OPEN_TABS}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
@@ -1506,6 +1517,7 @@ export default function App() {
         bubbleEnabled={selectionBubbleEnabled}
         onSaveConnection={saveConnection}
         onTestConnection={testConnection}
+        onImportWorkosCredentials={importWorkosLoginCredentials}
         onRemoveCredentials={removeCredentials}
         onBubbleEnabledChange={changeSelectionBubble}
         onClose={() => setSettingsOpen(false)}

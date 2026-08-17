@@ -4,7 +4,7 @@
 
 - 使用 Manifest V3 构建 Chrome Side Panel 扩展。
 - 用最少权限完成划词、正文提取、跨页面会话和 WorkOS API 调用。
-- 将 Token 与网页内容脚本隔离。
+- 将 Token 的自动导入限制为用户主动触发、固定 WorkOS 来源和三个固定键；日常网页内容脚本不读取凭据。
 - 对页面内容和 Agent 输出建立不可信数据边界。
 - 将 WorkOS API、存储和 UI 解耦，以便先使用模拟实现，再替换为真实服务。
 
@@ -45,10 +45,11 @@ entrypoints/
 - 在 Side Panel 已打开时上报新选区
 - 提取页面正文和页面元数据
 - 处理普通文章与 X 的抽取策略
+- 仅在 `https://aipower.yingdao.com` 且收到明确导入请求时读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定键
 
 不得负责：
 
-- 读取 Token
+- 在普通网页或非用户触发的流程中读取 Token
 - 调用 WorkOS API
 - 访问完整会话历史
 - 决定任意跨域请求地址
@@ -61,6 +62,7 @@ entrypoints/
 - 处理悬浮入口点击并调用 `chrome.sidePanel.open()`
 - 维护 Side Panel 的长连接状态
 - 在 Content Script 和 Side Panel 之间路由消息
+- 查找已打开的 WorkOS 页面并路由一次性凭据导入请求
 - 使用 `chrome.storage.session` 暂存待处理引用
 - 初始化可信存储访问级别
 
@@ -234,13 +236,7 @@ await chrome.storage.local.setAccessLevel({
 
 ## 8. WorkOS 传输层
 
-旧版默认 Agent UUID 为：
-
-```text
-409b06a1-2e2a-4d8c-af3c-ec831c0c6449
-```
-
-它只用于旧配置迁移和首次默认值，不再是运行时固定常量。当前 Agent UUID 保存在 `workosConnectionSettings.agentUuid`，由 v1/v2 Transport 共用，并在创建远程 Conversation 时显式传入。
+安装包不提供默认 Agent UUID。当前 Agent UUID 保存在 `workosConnectionSettings.agentUuid`，由用户显式配置，供 v1/v2 Transport 共用，并在创建远程 Conversation 时传入。连接配置升级到 v2 时会清空旧版本可能隐式保存的 Agent UUID，避免不同用户误用同一个 Agent。
 
 上层对话逻辑只依赖统一的 `WorkosTransport`：
 
@@ -352,7 +348,7 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
 
-远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。旧版本中缺少 `remoteAgentUuid` 的远程会话按原默认 UUID 解释，避免升级时无故重建。
+远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。旧版本中缺少 `remoteAgentUuid` 的远程会话视为目标不明，下一轮会安全地重建远程会话。
 
 ## 9. 页面抽取
 
@@ -402,6 +398,7 @@ permissions:
 - favicon
 
 host_permissions:
+- https://aipower.yingdao.com/*
 - https://power-api.yingdao.com/*
 
 content_scripts.matches:
@@ -413,8 +410,9 @@ content_scripts.matches:
 
 ## 12. 安全边界
 
-- Token 仅存在于可信扩展上下文。
-- 不将 Token 传给 Content Script。
+- 已保存的 Token 仅存在于可信扩展存储和 Side Panel；导入时由 WorkOS 来源的 Content Script 短暂读取并直接返回，不持久化。
+- 凭据导入必须由用户点击触发，只允许精确来源 `https://aipower.yingdao.com`，只读取 `accessToken`、`uuid` 和 `organizationUuid`，不得遍历 localStorage。
+- 导入结果只填入设置草稿，不自动测试、保存或发送消息。
 - 不在日志、错误消息和遥测中输出 Token。
 - API 客户端只允许访问固定影刀端点。
 - Agent Markdown 不启用原始 HTML 渲染。

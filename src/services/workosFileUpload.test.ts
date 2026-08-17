@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkosConnectionSettings } from './workosConnection';
+import { WORKOS_CONNECTION_SETTINGS_VERSION } from './workosConnection';
 import {
   createWorkosFileUploader,
   isWorkosFileUploadConfigured,
@@ -13,6 +14,7 @@ const credentials = {
 };
 
 const internalSettings: WorkosConnectionSettings = {
+  schemaVersion: WORKOS_CONNECTION_SETTINGS_VERSION,
   agentUuid: '11111111-1111-4111-8111-111111111111',
   transport: 'internal-v2',
   publicApiToken: '',

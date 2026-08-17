@@ -2372,6 +2372,74 @@ button.sent-attachment-token--file {
 .experimental-note strong { display: block; font-size: 11.5px; font-weight: 620; }
 .experimental-note p { margin-top: 4px; color: #8a6b31; }
 
+.credential-import {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: #f8fafc;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.credential-import strong {
+  display: block;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.credential-import p { margin-top: 3px; font-size: 10.5px; line-height: 1.45; }
+
+.credential-import-button {
+  display: inline-flex;
+  min-width: 112px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #b8c7db;
+  border-radius: 7px;
+  color: var(--cobalt-deep);
+  background: #fff;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 620;
+  transition: transform 130ms var(--ease-out), border-color 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.credential-import.is-importing {
+  border-color: rgba(49, 94, 234, 0.3);
+  background: var(--cobalt-pale);
+}
+
+.credential-import.is-imported {
+  border-color: rgba(15, 118, 110, 0.32);
+  background: var(--teal-pale);
+}
+
+.credential-import.is-imported .credential-import-button {
+  border-color: rgba(15, 118, 110, 0.38);
+  color: #155e59;
+}
+
+.credential-import.is-error {
+  border-color: rgba(180, 35, 44, 0.28);
+  background: var(--danger-pale);
+}
+
+.credential-import.is-error .credential-import-button {
+  border-color: rgba(180, 35, 44, 0.34);
+  color: #8c252c;
+}
+
+.credential-import-button:disabled { cursor: wait; opacity: 1; }
+
 .token-field { position: relative; }
 
 .token-field input {
@@ -2647,6 +2715,8 @@ button.sent-attachment-token--file {
     overflow: hidden;
     grid-template-columns: 0 0 0;
   }
+  .credential-import { grid-template-columns: 1fr; }
+  .credential-import-button { width: 100%; }
 }
 
 .connection-actions {
@@ -2658,6 +2728,35 @@ button.sent-attachment-token--file {
 
 .connection-actions .save-token-button { margin-top: 0; }
 .connection-actions .secondary-button { min-height: 40px; font-size: 11.5px; font-weight: 620; }
+
+.connection-test-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  transition: transform 130ms var(--ease-out), border-color 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.connection-test-button.is-testing,
+.connection-test-button.is-testing:disabled {
+  border-color: rgba(49, 94, 234, 0.42);
+  color: var(--cobalt-deep);
+  background: var(--cobalt-pale);
+  opacity: 1;
+}
+
+.connection-test-button.is-passed {
+  border-color: rgba(15, 118, 110, 0.4);
+  color: #155e59;
+  background: var(--teal-pale);
+}
+
+.connection-test-button.is-error {
+  border-color: rgba(180, 35, 44, 0.36);
+  color: #8c252c;
+  background: var(--danger-pale);
+}
 
 @media (hover: none) {
   .user-message-actions { opacity: 1; }

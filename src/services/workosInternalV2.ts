@@ -6,7 +6,6 @@ import {
   isAbortError,
   parseJsonEnvelope,
   requireEventStream,
-  DEFAULT_WORKOS_AGENT_UUID,
   WORKOS_API_ORIGIN,
   WorkosApiError,
   type ExecuteRequest,
@@ -77,7 +76,7 @@ export class InternalV2Transport implements WorkosTransport {
 
   constructor(
     private readonly credentials: InternalV2Credentials,
-    private readonly agentUuid = DEFAULT_WORKOS_AGENT_UUID,
+    private readonly agentUuid: string,
   ) {}
 
   async createConversation(signal?: AbortSignal) {

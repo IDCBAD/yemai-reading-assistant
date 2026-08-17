@@ -21,7 +21,7 @@
 
 ## 2. 官方公开接口
 
-接口来源：影刀 AI WorkOS 智能体的 [API 发布页面](https://aipower.yingdao.com/agents/409b06a1-2e2a-4d8c-af3c-ec831c0c6449/publish-api)。
+接口来源：影刀 AI WorkOS 智能体的 API 发布页面（`https://aipower.yingdao.com/agents/<your-agent-uuid>/publish-api`）。
 
 截至 2026-08-12，页面公开的主要调用链为：
 
@@ -228,4 +228,3 @@ WorkOS 后台实际上执行了第二个问题，说明问题不是“请求没�
 - 流式完成的判断必须同时考虑目标 runId、文本事件和终止事件。
 - 每次架构实验从稳定基线创建独立分支，失败后保留结论文档，不保留补丁链。
 - Token 只能从用户设置或受控调试授权中读取，不写入源码、测试快照、文档或终端输出。
-
