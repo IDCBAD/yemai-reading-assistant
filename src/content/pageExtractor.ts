@@ -5,6 +5,7 @@ import {
   createStableSourceId,
   inferAccessHint,
   inferPageType,
+  normalizeSourceIdentityUrl,
   normalizeSourceUrl,
   type PageManifestInput,
 } from './pageManifest';
@@ -127,8 +128,9 @@ export async function extractPageSnapshot(): Promise<PageSnapshot> {
   const boundedMarkdown = truncated ? `${markdown.slice(0, MAX_PAGE_MARKDOWN_LENGTH)}\n\n[页面内容已截断]` : markdown;
   const contentHash = await sha256(markdown);
   const normalizedUrl = normalizeSourceUrl(metadata.url);
-  const pageId = (await sha256(normalizedUrl)).slice(0, 20);
-  const sourceId = createStableSourceId(normalizedUrl);
+  const identityUrl = normalizeSourceIdentityUrl(normalizedUrl);
+  const pageId = (await sha256(identityUrl)).slice(0, 20);
+  const sourceId = createStableSourceId(identityUrl);
   const manifestInput: PageManifestInput = {
     title: metadata.title,
     url: metadata.url,

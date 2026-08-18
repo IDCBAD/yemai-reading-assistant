@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -6,15 +6,19 @@ import { buildAnswerContextMap, type AnswerContextSource } from '../answerContex
 import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
 import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
+import { isNearMessageBottom, messageDistanceFromBottom } from '../messageScroll';
 import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
 import { STARTER_ACTIONS } from '../starterActions';
 import { parsePageOverview } from '../pageOverview';
 import { FileTypeIcon } from './FileTypeIcon';
+import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { PageOverviewCard } from './PageOverviewCard';
 import { YemaiMark } from './YemaiMark';
 import { AnswerContextTrace } from './AnswerContextTrace';
+import { AssistantArtifacts } from './AssistantArtifacts';
+import { MermaidDiagram } from './MermaidDiagram';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -207,7 +211,8 @@ function AssistantMessage({
       window.setTimeout(() => setCopyState('idle'), 1800);
     }
   };
-  const actionsAvailable = Boolean(message.content) && message.status !== 'streaming';
+  const hasArtifacts = Boolean(message.artifacts?.length);
+  const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming';
   const footerAvailable = actionsAvailable || message.status === 'failed';
 
   return (
@@ -236,12 +241,16 @@ function AssistantMessage({
               remarkPlugins={[remarkGfm]}
               components={{
                 pre({ children }) {
-                  const child = isValidElement<{ children?: unknown }>(children) ? children : null;
+                  const child = isValidElement<{ children?: unknown; className?: string }>(children) ? children : null;
                   const value = String(child?.props.children ?? '').replace(/\n$/, '');
+                  const language = child?.props.className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase();
+                  if (language === 'mermaid' && message.status !== 'streaming') {
+                    return <MermaidDiagram source={value} />;
+                  }
                   return <CodeBlock>{value}</CodeBlock>;
                 },
-                code({ children }) {
-                  return <code className="inline-code">{children}</code>;
+                code({ children, className }) {
+                  return <code className={className ?? 'inline-code'}>{children}</code>;
                 },
               }}
             >
@@ -250,43 +259,46 @@ function AssistantMessage({
           )}
           {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
         </div>
-        {Boolean(message.content) && message.status !== 'streaming' && (
+        {hasArtifacts && <AssistantArtifacts artifacts={message.artifacts!} />}
+        {Boolean(message.content || hasArtifacts) && message.status !== 'streaming' && (
           <AnswerContextTrace sources={contextSources} />
         )}
         {footerAvailable && (
           <div className="assistant-footer" aria-label="回答操作">
             {message.status === 'failed' && (
-              <button
+              <IconTooltipButton
                 className="assistant-action pressable"
                 type="button"
                 onClick={onRetry}
                 aria-label={message.content ? '重试回答' : '重新发送'}
-                title={message.content ? '重试回答' : '重新发送'}
+                tooltip={message.content ? '重新生成' : '重新发送'}
               >
                 <KoboyoIcon name="cycle" size={14} />
-              </button>
+              </IconTooltipButton>
             )}
             {actionsAvailable && (
               <>
-                <button
-                  className="assistant-action pressable"
-                  type="button"
-                  onClick={copyMarkdown}
-                  aria-label={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
-                  title={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
-                >
-                  <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
-                </button>
-                <button
+                {message.content && (
+                  <IconTooltipButton
+                    className="assistant-action pressable"
+                    type="button"
+                    onClick={copyMarkdown}
+                    aria-label={copyState === 'copied' ? '已复制 Markdown' : copyState === 'failed' ? '复制失败' : '复制 Markdown'}
+                    tooltip={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制回答'}
+                  >
+                    <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
+                  </IconTooltipButton>
+                )}
+                <IconTooltipButton
                   className="assistant-action pressable"
                   type="button"
                   onClick={onBranch}
                   disabled={Boolean(branchUnavailableReason)}
                   aria-label={branchUnavailableReason ? `无法创建分支：${branchUnavailableReason}` : '从这里分支'}
-                  title={branchUnavailableReason ?? '从这里分支：保留此前内容，探索另一条思路'}
+                  tooltip={branchUnavailableReason ?? '从这里分支'}
                 >
                   <KoboyoIcon name="fork" size={14} />
-                </button>
+                </IconTooltipButton>
               </>
             )}
             {(message.respondedAt || message.content) && (
@@ -587,7 +599,6 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
               if (event.key === 'Tab') event.preventDefault();
             }}
             aria-label="关闭图片预览"
-            title="关闭"
             autoFocus
           >
             <KoboyoIcon name="cross" size={15} />
@@ -661,24 +672,24 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
           <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
           {message.content && (
             <>
-              <button
+              <IconTooltipButton
                 className="user-message-action pressable"
                 type="button"
                 onClick={copyQuestion}
                 aria-label={copyState === 'copied' ? '已复制提问' : copyState === 'failed' ? '复制失败' : '复制提问'}
-                title={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制提问'}
+                tooltip={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制提问'}
               >
                 <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
-              </button>
-              <button
+              </IconTooltipButton>
+              <IconTooltipButton
                 className="user-message-action pressable"
                 type="button"
                 onClick={onEdit}
                 aria-label="编辑提问到输入框"
-                title="编辑提问"
+                tooltip="编辑提问"
               >
                 <KoboyoIcon name="edit" size={14} />
-              </button>
+              </IconTooltipButton>
             </>
           )}
         </div>
@@ -698,10 +709,85 @@ export function MessageList({
   onOpenBranchOrigin,
   onAddAssistantQuote,
 }: MessageListProps) {
-  const endRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLElement>(null);
+  const stickToBottomRef = useRef(true);
+  const manuallyDetachedRef = useRef(false);
+  const returningToBottomRef = useRef(false);
+  const returnTimerRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
+  const previousMessageCountRef = useRef(messages.length);
   const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
+  const hasMessages = messages.length > 0;
+  const responseStreaming = messages.some((message) => message.status === 'streaming' || message.status === 'running');
+
+  useEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
+
+    const clearReturnTimer = () => {
+      if (returnTimerRef.current !== null) window.clearTimeout(returnTimerRef.current);
+      returnTimerRef.current = null;
+    };
+    const detachFromLatest = () => {
+      if (root.scrollTop <= 0 || root.scrollHeight <= root.clientHeight) return;
+      clearReturnTimer();
+      returningToBottomRef.current = false;
+      stickToBottomRef.current = false;
+      manuallyDetachedRef.current = true;
+      setShowScrollToBottom(true);
+    };
+    const onScroll = () => {
+      const distance = messageDistanceFromBottom(root);
+      const atBottom = isNearMessageBottom(root);
+      if (returningToBottomRef.current) {
+        if (atBottom) {
+          clearReturnTimer();
+          returningToBottomRef.current = false;
+          stickToBottomRef.current = true;
+          setShowScrollToBottom(false);
+        }
+        return;
+      }
+      if (manuallyDetachedRef.current && distance > 1) {
+        stickToBottomRef.current = false;
+        setShowScrollToBottom(true);
+        return;
+      }
+      if (distance <= 1) manuallyDetachedRef.current = false;
+      stickToBottomRef.current = atBottom;
+      setShowScrollToBottom(!atBottom);
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) detachFromLatest();
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      touchStartYRef.current = event.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const startY = touchStartYRef.current;
+      const currentY = event.touches[0]?.clientY;
+      if (startY !== null && currentY !== undefined && currentY > startY + 4) detachFromLatest();
+    };
+    const onTouchEnd = () => {
+      touchStartYRef.current = null;
+    };
+
+    root.addEventListener('scroll', onScroll, { passive: true });
+    root.addEventListener('wheel', onWheel, { passive: true });
+    root.addEventListener('touchstart', onTouchStart, { passive: true });
+    root.addEventListener('touchmove', onTouchMove, { passive: true });
+    root.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      clearReturnTimer();
+      root.removeEventListener('scroll', onScroll);
+      root.removeEventListener('wheel', onWheel);
+      root.removeEventListener('touchstart', onTouchStart);
+      root.removeEventListener('touchmove', onTouchMove);
+      root.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [hasMessages]);
 
   useEffect(() => {
     const root = messagesRef.current;
@@ -764,32 +850,65 @@ export function MessageList({
     };
   }, [messages]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' });
+  useLayoutEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
+    const messageAppended = messages.length > previousMessageCountRef.current;
+    previousMessageCountRef.current = messages.length;
+    if (messageAppended) {
+      stickToBottomRef.current = true;
+      manuallyDetachedRef.current = false;
+      returningToBottomRef.current = false;
+    }
+    if (!stickToBottomRef.current) return;
+    root.scrollTop = root.scrollHeight;
+    setShowScrollToBottom(false);
   }, [messages]);
+
+  const scrollToLatest = () => {
+    const root = messagesRef.current;
+    if (!root) return;
+    if (returnTimerRef.current !== null) window.clearTimeout(returnTimerRef.current);
+    stickToBottomRef.current = true;
+    manuallyDetachedRef.current = false;
+    returningToBottomRef.current = true;
+    setShowScrollToBottom(false);
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    root.scrollTo({ top: root.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    returnTimerRef.current = window.setTimeout(() => {
+      returningToBottomRef.current = false;
+      const atBottom = isNearMessageBottom(root);
+      stickToBottomRef.current = atBottom;
+      setShowScrollToBottom(!atBottom);
+      returnTimerRef.current = null;
+    }, reduceMotion ? 0 : 420);
+  };
 
   if (messages.length === 0) {
     return (
-      <main className="messages messages--empty">
-        <div className="empty-state">
-          <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
-          <span className="empty-kicker">读过的，终会连起来。</span>
-          <h2>从当前页面开始</h2>
-          <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
-          <div className="starter-list">
-            {STARTER_ACTIONS.map((starter) => (
-              <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.id}>
-                {starter.label}
-              </button>
-            ))}
+      <div className="message-stage">
+        <main className="messages messages--empty">
+          <div className="empty-state">
+            <span className="empty-orbit" aria-hidden="true"><span>01</span></span>
+            <span className="empty-kicker">读过的，终会连起来。</span>
+            <h2>从当前页面开始</h2>
+            <p>每个工作页只承载一条会话；新对话从空白开始，分支从已有回答继续。</p>
+            <div className="starter-list">
+              {STARTER_ACTIONS.map((starter) => (
+                <button className="starter-button pressable" type="button" onClick={() => onUseStarter(starter.prompt)} key={starter.id}>
+                  {starter.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     );
   }
 
   return (
-    <main className="messages" aria-live="polite" ref={messagesRef}>
+    <div className="message-stage">
+      <main className="messages" aria-live="polite" ref={messagesRef}>
       {branchOrigin && (
         <button
           className="branch-origin"
@@ -826,7 +945,6 @@ export function MessageList({
           <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
         ),
       )}
-      <div ref={endRef} />
       {selectionAction && createPortal(
         <button
           className="assistant-selection-action pressable"
@@ -853,6 +971,19 @@ export function MessageList({
         </button>,
         document.body,
       )}
-    </main>
+      </main>
+      <button
+        className="scroll-to-latest pressable"
+        type="button"
+        data-visible={showScrollToBottom ? '' : undefined}
+        data-streaming={responseStreaming ? '' : undefined}
+        aria-label="回到最新内容"
+        aria-hidden={!showScrollToBottom}
+        tabIndex={showScrollToBottom ? 0 : -1}
+        onClick={scrollToLatest}
+      >
+        <span className="scroll-to-latest-arrow" aria-hidden="true" />
+      </button>
+    </div>
   );
 }

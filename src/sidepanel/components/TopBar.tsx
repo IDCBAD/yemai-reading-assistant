@@ -21,7 +21,6 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
           type="button"
           onClick={onOpenSettings}
           aria-label="打开设置"
-          title="设置"
         >
           <KoboyoIcon name="settings" size={18} />
         </button>

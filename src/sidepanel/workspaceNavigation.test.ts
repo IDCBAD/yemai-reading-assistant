@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Conversation, WorkspaceState } from './types';
-import { closeWorkspaceTab, openConversationInWorkspace } from './workspaceNavigation';
+import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
 
 const page = { title: '文章', site: 'example.com', url: 'https://example.com', status: 'read' as const };
 
@@ -30,6 +30,19 @@ function workspace(): WorkspaceState {
 }
 
 describe('workspace conversation navigation', () => {
+  it('keeps each remote conversation identity stable across an A → B → A switch', () => {
+    const current = workspace();
+    current.conversations[0]!.remoteUuid = 'remote-a';
+    current.conversations[1]!.remoteUuid = 'remote-b';
+
+    const onB = selectWorkspaceTab(current, 'tab-two');
+    const backOnA = selectWorkspaceTab(onB, 'tab-one');
+
+    expect(backOnA.activeOpenTabId).toBe('tab-one');
+    expect(backOnA.conversations.find((item) => item.id === 'one')?.remoteUuid).toBe('remote-a');
+    expect(backOnA.conversations.find((item) => item.id === 'two')?.remoteUuid).toBe('remote-b');
+  });
+
   it('opens closed history in a new work page without replacing the current one', () => {
     const next = openConversationInWorkspace(workspace(), 'three', 10, (conversationId) => ({
       id: 'tab-three', conversationId, openedAt: 3,

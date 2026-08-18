@@ -80,6 +80,8 @@ Service Worker 不承担 SSE 主连接，避免其生命周期影响长响应。
 - SSE 解析与正文增量渲染
 - 本地历史持久化
 
+Side Panel 初始化时通过 `chrome.windows.getCurrent()` 记录所属窗口，并只处理该窗口的 `tabs.onActivated` 事件。页面抽取和智能框选始终使用该窗口内已记录的活动 `tabId`，不使用其他 Chrome 窗口的最近焦点页面。多个窗口分别打开 Side Panel 时，各实例独立跟随各自窗口。
+
 ## 5. 消息协议
 
 跨上下文消息使用可辨识联合类型，禁止传递任意命令字符串。
@@ -195,6 +197,10 @@ interface SelectionQuote {
 - 关闭 Tab 只移除 `OpenConversationTab`，不删除 `LocalConversation`。
 - 分支在未达上限时新建 Tab；达到上限时复用当前 Tab 打开新分支。
 
+### 6.2 流式回答滚动状态
+
+消息区使用“粘底 / 已脱离”两态模型。用户位于底部时，每个流式增量直接更新 `scrollTop`，避免为高频 token 累积平滑滚动；用户通过鼠标滚轮或触摸手势向上阅读后，立即退出粘底，后续增量不得修改阅读位置。距离底部超过阈值时显示独立于滚动内容的悬浮返回按钮；点击后按系统减弱动态偏好选择平滑或即时回到底部，并重新进入粘底状态。切换本地会话或显式发送新问题时重置为粘底。
+
 ## 7. 本地存储
 
 ### `chrome.storage.local`
@@ -209,9 +215,11 @@ interface SelectionQuote {
 - 用户设置
 - 会话草稿与结构化分支元数据
 
-不保存已发送页面的完整正文。第一版不申请 `unlimitedStorage`，并监控本地存储用量。
+不保存已发送页面的完整正文。第一版不申请 `unlimitedStorage`。设置页通过 `chrome.storage.local.getBytesInUse('workspaceState')` 读取历史占用，通过 `getBytesInUse(null)` 读取全部扩展本地占用，并以 `QUOTA_BYTES`（Chrome 当前为 10 MiB）作为进度基准。占用读取安排在工作区尾随保存之后，避免展示尚未落盘的旧数值。
 
 `archivedAt` 仅表示本地历史分类。归档和恢复不会调用 WorkOS API；工作区恢复时若发现归档会话仍被某个 `OpenConversationTab` 引用，会自动取消归档以维持状态不变量。
+
+永久删除只接受带 `archivedAt` 且未被工作页引用的会话。单条删除不级联删除分支；批量清空也保留任何异常情况下仍被工作页引用的记录。释放附件预览和上传状态前需要排除仍被保留会话共享的附件 ID 与 `blob:` URL。所有永久删除都只更新本地工作区，不调用远端会话或文件删除接口。
 
 本地工作区使用带版本号的 `workspaceState` 快照，包含会话字典、已打开 Tab、消息、草稿、`conversationUuid`、当前 Tab ID、分支元数据和待发送的分支上下文。启动时先校验快照结构，再恢复 React 状态；损坏或未知版本的快照不会直接进入 UI。
 
@@ -319,6 +327,7 @@ SSE `data` 中还包含序列化后的第二层 JSON。解析器需要：
 7. 识别 `run.terminal` 的成功或失败状态。
 8. 识别 `xybot-stream-complete` 后关闭本地运行状态。
 9. 将工具 part 或工具生命周期事件投影为稳定的工具 ID、名称、状态和起止时间。
+10. 将 `file / image / artifact / attachment` part 投影为只包含 ID、HTTPS 地址、文件名、MIME、尺寸和缩略图的输出产物；未知对象和原始工具输出仍不得进入 UI。
 
 ### 8.4 v2 顺序流执行
 
@@ -334,6 +343,12 @@ v2 将消息提交和流式订阅拆开。每轮必须：
 
 内部 reasoning、Agent 配置和部署事件不得写入用户消息。工具事件只能进入安全投影；工具参数、完整输出、调试元数据和原始事件均不得进入 React 消息状态。侧边栏以可折叠的“运行过程”展示工具名称、运行状态和可计算的耗时，不展示模型原始思维链。
 
+Agent 输出产物使用独立的 `AssistantArtifact`，不复用代表用户输入的 `DraftAttachment`。同一产物的流式更新按稳定 ID 或远程 URL 合并；一轮只要收到正文或至少一个产物即可完成。工作区快照只持久化产物元数据与 HTTPS 地址，不缓存图片或文件二进制。恢复时再次校验 URL 协议，避免被篡改的本地快照生成可执行链接。
+
+生成图片在消息内按需加载，并复用 Side Panel 灯箱交互；加载失败时降级为普通文件卡片。HTML、Markdown、PDF、Office 等文件默认只显示下载卡片，不把不可信 HTML 嵌入回答。浏览器无法遵守跨域 `download` 时，链接退化为由浏览器打开远程文件；MVP 不新增 `downloads` 权限。
+
+Markdown fenced code block 的语言为 `mermaid` 时，流式阶段保持源码，回答完成后动态导入 Mermaid。渲染器使用 `securityLevel: strict`、`htmlLabels: false`、文本/边数量上限和不可被回答覆盖的 secure 配置；生成 SVG 还会移除脚本、事件属性、外部链接与外部 CSS URL。解析失败时保留原始源码。Mermaid 独立分包，普通回答不会加载图表运行时。
+
 `run.terminal` 的正常终态需要兼容 `success / succeeded / completed / finished / done / ok` 等常见表达。存在正文但终态异常时仍保留正文，并降级显示为部分失败提示；不得用高强调错误卡遮断已经可读的回答。
 
 ### 8.5 会话分支与通道切换上下文
@@ -348,7 +363,9 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
 
-远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送当前本地对话的可见语义记录。旧版本中缺少 `remoteAgentUuid` 的远程会话视为目标不明，下一轮会安全地重建远程会话。
+远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送最近 6 条有效消息。交接内容只保留最近活动页面的来源身份，不复制页面 Manifest，且整体不超过 12,000 字符；旧版本中缺少 `remoteAgentUuid` 的远程会话视为目标不明，下一轮会安全地重建远程会话。
+
+当前页卡片的可见性与本轮页面投递深度是两个独立状态。包含网页选区或回答引用时，本轮只发送精确引用，不因卡片仍在输入区而隐式附加整页 Manifest；页面总览或没有精确引用的页面任务才按来源账本决定 `manifest`、`snapshot` 或 `reuse`。因此保留引用卡片不会持续放大多轮请求。
 
 ## 9. 页面抽取
 
@@ -383,7 +400,11 @@ Readability 失败时仅提取可见主文本，并在 UI 标记为“基础读�
 - `selection`：发送用户明确选择的文本及其独立来源。
 - `snapshot`：Agent 无法访问浏览器页面时发送最多 12,000 字符的正文快照。
 
-交付模式在排队请求真正执行时根据最新会话来源账本决定，避免连续排队的问题重复引入同一页面。只有请求成功完成后才更新 `sentAt` 和版本记录；失败请求不会让本地错误地认为 Agent 已获得页面。
+交付模式在排队请求真正执行时根据最新会话来源账本决定，避免连续排队的问题重复引入同一页面。只有请求成功完成后才更新 `sentAt`、`deliveredRemoteUuid` 和版本记录；失败请求不会让本地错误地认为 Agent 已获得页面。查找历史交付时以会话页面索引为主，并使用已成功消息中的页面快照作为旧数据兼容回退；同 URL 的重复索引选择最近一次成功交付。
+
+`reuse` 必须限定在同一个远端 `conversationUuid` 中。切换 Agent、连接通道或重新创建远端会话后，即使 URL 与内容哈希未变化，也要重新发送页面清单；这避免把本地“读过”误当成新远端会话“已经知道”。旧快照没有 `deliveredRemoteUuid` 时，仅在当前远端目标未变化的前提下按兼容数据处理，下一次成功交付会补齐作用域。
+
+来源 URL 分为展示定位和文档身份两种语义。`normalizeSourceUrl` 保留普通锚点用于界面与选区定位；`normalizeSourceIdentityUrl` 删除普通标题锚点，用于 `sourceId`、`pageId` 和来源账本匹配。`#/`、`#!/` 被视为 Hash Router 路由而保留。当前页与选区属于同一文档时，文本投影只为选区输出“当前页选区”，不重复当前页 URL。
 
 页面抽取仍将完整 Markdown 硬限制为 40,000 字符，但默认 Manifest 只包含 300 字符说明、12 个标题、800 字符开头和 10 个相关入口。完整 Markdown 只存在于请求准备内存，工作区持久化会显式清除 `markdown`；本地可以保存有限 Manifest、URL、哈希、质量、版本和发送时间。
 
@@ -419,7 +440,7 @@ content_scripts.matches:
 - 网页正文、划词和附件都按不可信资料处理。
 - WorkOS Agent 系统指令明确防范提示注入。
 - 来自网页的字符串不得作为 DOM HTML 直接插入。
-- 清空本地历史不声称删除远端数据。
+- 清空本地历史、删除单条归档和清空已归档都不得声称删除远端数据。
 
 ## 13. 已知限制
 

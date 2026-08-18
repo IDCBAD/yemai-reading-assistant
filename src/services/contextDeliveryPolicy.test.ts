@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentCapabilityProfile, ReferenceSource } from '../shared/yemaiContext';
-import { decideCurrentPageDelivery, type PreparedPageReference } from './contextDeliveryPolicy';
+import {
+  decideCurrentPageDelivery,
+  shouldDeliverFullCurrentPage,
+  type PreparedPageReference,
+} from './contextDeliveryPolicy';
 
 const agent: AgentCapabilityProfile = {
   profile_id: 'workos-test',
@@ -33,6 +37,17 @@ const prepared: PreparedPageReference = {
 };
 
 describe('context delivery policy', () => {
+  it('keeps an exact selection scoped instead of silently adding the full page', () => {
+    expect(shouldDeliverFullCurrentPage({ explicitReferenceCount: 1 })).toBe(false);
+  });
+
+  it('keeps an explicit page overview deep even when a selection is present', () => {
+    expect(shouldDeliverFullCurrentPage({
+      explicitReferenceCount: 1,
+      presentation: 'page-overview',
+    })).toBe(true);
+  });
+
   it('does not send an excluded page', () => {
     expect(decideCurrentPageDelivery({ included: false, prepared, agent })).toEqual({
       mode: 'none',

@@ -14,6 +14,7 @@ export interface PageContext {
   contentHash?: string;
   extractedAt?: number;
   sentAt?: number;
+  deliveredRemoteUuid?: string;
   version?: number;
   pageType?: YemaiPageType;
   accessHint?: YemaiAccessHint;
@@ -51,6 +52,24 @@ export interface DraftAttachment {
   previewUrl?: string;
   uploadTransport?: WorkosTransportKind;
   errorMessage?: string;
+}
+
+export type AssistantArtifactKind = 'image' | 'html' | 'markdown' | 'document' | 'archive' | 'file';
+export type AssistantArtifactStatus = 'available' | 'failed' | 'expired';
+
+/**
+ * A file produced by the Agent. Output artifacts are deliberately separate
+ * from DraftAttachment, which represents user input sent to WorkOS.
+ */
+export interface AssistantArtifact {
+  id: string;
+  kind: AssistantArtifactKind;
+  filename: string;
+  url?: string;
+  mime?: string;
+  size?: number;
+  thumbnailUrl?: string;
+  status: AssistantArtifactStatus;
 }
 
 export type ContextItemKind = 'page' | 'selection' | 'file' | 'image' | 'memory' | 'link';
@@ -148,6 +167,7 @@ export interface ChatMessage {
   stage?: MessageStage;
   errorMessage?: string;
   activities?: RunActivity[];
+  artifacts?: AssistantArtifact[];
   contextItems?: ContextItem[];
   /** Legacy fields retained only for locally stored messages created before context-item snapshots. */
   references?: QuoteReference[];

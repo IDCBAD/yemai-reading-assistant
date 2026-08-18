@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ContextItem } from '../types';
 import { attachmentFormatLabel, uploadChannelLabel } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
+import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 
@@ -155,32 +156,31 @@ function ContextToken({
           type="button"
           onClick={onRetryAttachment}
           aria-label={`重试上传：${itemTitle(item)}`}
-          title="重试上传"
         >
           <KoboyoIcon name="cycle" size={12} />
           <span>重试</span>
         </button>
       )}
-      <button
+      <IconTooltipButton
         className="context-token-action pressable"
         type="button"
         onClick={() => onIncludedChange(!item.included)}
         aria-label={item.included ? `排除：${itemTitle(item)}` : `包含：${itemTitle(item)}`}
         aria-pressed={item.included}
-        title={item.included ? '从本次问题中排除' : '重新加入本次问题'}
+        tooltip={item.included ? '本次不引用' : '重新引用'}
       >
         <KoboyoIcon name={item.included ? 'link' : 'link-off'} size={13} />
-      </button>
+      </IconTooltipButton>
       {removable && (
-        <button
+        <IconTooltipButton
           className="context-token-action context-token-remove pressable"
           type="button"
           onClick={onRemove}
           aria-label={`删除：${itemTitle(item)}`}
-          title="删除上下文"
+          tooltip="移除引用"
         >
           <KoboyoIcon name="cross" size={10} />
-        </button>
+        </IconTooltipButton>
       )}
     </div>
   );

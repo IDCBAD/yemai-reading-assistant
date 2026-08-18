@@ -34,6 +34,20 @@ export interface CurrentPageDeliveryInput {
   agent: AgentCapabilityProfile;
 }
 
+export interface CurrentPageRequestDepthInput {
+  explicitReferenceCount: number;
+  presentation?: 'page-overview';
+}
+
+/**
+ * Exact selections already carry the material required by the current turn.
+ * Keep the visible page card linked, but do not silently escalate that turn
+ * into a full-page delivery. Explicit page-overview requests always stay deep.
+ */
+export function shouldDeliverFullCurrentPage(input: CurrentPageRequestDepthInput) {
+  return input.presentation === 'page-overview' || input.explicitReferenceCount === 0;
+}
+
 function requiresBrowserSnapshot(source: ReferenceSource, agent: AgentCapabilityProfile) {
   if (agent.web_read === 'browser_session') return false;
   if (agent.web_read === 'none') return true;

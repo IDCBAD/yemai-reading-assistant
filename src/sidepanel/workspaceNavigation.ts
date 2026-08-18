@@ -20,6 +20,11 @@ export function openConversationInWorkspace(
   };
 }
 
+export function selectWorkspaceTab(workspace: WorkspaceState, tabId: string) {
+  if (!workspace.openTabs.some((tab) => tab.id === tabId)) return workspace;
+  return { ...workspace, activeOpenTabId: tabId };
+}
+
 export function closeWorkspaceTab(workspace: WorkspaceState, tabId: string) {
   const closingIndex = workspace.openTabs.findIndex((tab) => tab.id === tabId);
   if (closingIndex < 0 || workspace.openTabs.length === 1) return workspace;

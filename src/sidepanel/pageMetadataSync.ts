@@ -4,6 +4,13 @@ export interface BrowserTabChange {
   title?: string;
 }
 
+export function shouldFollowActivatedTab(
+  activatedWindowId: number,
+  hostWindowId: number | undefined,
+) {
+  return hostWindowId !== undefined && activatedWindowId === hostWindowId;
+}
+
 export function shouldRefreshPageMetadataForTab(
   updatedTabId: number,
   activeTabId: number | undefined,

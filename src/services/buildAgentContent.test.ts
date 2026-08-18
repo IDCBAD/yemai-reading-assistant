@@ -82,6 +82,51 @@ describe('buildAgentContent', () => {
     expect(content).not.toContain('网址：');
   });
 
+  it('associates a selection with the same document across heading anchors', () => {
+    const content = buildAgentContent({
+      question: '解释这句话',
+      quotes: [{
+        id: 'quote-anchor',
+        text: '产品能力的演进往往就是观察空间和动作空间的演进。',
+        pageTitle: '源码精读笔记',
+        pageUrl: `${page.url}#observation-space`,
+        createdAt: 3,
+      }],
+      page: {
+        prepared: preparePageReference({ ...page, url: `${page.url}#tools` }),
+        decision: { mode: 'reuse', reason: 'same_revision_in_conversation' },
+      },
+    });
+
+    expect(content).toContain('复用本会话中已经建立的页面上下文');
+    expect(content).toContain('用户选中的原文（外部资料）');
+    expect(content).toContain('- 来源：当前页选区');
+    expect(content).not.toContain('#observation-space');
+    expect(content).not.toContain('#tools');
+  });
+
+  it('keeps an exact current-page selection without adding the page manifest', () => {
+    const content = buildAgentContent({
+      question: '只解释这句话',
+      quotes: [{
+        id: 'quote-scoped',
+        text: '上下文是 Agent 的眼睛。',
+        pageTitle: page.title,
+        pageUrl: page.url,
+        createdAt: 3,
+      }],
+      page: {
+        prepared: preparePageReference(page),
+        decision: { mode: 'none', reason: 'excluded' },
+      },
+    });
+
+    expect(content).toContain('> 上下文是 Agent 的眼睛。');
+    expect(content).toContain('- 来源：当前页选区');
+    expect(content).not.toContain('一本源码精读笔记。');
+    expect(content).not.toContain('页面清单（外部资料）');
+  });
+
   it('reuses a page without repeating its manifest or markdown', () => {
     const content = buildAgentContent({
       question: '继续',

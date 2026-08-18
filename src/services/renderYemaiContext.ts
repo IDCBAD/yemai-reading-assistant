@@ -92,8 +92,11 @@ function renderSelection(reference: SelectionReference, heading: ContentHeading)
   const selectionLabel = reference.source.access_hint === 'local_document'
     ? '回答中的选中内容（引用资料）'
     : '用户选中的原文（外部资料）';
+  const source = reference.delivery === 'reuse' && reference.source.access_hint !== 'local_document'
+    ? ['- 来源：当前页选区']
+    : sourceLines(reference.source);
   return [
-    ...sourceLines(reference.source),
+    ...source,
     '',
     `${heading} ${selectionLabel}`,
     '',
