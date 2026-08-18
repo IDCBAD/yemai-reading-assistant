@@ -202,4 +202,195 @@ describe('WorkosSseParser', () => {
     expect(last.startedAt).toBe(first.startedAt);
     expect(JSON.stringify(onActivity.mock.calls)).not.toContain('private');
   });
+
+  it('projects generated files and images into safe artifacts', () => {
+    const onArtifact = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onArtifact });
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'file-1',
+          type: 'file',
+          filename: 'test.html',
+          mimeType: 'text/html',
+          fileReadUrl: 'https://files.example.com/test.html',
+          debug: { token: 'must-not-reach-ui' },
+        },
+      },
+    }));
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'image-1',
+          type: 'image',
+          file: {
+            filename: '小猫吃鱼.png',
+            mime: 'image/png',
+            url: 'https://files.example.com/cat.png',
+            size: 2048,
+          },
+        },
+      },
+    }));
+
+    expect(onArtifact).toHaveBeenCalledWith({
+      id: 'file-1',
+      kind: 'html',
+      filename: 'test.html',
+      url: 'https://files.example.com/test.html',
+      mime: 'text/html',
+      status: 'available',
+    });
+    expect(onArtifact).toHaveBeenLastCalledWith({
+      id: 'image-1',
+      kind: 'image',
+      filename: '小猫吃鱼.png',
+      url: 'https://files.example.com/cat.png',
+      mime: 'image/png',
+      size: 2048,
+      status: 'available',
+    });
+    expect(JSON.stringify(onArtifact.mock.calls)).not.toContain('must-not-reach-ui');
+  });
+
+  it.each([
+    {
+      type: 'markdown',
+      filename: 'test-simple.md',
+      contentType: 'text/markdown; charset=utf-8',
+      url: 'https://files.example.com/test-simple.md',
+      kind: 'markdown',
+      size: 128,
+    },
+    {
+      type: 'html',
+      filename: 'test-terminal.html',
+      contentType: 'text/html; charset=utf-8',
+      url: 'https://files.example.com/test-terminal.html',
+      kind: 'html',
+      size: 256,
+    },
+    {
+      type: 'pdf',
+      filename: 'test-3.pdf',
+      contentType: 'application/pdf',
+      url: 'https://files.example.com/test-3.pdf',
+      kind: 'document',
+      size: 512,
+    },
+    {
+      type: 'image',
+      filename: '%E9%9A%8F%E4%BE%BF%E4%B8%80%E5%BC%A0%E5%9B%BE.png',
+      contentType: 'image/jpeg',
+      url: 'https://files.example.com/%25E9%259A%258F%25E4%25BE%25BF%25E4%25B8%2580%25E5%25BC%25A0%25E5%259B%25BE.png',
+      kind: 'image',
+      size: 1024,
+      expectedFilename: '随便一张图.png',
+    },
+  ])('projects WorkOS tool material for $type output', ({
+    type,
+    filename,
+    contentType,
+    url,
+    kind,
+    size,
+    expectedFilename = filename,
+  }) => {
+    const onActivity = vi.fn();
+    const onArtifact = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onActivity, onArtifact });
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: `tool-${type}`,
+          type: 'tool',
+          state: {
+            status: 'completed',
+            input: 'must-not-reach-ui-input',
+            output: 'must-not-reach-ui-output',
+            title: '生成文件',
+            metadata: {
+              material: {
+                uuid: `material-${type}`,
+                type,
+                filename,
+                contentType,
+                contentLength: size,
+                url,
+                metadata: { privateValue: 'must-not-reach-ui-metadata' },
+              },
+            },
+          },
+        },
+      },
+    }));
+
+    expect(onArtifact).toHaveBeenCalledOnce();
+    expect(onArtifact).toHaveBeenCalledWith({
+      id: `material-${type}`,
+      kind,
+      filename: expectedFilename,
+      url,
+      mime: contentType,
+      size,
+      status: 'available',
+    });
+    expect(JSON.stringify(onActivity.mock.calls)).not.toContain('must-not-reach-ui');
+    expect(JSON.stringify(onArtifact.mock.calls)).not.toContain('must-not-reach-ui');
+  });
+
+  it('reads resource collections attached to a final text part and rejects unsafe URLs', () => {
+    const onArtifact = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onArtifact });
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'text-1',
+          type: 'text',
+          text: '文件已经生成。',
+          files: [
+            { id: 'safe', name: 'report.md', url: 'https://files.example.com/report.md' },
+            { id: 'unsafe', name: 'attack.html', url: 'javascript:alert(1)' },
+          ],
+        },
+      },
+    }));
+
+    expect(onArtifact).toHaveBeenCalledTimes(1);
+    expect(onArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'safe',
+      kind: 'markdown',
+      filename: 'report.md',
+      url: 'https://files.example.com/report.md',
+    }));
+  });
+
+  it('upserts repeated artifact updates instead of emitting duplicate identities', () => {
+    const onArtifact = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onArtifact });
+    const url = 'https://files.example.com/result.pdf';
+
+    parser.push(nestedEvent({
+      type: 'message.file.updated',
+      properties: { file: { id: 'first', filename: 'result.pdf', url } },
+    }));
+    parser.push(nestedEvent({
+      type: 'message.file.updated',
+      properties: { file: { id: 'second', filename: 'result.pdf', url, size: 4096 } },
+    }));
+
+    expect(onArtifact).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'first',
+      filename: 'result.pdf',
+      url,
+      size: 4096,
+    }));
+  });
 });

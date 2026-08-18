@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage } from '../sidepanel/types';
 import { pageContextItem, selectionContextItem } from '../sidepanel/contextItems';
-import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from './buildBranchContext';
+import {
+  buildBranchContext,
+  buildTransportHandoffContext,
+  prependBranchContext,
+  TRANSPORT_HANDOFF_MAX_CHARS,
+  TRANSPORT_HANDOFF_MAX_TURNS,
+} from './buildBranchContext';
 
 describe('buildBranchContext', () => {
   it('keeps visible Markdown and references but excludes run metadata', () => {
@@ -97,5 +103,47 @@ describe('buildTransportHandoffContext', () => {
 
     expect(context).toContain('src-context');
     expect(context).toContain('窗口有限，对话持续增长。');
+  });
+
+  it('bounds handoff history and keeps only the newest active page identity', () => {
+    const messages: ChatMessage[] = Array.from({ length: 10 }, (_, index) => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `第 ${index} 条 ${'内容'.repeat(900)}`,
+      createdAt: index,
+      status: 'complete' as const,
+      contextItems: index === 8 || index === 9
+        ? [pageContextItem({
+            title: index === 9 ? '当前页面' : '旧页面',
+            site: 'example.com',
+            url: index === 9 ? 'https://example.com/current' : 'https://example.com/old',
+            status: 'read',
+            sourceId: index === 9 ? 'src-current' : 'src-old',
+            manifest: {
+              description: '不应在交接中重复发送的页面清单',
+              outline: [],
+              relevant_links: [],
+              truncated: false,
+            },
+          })]
+        : [],
+    }));
+
+    const context = buildTransportHandoffContext(messages);
+    const payload = JSON.parse(context.split('\n')[1]!) as {
+      turns: Array<{ role: ChatMessage['role']; content: string; pageSourceId?: string }>;
+      sources: Array<{ sourceId: string; manifest?: unknown }>;
+      truncated?: boolean;
+      omitted_turns?: number;
+    };
+
+    expect(context.length).toBeLessThanOrEqual(TRANSPORT_HANDOFF_MAX_CHARS);
+    expect(payload.turns.length).toBeLessThanOrEqual(TRANSPORT_HANDOFF_MAX_TURNS);
+    expect(payload.turns.at(-1)?.content).toContain('第 9 条');
+    expect(payload.sources).toEqual([expect.objectContaining({ sourceId: 'src-current' })]);
+    expect(payload.sources[0]?.manifest).toBeUndefined();
+    expect(payload.truncated).toBe(true);
+    expect(payload.omitted_turns).toBeGreaterThan(0);
+    expect(context).not.toContain('不应在交接中重复发送的页面清单');
   });
 });

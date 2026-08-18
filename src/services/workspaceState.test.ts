@@ -25,6 +25,15 @@ function conversation(): Conversation {
       presentation: 'page-overview',
       stage: 'streaming',
       activities: [{ id: 'tool-1', kind: 'tool', title: '搜索', status: 'running', startedAt: 12 }],
+      artifacts: [{
+        id: 'artifact-1',
+        kind: 'image',
+        filename: '生成图片.png',
+        url: 'https://example.com/generated.png',
+        mime: 'image/png',
+        size: 2048,
+        status: 'available',
+      }],
     }],
     draftInput: '尚未发送的草稿',
     draftContextItems: [
@@ -51,7 +60,7 @@ function workspace(): WorkspaceState {
   };
 }
 
-describe('workspace state v5', () => {
+describe('workspace state v6', () => {
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
     const snapshot = createWorkspaceSnapshot(workspace(), 100);
     const restored = normalizeWorkspaceSnapshot(snapshot, 200);
@@ -71,6 +80,15 @@ describe('workspace state v5', () => {
     expect(attachment?.kind === 'image' ? attachment.attachment.previewUrl : undefined).toBeUndefined();
     expect(restored?.conversations[0]?.messages[0]?.respondedAt).toBe(13);
     expect(restored?.conversations[0]?.messages[0]?.presentation).toBe('page-overview');
+    expect(restored?.conversations[0]?.messages[0]?.artifacts?.[0]).toEqual({
+      id: 'artifact-1',
+      kind: 'image',
+      filename: '生成图片.png',
+      url: 'https://example.com/generated.png',
+      mime: 'image/png',
+      size: 2048,
+      status: 'available',
+    });
   });
 
   it('marks interrupted streams and tools as stopped after reload', () => {
@@ -104,6 +122,8 @@ describe('workspace state v5', () => {
     const runtimePage = {
       ...page,
       sourceId: 'src-1',
+      sentAt: 100,
+      deliveredRemoteUuid: 'remote-1',
       manifest: {
         description: '页面概览',
         outline: [],
@@ -118,12 +138,33 @@ describe('workspace state v5', () => {
     const snapshot = createWorkspaceSnapshot(stored);
     const serialized = JSON.stringify(snapshot);
     expect(serialized).toContain('页面概览');
+    expect(serialized).toContain('remote-1');
     expect(serialized).not.toContain('不应写入本地存储的完整正文');
   });
 
   it('rejects malformed or unsupported snapshots', () => {
     expect(normalizeWorkspaceSnapshot(null)).toBeNull();
     expect(normalizeWorkspaceSnapshot({ version: 99, conversations: [] })).toBeNull();
+  });
+
+  it('rejects unsafe persisted artifact URLs', () => {
+    const stored = createWorkspaceSnapshot(workspace(), 100);
+    stored.conversations[0]!.messages[0]!.artifacts![0]!.url = 'javascript:alert(1)';
+
+    expect(normalizeWorkspaceSnapshot(stored)).toBeNull();
+  });
+
+  it('upgrades v5 snapshots without requiring output artifacts', () => {
+    const stored = createWorkspaceSnapshot(workspace(), 100) as unknown as Record<string, unknown>;
+    stored.version = 5;
+    (stored.conversations as Conversation[]).forEach((item) => {
+      item.messages.forEach((message) => delete message.artifacts);
+    });
+
+    const restored = normalizeWorkspaceSnapshot(stored);
+
+    expect(restored?.version).toBe(WORKSPACE_STATE_VERSION);
+    expect(restored?.conversations[0]?.messages[0]?.artifacts).toBeUndefined();
   });
 });
 

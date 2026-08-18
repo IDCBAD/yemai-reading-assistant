@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { shouldApplyContentPageChange, shouldRefreshPageMetadataForTab } from './pageMetadataSync';
+import {
+  shouldApplyContentPageChange,
+  shouldFollowActivatedTab,
+  shouldRefreshPageMetadataForTab,
+} from './pageMetadataSync';
 
 describe('page metadata synchronization', () => {
+  it('follows tab activation only inside the side panel host window', () => {
+    expect(shouldFollowActivatedTab(10, 10)).toBe(true);
+    expect(shouldFollowActivatedTab(20, 10)).toBe(false);
+  });
+
+  it('does not follow a global activation before the host window is known', () => {
+    expect(shouldFollowActivatedTab(10, undefined)).toBe(false);
+  });
+
   it('ignores updates from background tabs', () => {
     expect(shouldRefreshPageMetadataForTab(2, 1, { title: 'Updated elsewhere' })).toBe(false);
   });

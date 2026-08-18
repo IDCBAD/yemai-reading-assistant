@@ -4,6 +4,7 @@ import {
   createStableSourceId,
   inferAccessHint,
   inferPageType,
+  normalizeSourceIdentityUrl,
   normalizeSourceUrl,
   PAGE_MANIFEST_LIMITS,
 } from './pageManifest';
@@ -17,6 +18,24 @@ describe('page manifest', () => {
     expect(normalizeSourceUrl('https://example.com/a#:~:text=hello')).toBe('https://example.com/a');
     expect(createStableSourceId('https://example.com/a?utm_source=one')).toBe(
       createStableSourceId('https://example.com/a?utm_source=two'),
+    );
+  });
+
+  it('separates document identity from in-page anchor navigation', () => {
+    expect(normalizeSourceIdentityUrl('https://example.com/book/chapter#tools')).toBe(
+      'https://example.com/book/chapter',
+    );
+    expect(normalizeSourceIdentityUrl('https://example.com/#/article/12')).toBe(
+      'https://example.com/#/article/12',
+    );
+    expect(normalizeSourceIdentityUrl('https://example.com/#!/article/12')).toBe(
+      'https://example.com/#!/article/12',
+    );
+    expect(createStableSourceId('https://example.com/book/chapter#tools')).toBe(
+      createStableSourceId('https://example.com/book/chapter#model'),
+    );
+    expect(createStableSourceId('https://example.com/#/article/12')).not.toBe(
+      createStableSourceId('https://example.com/#/article/13'),
     );
   });
 

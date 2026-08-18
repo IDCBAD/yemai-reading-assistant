@@ -1,4 +1,5 @@
 import type {
+  AssistantArtifact,
   ChatMessage,
   Conversation,
   ContextItem,
@@ -11,7 +12,7 @@ import type {
 } from '../sidepanel/types';
 import { legacyDraftContextItems } from '../sidepanel/contextItems';
 
-export const WORKSPACE_STATE_VERSION = 5;
+export const WORKSPACE_STATE_VERSION = 6;
 export const MAX_OPEN_TABS = 10;
 
 export interface WorkspaceSnapshot extends WorkspaceState {
@@ -93,6 +94,7 @@ function isPage(value: unknown): value is PageContext {
     && (value.contentHash === undefined || typeof value.contentHash === 'string')
     && (value.extractedAt === undefined || typeof value.extractedAt === 'number')
     && (value.sentAt === undefined || typeof value.sentAt === 'number')
+    && (value.deliveredRemoteUuid === undefined || typeof value.deliveredRemoteUuid === 'string')
     && (value.version === undefined || typeof value.version === 'number')
     && (value.pageType === undefined || ['article', 'documentation', 'index', 'search', 'discussion', 'application', 'unknown'].includes(value.pageType as string))
     && (value.accessHint === undefined || ['public_web', 'authenticated_web', 'browser_only', 'local_document', 'unknown'].includes(value.accessHint as string))
@@ -191,6 +193,41 @@ function isActivity(value: unknown): value is RunActivity {
     && typeof value.status === 'string';
 }
 
+function isSafeStoredArtifactUrl(value: unknown) {
+  if (value === undefined) return true;
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isArtifact(value: unknown): value is AssistantArtifact {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && ['image', 'html', 'markdown', 'document', 'archive', 'file'].includes(value.kind as string)
+    && typeof value.filename === 'string'
+    && isSafeStoredArtifactUrl(value.url)
+    && (value.mime === undefined || typeof value.mime === 'string')
+    && (value.size === undefined || typeof value.size === 'number')
+    && isSafeStoredArtifactUrl(value.thumbnailUrl)
+    && ['available', 'failed', 'expired'].includes(value.status as string);
+}
+
+function cleanArtifact(artifact: AssistantArtifact): AssistantArtifact {
+  return {
+    id: artifact.id,
+    kind: artifact.kind,
+    filename: artifact.filename,
+    ...(artifact.url ? { url: artifact.url } : {}),
+    ...(artifact.mime ? { mime: artifact.mime } : {}),
+    ...(artifact.size !== undefined ? { size: artifact.size } : {}),
+    ...(artifact.thumbnailUrl ? { thumbnailUrl: artifact.thumbnailUrl } : {}),
+    status: artifact.status,
+  };
+}
+
 function isMessage(value: unknown): value is ChatMessage {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -205,6 +242,7 @@ function isMessage(value: unknown): value is ChatMessage {
     && (value.pageContextDelivery === undefined || ['introduce', 'update', 'reuse'].includes(value.pageContextDelivery as string))
     && (value.pageContextIssue === undefined || typeof value.pageContextIssue === 'string')
     && (value.activities === undefined || (Array.isArray(value.activities) && value.activities.every(isActivity)))
+    && (value.artifacts === undefined || (Array.isArray(value.artifacts) && value.artifacts.every(isArtifact)))
     && (value.contextItems === undefined || (Array.isArray(value.contextItems) && value.contextItems.every(isContextItem)))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isQuote)))
     && (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment)));
@@ -437,6 +475,7 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Dat
     pages: conversation.pages.map(cleanPageContext),
     messages: conversation.messages.map((message) => ({
       ...message,
+      artifacts: message.artifacts?.map(cleanArtifact),
       pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
       attachments: message.attachments?.map(cleanAttachment),
       contextItems: message.contextItems?.map(cleanContextItem),
@@ -464,6 +503,7 @@ function cleanPageContext(page: PageContext): PageContext {
     ...(page.contentHash ? { contentHash: page.contentHash } : {}),
     ...(page.extractedAt !== undefined ? { extractedAt: page.extractedAt } : {}),
     ...(page.sentAt !== undefined ? { sentAt: page.sentAt } : {}),
+    ...(page.deliveredRemoteUuid ? { deliveredRemoteUuid: page.deliveredRemoteUuid } : {}),
     ...(page.version !== undefined ? { version: page.version } : {}),
     ...(page.pageType ? { pageType: page.pageType } : {}),
     ...(page.accessHint ? { accessHint: page.accessHint } : {}),
@@ -526,7 +566,7 @@ function normalizeWorkspace<T extends { id: string }>(
   return createWorkspaceSnapshot({ conversations: normalizedConversations, openTabs, activeOpenTabId }, value.savedAt);
 }
 
-function normalizeV5(value: UnknownRecord, recoveredAt: number) {
+function normalizeCurrentWorkspace(value: UnknownRecord, recoveredAt: number) {
   return normalizeWorkspace(value, recoveredAt, isConversation, (conversation) => conversation as Conversation);
 }
 
@@ -596,7 +636,7 @@ function normalizeV1(value: UnknownRecord, recoveredAt: number): WorkspaceSnapsh
 
 export function normalizeWorkspaceSnapshot(value: unknown, recoveredAt = Date.now()): WorkspaceSnapshot | null {
   if (!isRecord(value)) return null;
-  if (value.version === WORKSPACE_STATE_VERSION) return normalizeV5(value, recoveredAt);
+  if (value.version === WORKSPACE_STATE_VERSION || value.version === 5) return normalizeCurrentWorkspace(value, recoveredAt);
   if (value.version === 4) return normalizeV4(value, recoveredAt);
   if (value.version === 3) return normalizeV3(value, recoveredAt);
   if (value.version === 2) return normalizeV2(value, recoveredAt);

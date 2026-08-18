@@ -5,6 +5,7 @@ import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } 
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
 import { AgentRunStatus } from './AgentRunStatus';
 import { ContextWorkbench } from './ContextWorkbench';
+import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface ComposerProps {
@@ -275,26 +276,26 @@ export function Composer({
           </div>
 
           <div className="workbench-actions" aria-label="会话与标签页操作">
-            <button
+            <IconTooltipButton
               className="workbench-button pressable"
               type="button"
               onClick={onNewConversation}
               aria-label={canAddTab ? '新对话' : `最多打开 ${maxTabs} 个工作页`}
-              title={canAddTab ? '新对话：从空白开始' : `最多打开 ${maxTabs} 个工作页，请先关闭一个`}
+              tooltip={canAddTab ? '新对话' : `最多打开 ${maxTabs} 个工作页，请先关闭一个`}
               disabled={!canAddTab}
             >
               <KoboyoIcon name="plus" size={16} />
-            </button>
-            <button
+            </IconTooltipButton>
+            <IconTooltipButton
               className={`workbench-button pressable${historyOpen ? ' is-active' : ''}`}
               type="button"
               onClick={onToggleHistory}
               aria-label="查看历史会话"
-              title="历史会话"
+              tooltip="历史会话"
               aria-expanded={historyOpen}
             >
               <KoboyoIcon name="solid-history" size={17} />
-            </button>
+            </IconTooltipButton>
           </div>
         </div>
 
@@ -363,7 +364,7 @@ export function Composer({
                   event.currentTarget.value = '';
                 }}
               />
-              <button
+              <IconTooltipButton
                 className="composer-tool pressable"
                 type="button"
                 onClick={() => {
@@ -371,20 +372,20 @@ export function Composer({
                   else onAttachmentUnavailable();
                 }}
                 aria-label={fileUploadEnabled ? '添加附件' : '添加附件，需要先配置当前 WorkOS 连接'}
-                title={fileUploadEnabled ? '添加附件，也可以直接粘贴图片' : '添加附件，需要先配置当前 WorkOS 连接'}
+                tooltip={fileUploadEnabled ? '添加附件' : '添加附件 · 需要连接'}
               >
                 <KoboyoIcon name="paperclip" size={17} />
-              </button>
-              <button
+              </IconTooltipButton>
+              <IconTooltipButton
                 className={`composer-tool pressable${smartSelectionActive ? ' is-active' : ''}`}
                 type="button"
                 onClick={onStartSmartSelection}
                 disabled={smartSelectionActive}
                 aria-label={smartSelectionActive ? '正在智能框选网页内容' : '智能框选网页内容并引用'}
-                title={smartSelectionActive ? '移动鼠标选择内容块，点击引用，按 Esc 取消' : '智能框选'}
+                tooltip={smartSelectionActive ? '移动选择内容，Esc 取消' : '截取部分'}
               >
                 <KoboyoIcon name="selection" size={17} />
-              </button>
+              </IconTooltipButton>
               {connectionState === 'missing' && (
                 <span className="composer-scope composer-scope--missing" role="status">
                   <i aria-hidden="true" />
@@ -395,20 +396,20 @@ export function Composer({
             <div className="composer-status-actions">
               <AgentRunStatus summary={runSummary} />
               {runSummary && (
-                <button className="stop-button pressable" type="button" onClick={onStop} aria-label="停止当前任务" title="停止当前任务">
+                <IconTooltipButton className="stop-button pressable" type="button" onClick={onStop} aria-label="停止当前任务" tooltip="停止生成">
                   <KoboyoIcon name="stop-generating-square" size={15} />
-                </button>
+                </IconTooltipButton>
               )}
-              <button
+              <IconTooltipButton
                 className="send-button pressable"
                 type="button"
                 onClick={onSend}
                 disabled={!canSend}
                 aria-label={hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
-                title={hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
+                tooltip={hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? '发送消息' : '输入内容后发送'}
               >
                 <KoboyoIcon name="send" size={17} />
-              </button>
+              </IconTooltipButton>
             </div>
           </div>
         </div>

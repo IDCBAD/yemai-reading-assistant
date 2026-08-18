@@ -5,10 +5,17 @@ import {
   type WorkosConnectionSettings,
 } from '../../services/workosConnection';
 import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate';
+import {
+  formatStorageBytes,
+  formatStoragePercent,
+  storageUsagePercent,
+  type LocalStorageUsage,
+} from '../../services/storageUsage';
 import type { WorkosTransportKind } from '../../services/workosTransport';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
 import { uploadChannelCapabilities } from '../fileTypes';
+import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface HistoryPopoverProps {
@@ -21,6 +28,8 @@ interface HistoryPopoverProps {
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
   onRestore: (id: string) => void;
+  onDeleteArchived: (id: string) => void;
+  onClearArchived: () => void;
 }
 
 export function HistoryPopover({
@@ -33,10 +42,12 @@ export function HistoryPopover({
   onSelect,
   onArchive,
   onRestore,
+  onDeleteArchived,
+  onClearArchived,
 }: HistoryPopoverProps) {
   const [view, setView] = useState<'active' | 'archived'>('active');
-  const activeConversations = conversations.filter((conversation) => !conversation.archivedAt);
-  const archivedConversations = conversations.filter((conversation) => conversation.archivedAt);
+  const activeConversations = conversations.filter((conversation) => conversation.archivedAt === undefined);
+  const archivedConversations = conversations.filter((conversation) => conversation.archivedAt !== undefined);
   const visibleConversations = view === 'active' ? activeConversations : archivedConversations;
   const conversationForest = buildConversationForest(visibleConversations);
 
@@ -82,28 +93,41 @@ export function HistoryPopover({
               {conversation.pages.length}
             </span>
           </button>
-          {view === 'active' ? (
-            <button
-              className="conversation-row-action pressable"
-              type="button"
-              onClick={() => onArchive(conversation.id)}
-              disabled={openIndex >= 0}
-              aria-label={`归档会话：${conversation.title}`}
-              title={openIndex >= 0 ? '请先关闭对应工作页' : '归档会话'}
-            >
-              <KoboyoIcon name="archive" size={13} />
-            </button>
-          ) : (
-            <button
-              className="conversation-row-action pressable"
-              type="button"
-              onClick={() => onRestore(conversation.id)}
-              aria-label={`恢复会话：${conversation.title}`}
-              title="恢复到历史会话"
-            >
-              <KoboyoIcon name="cycle" size={13} />
-            </button>
-          )}
+          <div className="conversation-row-actions">
+            {view === 'active' ? (
+              <IconTooltipButton
+                className="conversation-row-action pressable"
+                type="button"
+                onClick={() => onArchive(conversation.id)}
+                disabled={openIndex >= 0}
+                aria-label={`归档会话：${conversation.title}`}
+                tooltip={openIndex >= 0 ? '请先关闭对应工作页' : '归档'}
+              >
+                <KoboyoIcon name="archive" size={13} />
+              </IconTooltipButton>
+            ) : (
+              <>
+                <IconTooltipButton
+                  className="conversation-row-action pressable"
+                  type="button"
+                  onClick={() => onRestore(conversation.id)}
+                  aria-label={`恢复会话：${conversation.title}`}
+                  tooltip="恢复到历史"
+                >
+                  <KoboyoIcon name="cycle" size={13} />
+                </IconTooltipButton>
+                <IconTooltipButton
+                  className="conversation-row-action is-danger pressable"
+                  type="button"
+                  onClick={() => onDeleteArchived(conversation.id)}
+                  aria-label={`永久删除会话：${conversation.title}`}
+                  tooltip="永久删除本地记录"
+                >
+                  <KoboyoIcon name="trash" size={13} />
+                </IconTooltipButton>
+              </>
+            )}
+          </div>
         </div>
         {children.length > 0 && (
           <ol className="conversation-tree-children">
@@ -144,7 +168,14 @@ export function HistoryPopover({
           >
             归档 <span>{archivedConversations.length}</span>
           </button>
-          <small>仅整理本地列表</small>
+          {view === 'archived' && archivedConversations.length > 0 ? (
+            <button className="history-clear-archived pressable" type="button" onClick={onClearArchived}>
+              <KoboyoIcon name="trash" size={11} />
+              清空已归档
+            </button>
+          ) : (
+            <small>仅整理本地列表</small>
+          )}
         </div>
         <nav className="conversation-list" aria-label="会话列表">
           {visibleConversations.length === 0 && (
@@ -169,6 +200,8 @@ interface SettingsDrawerProps {
   settings: WorkosConnectionSettings;
   connectionIssue: string | null;
   bubbleEnabled: boolean;
+  storageUsage: LocalStorageUsage | null;
+  storageUsageIssue: string | null;
   onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
@@ -183,6 +216,8 @@ export function SettingsDrawer({
   settings,
   connectionIssue,
   bubbleEnabled,
+  storageUsage,
+  storageUsageIssue,
   onSaveConnection,
   onTestConnection,
   onImportWorkosCredentials,
@@ -257,6 +292,8 @@ export function SettingsDrawer({
   };
 
   const agentUuidError = draft.agentUuid.trim() ? validateAgentUuid(draft.agentUuid) : null;
+  const localStoragePercent = storageUsage ? storageUsagePercent(storageUsage) : 0;
+  const storageTone = localStoragePercent >= 90 ? 'critical' : localStoragePercent >= 70 ? 'warning' : 'normal';
   const activeConfigured = validateAgentUuid(draft.agentUuid) === null && (draft.transport === 'public-v1'
     ? Boolean(draft.publicApiToken.trim())
     : Boolean(
@@ -554,9 +591,38 @@ export function SettingsDrawer({
             </div>
           </section>
 
+          <section className="settings-section storage-usage-section">
+            <div className="storage-usage-heading">
+              <strong>本地历史占用空间</strong>
+              <span className={`is-${storageTone}`}>
+                {storageUsage ? formatStoragePercent(localStoragePercent) : '计算中'}
+              </span>
+            </div>
+            <div
+              className={`storage-usage-track is-${storageTone}`}
+              role="progressbar"
+              aria-label="扩展本地存储占用"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={storageUsage ? Math.round(localStoragePercent) : undefined}
+            >
+              <span style={{ transform: `scaleX(${localStoragePercent / 100})` }} />
+            </div>
+            {storageUsage ? (
+              <div className="storage-usage-meta">
+                <span>历史 {formatStorageBytes(storageUsage.historyBytes)}</span>
+                <span>全部 {formatStorageBytes(storageUsage.totalBytes)} / {formatStorageBytes(storageUsage.quotaBytes)}</span>
+              </div>
+            ) : (
+              <p>{storageUsageIssue ?? '正在读取 Chrome 本地存储用量…'}</p>
+            )}
+            {storageUsage && storageUsageIssue && <p role="status">{storageUsageIssue}</p>}
+            <p>进度按扩展全部本地数据计算，历史是其中的一部分。</p>
+          </section>
+
           <section className="settings-section settings-section--danger">
-            <strong>本地历史</strong>
-            <p>只清除插件中的会话、Tab 和消息，不删除 WorkOS 后台数据。</p>
+            <strong>删除本地数据</strong>
+            <p>清除插件中的会话、工作页和消息，不删除 WorkOS 后台数据。</p>
             <button className="danger-button pressable" type="button" onClick={onClearHistory}>
               <KoboyoIcon name="trash" size={15} />
               清空本地历史
@@ -570,11 +636,14 @@ export function SettingsDrawer({
 
 interface ConfirmDialogProps {
   open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function ConfirmDialog({ open, onCancel, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, title, description, confirmLabel, onCancel, onConfirm }: ConfirmDialogProps) {
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -588,14 +657,14 @@ export function ConfirmDialog({ open, onCancel, onConfirm }: ConfirmDialogProps)
 
   return (
     <div className="dialog-layer" role="presentation">
-      <button className="dialog-scrim" type="button" tabIndex={-1} onClick={onCancel} aria-label="取消清空" />
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="clear-title">
+      <button className="dialog-scrim" type="button" tabIndex={-1} onClick={onCancel} aria-label="取消删除" />
+      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <span className="dialog-icon" aria-hidden="true"><KoboyoIcon name="trash" size={19} /></span>
-        <h2 id="clear-title">清空本地历史？</h2>
-        <p>插件中的会话、Tab 和消息会被移除，但 WorkOS 后台会话与已上传文件仍然保留。</p>
+        <h2 id="confirm-title">{title}</h2>
+        <p>{description}</p>
         <div className="dialog-actions">
           <button className="secondary-button pressable" type="button" onClick={onCancel}>取消</button>
-          <button className="danger-confirm pressable" type="button" onClick={onConfirm}>清空本地记录</button>
+          <button className="danger-confirm pressable" type="button" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>

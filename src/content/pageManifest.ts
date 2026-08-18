@@ -67,8 +67,26 @@ export function normalizeSourceUrl(value: string) {
   }
 }
 
-export function createStableSourceId(value: string) {
+/**
+ * Normalizes a URL for document identity rather than navigation position.
+ * Ordinary fragments point into one document, while #/ and #!/ commonly
+ * represent distinct routes in hash-based applications and must be retained.
+ */
+export function normalizeSourceIdentityUrl(value: string) {
   const normalized = normalizeSourceUrl(value);
+  try {
+    const url = new URL(normalized);
+    if (url.hash && !url.hash.startsWith('#/') && !url.hash.startsWith('#!/')) {
+      url.hash = '';
+    }
+    return url.toString();
+  } catch {
+    return normalized;
+  }
+}
+
+export function createStableSourceId(value: string) {
+  const normalized = normalizeSourceIdentityUrl(value);
   let first = 0xdeadbeef;
   let second = 0x41c6ce57;
   for (let index = 0; index < normalized.length; index += 1) {

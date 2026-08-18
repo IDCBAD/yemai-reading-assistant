@@ -1,4 +1,4 @@
-import { createStableSourceId, normalizeSourceUrl } from '../content/pageManifest';
+import { createStableSourceId, normalizeSourceIdentityUrl } from '../content/pageManifest';
 import type { PageSnapshot } from '../shared/extensionMessages';
 import type {
   AgentCapabilityProfile,
@@ -37,7 +37,7 @@ function pageSource(page: PageContext): ReferenceSource {
     source_id: page.sourceId ?? createStableSourceId(page.url),
     kind: 'current_page',
     title: page.title,
-    url: page.url,
+    url: normalizeSourceIdentityUrl(page.url),
     page_type: page.pageType ?? 'unknown',
     access_hint: page.accessHint ?? 'unknown',
     ...(page.contentHash ? { revision_id: page.contentHash } : {}),
@@ -102,8 +102,8 @@ function pageReference(
 }
 
 function quoteReference(quote: QuoteReference, page?: PreparedPageReference): SelectionReference {
-  const quoteUrl = normalizeSourceUrl(quote.pageUrl);
-  const pageUrl = page?.source.url ? normalizeSourceUrl(page.source.url) : undefined;
+  const quoteUrl = normalizeSourceIdentityUrl(quote.pageUrl);
+  const pageUrl = page?.source.url ? normalizeSourceIdentityUrl(page.source.url) : undefined;
   const isAssistantQuote = quote.origin === 'assistant';
   const sharesPageSource = Boolean(!isAssistantQuote && page && pageUrl === quoteUrl);
   return {

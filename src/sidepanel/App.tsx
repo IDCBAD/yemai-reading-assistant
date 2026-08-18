@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
+import { normalizeSourceIdentityUrl } from '../content/pageManifest';
 import {
   buildAgentContent,
   preparePageReference,
   WORKOS_AGENT_CAPABILITIES,
 } from '../services/buildAgentContent';
 import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from '../services/buildBranchContext';
-import { decideCurrentPageDelivery, type CurrentPageDeliveryDecision } from '../services/contextDeliveryPolicy';
+import { findConversationSourceDelivery, markPageDelivered } from '../services/conversationSourceLedger';
+import {
+  decideCurrentPageDelivery,
+  shouldDeliverFullCurrentPage,
+  type CurrentPageDeliveryDecision,
+} from '../services/contextDeliveryPolicy';
 import {
   EMPTY_WORKOS_CONNECTION_SETTINGS,
   isActiveWorkosConnectionConfigured,
@@ -20,10 +26,12 @@ import {
   createWorkosFileUploader,
   isWorkosFileUploadConfigured,
 } from '../services/workosFileUpload';
-import type { WorkosToolActivity } from '../services/workosSse';
+import type { WorkosArtifact, WorkosToolActivity } from '../services/workosSse';
 import { hasWorkosRemoteTargetChanged, WorkosApiError } from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
-import { loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
+import { loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
+import type { LocalStorageUsage } from '../services/storageUsage';
+import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
 import type {
   ExtensionEvent,
@@ -69,12 +77,14 @@ import {
 import { CURRENT_PAGE, INITIAL_WORKSPACE } from './mockData';
 import {
   shouldApplyContentPageChange,
+  shouldFollowActivatedTab,
   shouldRefreshPageMetadataForTab,
   type BrowserTabChange,
 } from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
 import { PAGE_OVERVIEW_PROMPT } from './starterActions';
 import type {
+  AssistantArtifact,
   ChatMessage,
   Conversation,
   OpenConversationTab,
@@ -83,7 +93,7 @@ import type {
   RunActivityStatus,
   WorkspaceState,
 } from './types';
-import { closeWorkspaceTab, openConversationInWorkspace } from './workspaceNavigation';
+import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -129,8 +139,13 @@ function pageContextFromSnapshot(snapshot: PageSnapshot, status: PageContext['st
   return { ...page, status };
 }
 
-function sentPageContext(snapshot: PageSnapshot, sentAt: number, version: number): PageContext {
-  return { ...pageContextFromSnapshot(snapshot, 'read'), sentAt, version };
+function sentPageContext(
+  snapshot: PageSnapshot,
+  sentAt: number,
+  version: number,
+  remoteUuid: string,
+): PageContext {
+  return markPageDelivered({ ...pageContextFromSnapshot(snapshot, 'read'), version }, remoteUuid, sentAt);
 }
 
 function createOpenTab(conversationId: string): OpenConversationTab {
@@ -154,6 +169,31 @@ function recentSubtitle(conversation: Conversation) {
     ? `分支 ${conversation.branch.ordinal} · 刚刚`
     : `${conversation.pages.length} 个页面 · 刚刚`;
 }
+
+interface AttachmentResource {
+  id: string;
+  previewUrl?: string;
+}
+
+function conversationAttachmentResources(conversation: Conversation): AttachmentResource[] {
+  const resources = new Map<string, AttachmentResource>();
+  const remember = (resource: AttachmentResource) => resources.set(resource.id, resource);
+  conversation.draftContextItems.forEach((item) => {
+    if (item.kind === 'file' || item.kind === 'image') remember(item.attachment);
+  });
+  conversation.messages.forEach((message) => {
+    message.contextItems?.forEach((item) => {
+      if (item.kind === 'file' || item.kind === 'image') remember(item.attachment);
+    });
+    message.attachments?.forEach(remember);
+  });
+  return [...resources.values()];
+}
+
+type HistoryDeletionRequest =
+  | { kind: 'all' }
+  | { kind: 'archived'; count: number }
+  | { kind: 'conversation'; conversationId: string; title: string };
 
 interface QueuedAgentRequest {
   conversationId: string;
@@ -183,7 +223,9 @@ export default function App() {
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletionRequest | null>(null);
+  const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
+  const [localStorageUsageIssue, setLocalStorageUsageIssue] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
   const [smartSelectionActive, setSmartSelectionActive] = useState(false);
@@ -192,6 +234,7 @@ export default function App() {
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const currentPageRef = useRef<PageContext>(CURRENT_PAGE);
+  const hostBrowserWindowIdRef = useRef<number | undefined>(undefined);
   const activeBrowserTabIdRef = useRef<number | undefined>(undefined);
   const pageMetadataRequestRef = useRef(0);
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
@@ -328,6 +371,26 @@ export default function App() {
   }, [workspace, workspaceHydrated]);
 
   useEffect(() => {
+    if (!settingsOpen || !workspaceHydrated) return;
+    let mounted = true;
+    const timer = window.setTimeout(() => {
+      void loadLocalStorageUsage()
+        .then((usage) => {
+          if (!mounted) return;
+          setLocalStorageUsage(usage);
+          setLocalStorageUsageIssue(null);
+        })
+        .catch(() => {
+          if (mounted) setLocalStorageUsageIssue('暂时无法计算本地占用。');
+        });
+    }, 450);
+    return () => {
+      mounted = false;
+      window.clearTimeout(timer);
+    };
+  }, [settingsOpen, workspace, workspaceHydrated]);
+
+  useEffect(() => {
     if (!workspaceHydrated) return;
     const flushWorkspace = () => {
       void saveWorkspaceState(workspaceRef.current).catch(() => undefined);
@@ -382,6 +445,30 @@ export default function App() {
             activities: index < 0
               ? [...existing, nextActivity]
               : existing.map((item, itemIndex) => itemIndex === index ? { ...item, ...nextActivity } : item),
+          };
+        }),
+      }));
+    },
+    [updateConversation],
+  );
+
+  const upsertMessageArtifact = useCallback(
+    (conversationId: string, messageId: string, artifact: WorkosArtifact) => {
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          const nextArtifact: AssistantArtifact = { ...artifact };
+          const existing = message.artifacts ?? [];
+          const index = existing.findIndex((item) =>
+            item.id === artifact.id || Boolean(item.url && artifact.url && item.url === artifact.url));
+          return {
+            ...message,
+            artifacts: index < 0
+              ? [...existing, nextArtifact]
+              : existing.map((item, itemIndex) => itemIndex === index
+                  ? { ...item, ...nextArtifact, id: item.id }
+                  : item),
           };
         }),
       }));
@@ -534,7 +621,9 @@ export default function App() {
   }, [activeConversation.id, consumePendingQuotes, workspaceHydrated]);
 
   useEffect(() => {
-    const onActivated = (activeInfo: { tabId: number }) => {
+    let mounted = true;
+    const onActivated = (activeInfo: { tabId: number; windowId: number }) => {
+      if (!shouldFollowActivatedTab(activeInfo.windowId, hostBrowserWindowIdRef.current)) return;
       activeBrowserTabIdRef.current = activeInfo.tabId;
       void refreshPageMetadata(false, activeInfo.tabId);
     };
@@ -543,12 +632,38 @@ export default function App() {
         void refreshPageMetadata(true, tabId);
       }
     };
-    const onWindowFocus = () => void refreshPageMetadata(false, activeBrowserTabIdRef.current);
+    const onWindowFocus = () => {
+      const tabId = activeBrowserTabIdRef.current;
+      if (tabId !== undefined) void refreshPageMetadata(false, tabId);
+    };
+    const initializeHostWindow = async () => {
+      const hostWindow = await browser.windows.getCurrent().catch(() => undefined);
+      if (!mounted) return;
+      const hostWindowId = hostWindow?.id;
+      hostBrowserWindowIdRef.current = hostWindowId;
+      if (hostWindowId === undefined) {
+        activeBrowserTabIdRef.current = undefined;
+        setCurrentPage({ title: '当前页面', site: '', url: '', status: 'not-read' });
+        setPageIssue('无法识别页脉所在的浏览器窗口，请关闭并重新打开侧边栏。');
+        return;
+      }
+      const activeTab = (await browser.tabs.query({ active: true, windowId: hostWindowId }).catch(() => []))[0];
+      if (!mounted) return;
+      if (activeTab?.id === undefined) {
+        activeBrowserTabIdRef.current = undefined;
+        setCurrentPage({ title: '当前页面', site: '', url: '', status: 'not-read' });
+        setPageIssue('当前窗口没有可读取的活动页面。');
+        return;
+      }
+      activeBrowserTabIdRef.current = activeTab.id;
+      void refreshPageMetadata(false, activeTab.id);
+    };
     browser.tabs.onActivated.addListener(onActivated);
     browser.tabs.onUpdated.addListener(onUpdated);
     window.addEventListener('focus', onWindowFocus);
-    void refreshPageMetadata();
+    void initializeHostWindow();
     return () => {
+      mounted = false;
       browser.tabs.onActivated.removeListener(onActivated);
       browser.tabs.onUpdated.removeListener(onUpdated);
       window.removeEventListener('focus', onWindowFocus);
@@ -606,7 +721,7 @@ export default function App() {
   };
 
   const selectTab = (tabId: string) => {
-    setWorkspace((current) => ({ ...current, activeOpenTabId: tabId }));
+    setWorkspace((current) => selectWorkspaceTab(current, tabId));
     setHistoryOpen(false);
   };
 
@@ -634,6 +749,41 @@ export default function App() {
 
   const restoreConversation = (conversationId: string) => {
     updateConversation(conversationId, (conversation) => ({ ...conversation, archivedAt: undefined }));
+  };
+
+  const releaseConversationResources = (
+    conversations: Conversation[],
+    preservedConversations: Conversation[] = [],
+  ) => {
+    const preservedPreviewUrls = new Set(
+      preservedConversations.flatMap(conversationAttachmentResources)
+        .map((resource) => resource.previewUrl)
+        .filter((url): url is string => Boolean(url)),
+    );
+    const preservedAttachmentIds = new Set(
+      preservedConversations.flatMap(conversationAttachmentResources).map((resource) => resource.id),
+    );
+    conversations.flatMap(conversationAttachmentResources).forEach((resource) => {
+      if (resource.previewUrl?.startsWith('blob:') && !preservedPreviewUrls.has(resource.previewUrl)) {
+        URL.revokeObjectURL(resource.previewUrl);
+        attachmentPreviewUrlsRef.current.delete(resource.previewUrl);
+      }
+      if (!preservedAttachmentIds.has(resource.id)) {
+        attachmentFilesRef.current.delete(resource.id);
+        attachmentUploadsRef.current.delete(resource.id);
+      }
+    });
+  };
+
+  const requestDeleteArchivedConversation = (conversationId: string) => {
+    const conversation = workspaceRef.current.conversations.find((item) => item.id === conversationId);
+    if (conversation?.archivedAt === undefined) return;
+    setHistoryDeletion({ kind: 'conversation', conversationId, title: conversation.title });
+  };
+
+  const requestClearArchived = () => {
+    const count = workspaceRef.current.conversations.filter((conversation) => conversation.archivedAt !== undefined).length;
+    if (count) setHistoryDeletion({ kind: 'archived', count });
   };
 
   const branchFromMessage = (message: ChatMessage) => {
@@ -741,6 +891,7 @@ export default function App() {
       errorMessage: undefined,
     });
     let receivedText = false;
+    let receivedArtifact = false;
     let terminalError: string | null = null;
     let branchContextConsumed = false;
     const preparation = await waitForAbortable(request.pageSnapshotPromise, signal);
@@ -770,21 +921,13 @@ export default function App() {
     const preparedPage = messagePage
       ? preparePageReference(pageSnapshot ?? messagePage)
       : undefined;
-    const previousPage = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
-      ? currentConversation.pages.find((page) =>
-          (page.sourceId && page.sourceId === preparedPage.source.source_id)
-          || page.url === preparedPage.source.url)
+    const previousDelivery = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
+      ? findConversationSourceDelivery(currentConversation, preparedPage, currentConversation.remoteUuid)
       : undefined;
     const pageDecision: CurrentPageDeliveryDecision = decideCurrentPageDelivery({
-      included: Boolean(messagePage),
+      included: Boolean(messagePage) && needsPageRead,
       prepared: preparedPage,
-      previous: previousPage
-        ? {
-            source_id: previousPage.sourceId ?? preparedPage!.source.source_id,
-            revision_id: previousPage.contentHash,
-            delivered_at: previousPage.sentAt ? new Date(previousPage.sentAt).toISOString() : undefined,
-          }
-        : undefined,
+      previous: previousDelivery,
       agent: WORKOS_AGENT_CAPABILITIES,
     });
     const pageContextMode = pageDecision.mode === 'none' ? undefined : pageDecision.mode;
@@ -860,10 +1003,21 @@ export default function App() {
         {
           onText: (text) => {
             consumeBranchContext();
-            const respondedAt = !receivedText && text.length > 0 ? Date.now() : undefined;
+            const respondedAt = !receivedText && !receivedArtifact && text.length > 0 ? Date.now() : undefined;
             receivedText = receivedText || text.length > 0;
             updateMessage(conversationId, messageId, {
               content: text,
+              stage: 'streaming',
+              status: 'streaming',
+              ...(respondedAt ? { respondedAt } : {}),
+            });
+          },
+          onArtifact: (artifact) => {
+            consumeBranchContext();
+            const respondedAt = !receivedText && !receivedArtifact ? Date.now() : undefined;
+            receivedArtifact = true;
+            upsertMessageArtifact(conversationId, messageId, artifact);
+            updateMessage(conversationId, messageId, {
               stage: 'streaming',
               status: 'streaming',
               ...(respondedAt ? { respondedAt } : {}),
@@ -881,27 +1035,31 @@ export default function App() {
       );
       consumeBranchContext();
       if (terminalError) throw new WorkosApiError(terminalError);
-      if (!receivedText) throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的文本。');
+      if (!receivedText && !receivedArtifact) {
+        throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的内容。');
+      }
       if (preparedPage && pageDecision.mode !== 'none' && messagePage) {
         const deliveredAt = Date.now();
         updateConversation(conversationId, (conversation) => {
-          const existing = conversation.pages.find((page) =>
-            (page.sourceId && page.sourceId === preparedPage.source.source_id)
-            || page.url === preparedPage.source.url);
+          const existing = conversation.pages
+            .filter((page) =>
+              (page.sourceId && page.sourceId === preparedPage.source.source_id)
+              || Boolean(preparedPage.source.url
+                && normalizeSourceIdentityUrl(page.url) === normalizeSourceIdentityUrl(preparedPage.source.url)))
+            .sort((left, right) => (right.sentAt ?? 0) - (left.sentAt ?? 0))[0];
           const basePage = pageSnapshot
             ? sentPageContext(pageSnapshot, deliveredAt, pageDecision.mode === 'reuse'
                 ? existing?.version ?? 1
-                : (existing?.version ?? 0) + 1)
-            : {
+                : (existing?.version ?? 0) + 1, remoteUuid)
+            : markPageDelivered({
                 ...messagePage,
                 sourceId: preparedPage.source.source_id,
                 manifest: preparedPage.manifest,
                 status: 'read' as const,
-                sentAt: deliveredAt,
                 version: pageDecision.mode === 'reuse'
                   ? existing?.version ?? 1
                   : (existing?.version ?? 0) + 1,
-              };
+              }, remoteUuid, deliveredAt);
           const deliveredPage = {
             ...basePage,
             sourceId: preparedPage.source.source_id,
@@ -910,7 +1068,12 @@ export default function App() {
           const pages = existing
             ? conversation.pages.map((page) => page === existing
                 ? pageDecision.mode === 'reuse'
-                  ? { ...page, sourceId: deliveredPage.sourceId, manifest: deliveredPage.manifest }
+                  ? {
+                      ...page,
+                      sourceId: deliveredPage.sourceId,
+                      manifest: deliveredPage.manifest,
+                      deliveredRemoteUuid: remoteUuid,
+                    }
                   : deliveredPage
                 : page)
             : [...conversation.pages, deliveredPage];
@@ -929,6 +1092,7 @@ export default function App() {
             {
               ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : messagePage),
               sentAt: deliveredAt,
+              deliveredRemoteUuid: remoteUuid,
             },
             pageSnapshot ? undefined : preparation?.error,
             pageContextDelivery,
@@ -942,6 +1106,7 @@ export default function App() {
               ...page,
               ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : {}),
               sentAt: deliveredAt,
+              deliveredRemoteUuid: remoteUuid,
             }
           : page);
       }
@@ -993,12 +1158,15 @@ export default function App() {
     const conversationAtSend = activeConversation;
     const pageAtSend = contextPage(draftContextItems)?.page ?? displayedPage;
     const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
-    const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
-    const queuedSnapshot = includeCurrentPage ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
-    const needsPageRead = includeCurrentPage;
     const presentation = activeConversation.draftInput.trim() === PAGE_OVERVIEW_PROMPT
       ? 'page-overview' as const
       : undefined;
+    const needsPageRead = includeCurrentPage && shouldDeliverFullCurrentPage({
+      explicitReferenceCount: readySelections.length,
+      presentation,
+    });
+    const snapshotKey = pageSnapshotKey(conversationAtSend.id, pageAtSend.url);
+    const queuedSnapshot = needsPageRead ? pendingPageSnapshotsRef.current.get(snapshotKey) : undefined;
     const userMessage: ChatMessage = {
       id: makeId('message'),
       role: 'user',
@@ -1023,6 +1191,7 @@ export default function App() {
       status: 'queued',
       stage: 'queued',
       activities: [],
+      artifacts: [],
       presentation,
     };
 
@@ -1066,21 +1235,27 @@ export default function App() {
       stage: 'queued',
       errorMessage: undefined,
       activities: [],
+      artifacts: [],
     });
     const retryPage = contextPage(contextItemsFromMessage(userMessage))?.page;
+    const retrySelections = contextSelections(contextItemsFromMessage(userMessage));
+    const needsRetryPageRead = Boolean(retryPage) && shouldDeliverFullCurrentPage({
+      explicitReferenceCount: retrySelections.length,
+      presentation: userMessage.presentation,
+    });
     const cachedSnapshot = retryPage
       ? pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, retryPage.url))
       : undefined;
-    const pageSnapshotPromise = cachedSnapshot
+    const pageSnapshotPromise = needsRetryPageRead && cachedSnapshot
       ? Promise.resolve<PagePreparationResult>({ snapshot: cachedSnapshot })
-      : retryPage
+      : needsRetryPageRead && retryPage
         ? preparePageContext(activeConversation.id, retryPage)
         : Promise.resolve<PagePreparationResult>({});
     requestCoordinatorRef.current?.enqueue({
       conversationId: activeConversation.id,
       messageId: message.id,
       userMessage,
-      needsPageRead: Boolean(retryPage),
+      needsPageRead: needsRetryPageRead,
       pageSnapshotPromise,
     });
   };
@@ -1364,18 +1539,40 @@ export default function App() {
     });
   };
 
-  const clearHistory = () => {
-    if (!workspaceHydrated) return;
-    stopAllRequests();
-    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-    attachmentPreviewUrlsRef.current.clear();
-    attachmentFilesRef.current.clear();
-    attachmentUploadsRef.current.clear();
-    const conversation = createConversation(currentPage);
-    const tab = createOpenTab(conversation.id);
-    setWorkspace({ conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id });
-    setClearDialogOpen(false);
-    setSettingsOpen(false);
+  const confirmHistoryDeletion = () => {
+    if (!workspaceHydrated || !historyDeletion) return;
+    const current = workspaceRef.current;
+    if (historyDeletion.kind === 'all') {
+      stopAllRequests();
+      releaseConversationResources(current.conversations);
+      attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      attachmentPreviewUrlsRef.current.clear();
+      attachmentFilesRef.current.clear();
+      attachmentUploadsRef.current.clear();
+      const conversation = createConversation(currentPage);
+      const tab = createOpenTab(conversation.id);
+      const next = { conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id };
+      workspaceRef.current = next;
+      setWorkspace(next);
+      setSettingsOpen(false);
+      setHistoryOpen(false);
+    } else if (historyDeletion.kind === 'archived') {
+      const next = clearArchivedConversations(current);
+      const preservedIds = new Set(next.conversations.map((conversation) => conversation.id));
+      const removed = current.conversations.filter((conversation) => !preservedIds.has(conversation.id));
+      releaseConversationResources(removed, next.conversations);
+      workspaceRef.current = next;
+      setWorkspace(next);
+    } else {
+      const next = deleteArchivedConversation(current, historyDeletion.conversationId);
+      const target = next === current
+        ? undefined
+        : current.conversations.find((conversation) => conversation.id === historyDeletion.conversationId);
+      if (target) releaseConversationResources([target], next.conversations);
+      workspaceRef.current = next;
+      setWorkspace(next);
+    }
+    setHistoryDeletion(null);
   };
 
   const changeContextItemIncluded = (id: string, included: boolean) => {
@@ -1413,6 +1610,7 @@ export default function App() {
     <div className="app-shell">
       <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
+        key={activeConversation.id}
         messages={activeConversation.messages}
         branchOrigin={branchOrigin}
         branchUnavailableReason={runSummary
@@ -1509,21 +1707,40 @@ export default function App() {
         onSelect={selectHistory}
         onArchive={archiveConversation}
         onRestore={restoreConversation}
+        onDeleteArchived={requestDeleteArchivedConversation}
+        onClearArchived={requestClearArchived}
       />
       <SettingsDrawer
         open={settingsOpen}
         settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
         connectionIssue={connectionIssue}
         bubbleEnabled={selectionBubbleEnabled}
+        storageUsage={localStorageUsage}
+        storageUsageIssue={localStorageUsageIssue}
         onSaveConnection={saveConnection}
         onTestConnection={testConnection}
         onImportWorkosCredentials={importWorkosLoginCredentials}
         onRemoveCredentials={removeCredentials}
         onBubbleEnabledChange={changeSelectionBubble}
         onClose={() => setSettingsOpen(false)}
-        onClearHistory={() => setClearDialogOpen(true)}
+        onClearHistory={() => setHistoryDeletion({ kind: 'all' })}
       />
-      <ConfirmDialog open={clearDialogOpen} onCancel={() => setClearDialogOpen(false)} onConfirm={clearHistory} />
+      <ConfirmDialog
+        open={historyDeletion !== null}
+        title={historyDeletion?.kind === 'conversation'
+          ? `删除“${historyDeletion.title}”？`
+          : historyDeletion?.kind === 'archived'
+            ? `清空 ${historyDeletion.count} 条已归档历史？`
+            : '清空本地历史？'}
+        description={historyDeletion?.kind === 'conversation'
+          ? '该会话及消息将从页脉本机永久删除，但 WorkOS 后台会话与已上传文件仍然保留。'
+          : historyDeletion?.kind === 'archived'
+            ? '所有已归档会话及消息将从页脉本机永久删除，但不会影响仍在使用的会话或 WorkOS 后台数据。'
+            : '插件中的会话、工作页和消息会被移除，但 WorkOS 后台会话与已上传文件仍然保留。'}
+        confirmLabel={historyDeletion?.kind === 'archived' ? '清空已归档' : historyDeletion?.kind === 'conversation' ? '删除本地记录' : '清空本地记录'}
+        onCancel={() => setHistoryDeletion(null)}
+        onConfirm={confirmHistoryDeletion}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 export interface WorkosSseCallbacks {
   onText: (text: string) => void;
   onActivity?: (activity: WorkosToolActivity) => void;
+  onArtifact?: (artifact: WorkosArtifact) => void;
   onComplete?: () => void;
   onError?: (message: string) => void;
 }
@@ -21,6 +22,20 @@ export interface WorkosToolActivity {
   status: WorkosToolStatus;
   startedAt?: number;
   completedAt?: number;
+}
+
+export type WorkosArtifactKind = 'image' | 'html' | 'markdown' | 'document' | 'archive' | 'file';
+
+/** Safe, allow-listed projection of a WorkOS output file. */
+export interface WorkosArtifact {
+  id: string;
+  kind: WorkosArtifactKind;
+  filename: string;
+  url?: string;
+  mime?: string;
+  size?: number;
+  thumbnailUrl?: string;
+  status: 'available' | 'failed';
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -88,6 +103,24 @@ function safeLabel(value: string | undefined) {
   return label.slice(0, 48);
 }
 
+function safeFilename(value: string | undefined) {
+  if (!value) return undefined;
+  let decoded = value;
+  // WorkOS may return a percent-encoded filename, while its material URL may
+  // contain the same basename encoded a second time. Decode at most twice so
+  // the UI gets a readable label without treating arbitrary output as data.
+  for (let depth = 0; depth < 2; depth += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return safeLabel(decoded);
+}
+
 function toolStatus(value: string | undefined, fallback: WorkosToolStatus): WorkosToolStatus {
   switch (value?.toLowerCase().replace(/_/g, '-')) {
     case 'pending':
@@ -117,6 +150,103 @@ function isToolPart(type: string) {
   return normalized === 'tool' || normalized === 'tool-call' || normalized === 'tool-invocation';
 }
 
+const ARTIFACT_PART_TYPES = new Set([
+  'artifact',
+  'attachment',
+  'document',
+  'file',
+  'image',
+  'media',
+  'output-file',
+  'resource',
+]);
+
+const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp']);
+const DOCUMENT_EXTENSIONS = new Set(['csv', 'doc', 'docx', 'pdf', 'ppt', 'pptx', 'xls', 'xlsm', 'xlsx']);
+const ARCHIVE_EXTENSIONS = new Set(['7z', 'gz', 'rar', 'tar', 'zip']);
+
+function safeRemoteUrl(value: string | undefined) {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fileExtension(filename: string) {
+  return filename.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '';
+}
+
+function filenameFromUrl(value: string | undefined) {
+  if (!value) return undefined;
+  const basename = new URL(value).pathname.split('/').pop();
+  if (!basename) return undefined;
+  return safeFilename(basename);
+}
+
+function artifactKind(partType: string, filename: string, mime?: string): WorkosArtifactKind {
+  const normalizedMime = mime?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  const extension = fileExtension(filename);
+  if (partType === 'image' || normalizedMime.startsWith('image/') || IMAGE_EXTENSIONS.has(extension)) return 'image';
+  if (normalizedMime === 'text/html' || extension === 'html' || extension === 'htm') return 'html';
+  if (normalizedMime === 'text/markdown' || normalizedMime === 'text/x-markdown'
+    || extension === 'md' || extension === 'markdown') return 'markdown';
+  if (ARCHIVE_EXTENSIONS.has(extension)) return 'archive';
+  if (DOCUMENT_EXTENSIONS.has(extension)
+    || normalizedMime.startsWith('application/pdf')
+    || normalizedMime.includes('officedocument')
+    || normalizedMime.includes('msword')
+    || normalizedMime.includes('ms-excel')
+    || normalizedMime.includes('ms-powerpoint')) return 'document';
+  return 'file';
+}
+
+function artifactRecords(value: UnknownRecord) {
+  const candidates: UnknownRecord[] = [value];
+  for (const key of ['artifact', 'attachment', 'document', 'file', 'image', 'media', 'resource']) {
+    if (isRecord(value[key])) candidates.push(value[key] as UnknownRecord);
+  }
+  for (const key of ['artifacts', 'attachments', 'documents', 'files', 'images', 'resources']) {
+    const collection = value[key];
+    if (Array.isArray(collection)) {
+      collection.forEach((item) => {
+        if (isRecord(item)) candidates.push(item);
+      });
+    }
+  }
+  return candidates;
+}
+
+function projectArtifact(record: UnknownRecord, fallbackType: string, fallbackId?: string): WorkosArtifact | undefined {
+  const url = safeRemoteUrl(firstString(record, [
+    'downloadUrl', 'downloadURL', 'fileReadUrl', 'fileUrl', 'imageUrl', 'ossUrl', 'previewUrl', 'src', 'url',
+  ]));
+  const thumbnailUrl = safeRemoteUrl(firstString(record, ['thumbnailUrl', 'thumbUrl', 'thumbnail', 'previewImageUrl']));
+  const filename = safeFilename(firstString(record, ['filename', 'fileName', 'name', 'title']))
+    ?? filenameFromUrl(url)
+    ?? (fallbackType === 'image' ? '生成图片' : '生成文件');
+  const mime = safeLabel(firstString(record, ['contentType', 'fileType', 'mime', 'mimeType']));
+  const id = firstString(record, ['artifactId', 'attachmentId', 'fileId', 'id', 'uuid'])
+    ?? fallbackId
+    ?? `${fallbackType}:${url ?? filename}`;
+  const rawStatus = firstString(record, ['status', 'state'])?.toLowerCase();
+  const status = rawStatus && ['error', 'failed', 'failure'].includes(rawStatus) ? 'failed' as const : 'available' as const;
+  if (!url && !thumbnailUrl && status !== 'failed') return undefined;
+  const size = firstNumber(record, ['contentLength', 'fileSize', 'size', 'sizeBytes']);
+  return {
+    id,
+    kind: artifactKind(fallbackType, filename, mime),
+    filename,
+    ...(url ? { url } : {}),
+    ...(mime ? { mime } : {}),
+    ...(size !== undefined && size >= 0 ? { size } : {}),
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
+    status,
+  };
+}
+
 function isSuccessfulTerminalStatus(status: string) {
   const normalized = status.toLowerCase().replace(/[\s_-]/g, '');
   return [
@@ -139,6 +269,7 @@ export class WorkosSseParser {
   private partTypes = new Map<string, string>();
   private pendingDeltas = new Map<string, string[]>();
   private toolActivities = new Map<string, WorkosToolActivity>();
+  private artifacts = new Map<string, WorkosArtifact>();
   private completed = false;
 
   constructor(
@@ -211,6 +342,13 @@ export class WorkosSseParser {
         this.pendingDeltas.delete(partId);
         return;
       }
+      if (ARTIFACT_PART_TYPES.has(normalizedPartType)) {
+        this.processArtifactRecords(part, normalizedPartType, partId);
+        this.pendingDeltas.delete(partId);
+        return;
+      }
+      // Some WorkOS versions attach output resources to the final text part.
+      this.processArtifactCollections(part, normalizedPartType, partId);
       if (normalizedPartType !== 'text') {
         this.pendingDeltas.delete(partId);
         return;
@@ -231,6 +369,12 @@ export class WorkosSseParser {
 
     if (eventType.toLowerCase().includes('tool')) {
       this.processToolEvent(eventType, properties);
+      return;
+    }
+
+    const normalizedEventType = eventType.toLowerCase();
+    if ([...ARTIFACT_PART_TYPES].some((type) => normalizedEventType.includes(type))) {
+      this.processArtifactRecords(properties, normalizedEventType);
       return;
     }
 
@@ -289,6 +433,51 @@ export class WorkosSseParser {
     const completedAt = normalizeTimestamp(time ? firstNumber(time, ['end', 'completedAt', 'endTime']) : undefined);
     const status = toolStatus(rawStatus, completedAt ? 'completed' : 'running');
     this.emitToolActivity({ id, title, status, startedAt, completedAt });
+
+    // WorkOS v2 delivers generated files inside a completed tool part rather
+    // than as a standalone file/artifact part. Only project the explicit,
+    // structured material allow-list; never inspect raw input/output strings.
+    const metadata = state && isRecord(state.metadata) ? state.metadata : undefined;
+    const material = metadata && isRecord(metadata.material) ? metadata.material : undefined;
+    if (material) {
+      const materialType = firstString(material, ['type']) ?? 'file';
+      this.processArtifactRecords(material, materialType, `${partId}:material`);
+    }
+  }
+
+  private processArtifactCollections(record: UnknownRecord, fallbackType: string, fallbackId?: string) {
+    const collectionKeys = ['artifacts', 'attachments', 'documents', 'files', 'images', 'resources'];
+    if (!collectionKeys.some((key) => Array.isArray(record[key]) || isRecord(record[key]))) return;
+    this.processArtifactRecords(record, fallbackType, fallbackId);
+  }
+
+  private processArtifactRecords(record: UnknownRecord, fallbackType: string, fallbackId?: string) {
+    const candidates = artifactRecords(record);
+    candidates.forEach((candidate, index) => {
+      const candidateFallbackId = index === 0 || candidates.length === 2 ? fallbackId : undefined;
+      const artifact = projectArtifact(candidate, fallbackType, candidateFallbackId);
+      if (!artifact) return;
+      const previous = this.artifacts.get(artifact.id);
+      const next: WorkosArtifact = {
+        ...previous,
+        ...artifact,
+        filename: artifact.filename || previous?.filename || '生成文件',
+        url: artifact.url ?? previous?.url,
+        thumbnailUrl: artifact.thumbnailUrl ?? previous?.thumbnailUrl,
+      };
+      const dedupeKey = next.url
+        ? [...this.artifacts.values()].find((item) => item.url === next.url)?.id
+        : undefined;
+      if (dedupeKey && dedupeKey !== next.id) {
+        const duplicate = this.artifacts.get(dedupeKey);
+        const merged = { ...duplicate, ...next, id: dedupeKey };
+        this.artifacts.set(dedupeKey, merged);
+        this.callbacks.onArtifact?.(merged);
+        return;
+      }
+      this.artifacts.set(next.id, next);
+      this.callbacks.onArtifact?.(next);
+    });
   }
 
   private processToolEvent(eventType: string, properties: UnknownRecord) {
