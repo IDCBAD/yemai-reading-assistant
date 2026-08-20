@@ -228,6 +228,43 @@ function cleanArtifact(artifact: AssistantArtifact): AssistantArtifact {
   };
 }
 
+function isDecisionAnswer(value: unknown) {
+  return typeof value === 'string'
+    || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+}
+
+function isDecisionField(value: unknown) {
+  if (!isRecord(value) || typeof value.label !== 'string' || typeof value.type !== 'string') return false;
+  if (value.type === 'text') return typeof value.defaultValue === 'string';
+  if (value.type === 'single-select') {
+    return typeof value.defaultValue === 'string'
+      && Array.isArray(value.options)
+      && value.options.every((option) => typeof option === 'string');
+  }
+  if (value.type === 'multi-select') {
+    return Array.isArray(value.defaultValue)
+      && value.defaultValue.every((item) => typeof item === 'string')
+      && Array.isArray(value.options)
+      && value.options.every((option) => typeof option === 'string');
+  }
+  return false;
+}
+
+function isDecision(value: unknown) {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.sessionId === 'string'
+    && typeof value.title === 'string'
+    && Array.isArray(value.fields)
+    && value.fields.every(isDecisionField)
+    && ['pending', 'submitting', 'submitted', 'replied', 'rejected', 'failed'].includes(value.status as string)
+    && (value.submittedAction === undefined || value.submittedAction === 'reply' || value.submittedAction === 'reject')
+    && (value.toolMessageId === undefined || typeof value.toolMessageId === 'string')
+    && (value.toolCallId === undefined || typeof value.toolCallId === 'string')
+    && (value.errorMessage === undefined || typeof value.errorMessage === 'string')
+    && (value.answers === undefined || (isRecord(value.answers) && Object.values(value.answers).every(isDecisionAnswer)));
+}
+
 function isMessage(value: unknown): value is ChatMessage {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -243,6 +280,8 @@ function isMessage(value: unknown): value is ChatMessage {
     && (value.pageContextIssue === undefined || typeof value.pageContextIssue === 'string')
     && (value.activities === undefined || (Array.isArray(value.activities) && value.activities.every(isActivity)))
     && (value.artifacts === undefined || (Array.isArray(value.artifacts) && value.artifacts.every(isArtifact)))
+    && (value.interactions === undefined || (Array.isArray(value.interactions) && value.interactions.every(isDecision)))
+    && (value.decision === undefined || isDecision(value.decision))
     && (value.contextItems === undefined || (Array.isArray(value.contextItems) && value.contextItems.every(isContextItem)))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isQuote)))
     && (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment)));
@@ -337,10 +376,13 @@ function stopInterruptedActivity(activity: RunActivity, recoveredAt: number): Ru
 }
 
 function recoverMessage(message: ChatMessage, recoveredAt: number): ChatMessage {
+  const { decision: legacyDecision, ...current } = message;
+  const interactions = message.interactions ?? (legacyDecision ? [legacyDecision] : undefined);
   const activities = message.activities?.map((activity) => stopInterruptedActivity(activity, recoveredAt));
-  if (message.status !== 'streaming') return { ...message, activities };
+  if (message.status !== 'streaming') return { ...current, interactions, activities };
   return {
-    ...message,
+    ...current,
+    interactions,
     status: 'stopped',
     stage: undefined,
     errorMessage: undefined,
@@ -473,13 +515,17 @@ export function createWorkspaceSnapshot(workspace: WorkspaceState, savedAt = Dat
     ...conversation,
     page: cleanPageContext(conversation.page),
     pages: conversation.pages.map(cleanPageContext),
-    messages: conversation.messages.map((message) => ({
-      ...message,
-      artifacts: message.artifacts?.map(cleanArtifact),
-      pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
-      attachments: message.attachments?.map(cleanAttachment),
-      contextItems: message.contextItems?.map(cleanContextItem),
-    })),
+    messages: conversation.messages.map((message) => {
+      const { decision: legacyDecision, ...current } = message;
+      return {
+        ...current,
+        interactions: message.interactions ?? (legacyDecision ? [legacyDecision] : undefined),
+        artifacts: message.artifacts?.map(cleanArtifact),
+        pageContext: message.pageContext ? cleanPageContext(message.pageContext) : undefined,
+        attachments: message.attachments?.map(cleanAttachment),
+        contextItems: message.contextItems?.map(cleanContextItem),
+      };
+    }),
     draftContextItems: conversation.draftContextItems.map(cleanContextItem),
   }));
   return {

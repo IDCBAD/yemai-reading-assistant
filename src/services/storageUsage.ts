@@ -2,8 +2,11 @@ export const DEFAULT_LOCAL_STORAGE_QUOTA_BYTES = 10 * 1024 * 1024;
 
 export interface LocalStorageUsage {
   historyBytes: number;
+  settingsBytes: number;
+  legacyBackupBytes: number;
   totalBytes: number;
   quotaBytes: number;
+  quotaEstimated: boolean;
 }
 
 export function storageUsagePercent(usage: LocalStorageUsage) {

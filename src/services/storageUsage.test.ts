@@ -10,14 +10,31 @@ describe('local storage usage presentation', () => {
   it('calculates progress against the 10 MiB Chrome quota', () => {
     expect(storageUsagePercent({
       historyBytes: 512 * 1024,
+      settingsBytes: 512 * 1024,
+      legacyBackupBytes: 0,
       totalBytes: 1024 * 1024,
       quotaBytes: DEFAULT_LOCAL_STORAGE_QUOTA_BYTES,
+      quotaEstimated: false,
     })).toBe(10);
   });
 
   it('clamps invalid and over-quota values', () => {
-    expect(storageUsagePercent({ historyBytes: 0, totalBytes: -1, quotaBytes: 0 })).toBe(0);
-    expect(storageUsagePercent({ historyBytes: 0, totalBytes: 20, quotaBytes: 10 })).toBe(100);
+    expect(storageUsagePercent({
+      historyBytes: 0,
+      settingsBytes: 0,
+      legacyBackupBytes: 0,
+      totalBytes: -1,
+      quotaBytes: 0,
+      quotaEstimated: false,
+    })).toBe(0);
+    expect(storageUsagePercent({
+      historyBytes: 0,
+      settingsBytes: 20,
+      legacyBackupBytes: 0,
+      totalBytes: 20,
+      quotaBytes: 10,
+      quotaEstimated: true,
+    })).toBe(100);
   });
 
   it('formats byte and percentage labels without false precision', () => {

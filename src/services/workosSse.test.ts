@@ -70,6 +70,35 @@ describe('WorkosSseParser', () => {
     expect(onText).toHaveBeenLastCalledWith('你好！');
   });
 
+  it('keeps assistant message segments separate and exposes only the latest non-tool-call answer', () => {
+    const onText = vi.fn();
+    const parser = new WorkosSseParser({ onText });
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: { part: { id: 'text-1', messageID: 'message-1', type: 'text', text: '先填写下面的表单。' } },
+    }));
+    expect(onText).toHaveBeenLastCalledWith('先填写下面的表单。');
+
+    parser.push(nestedEvent({
+      type: 'message.updated',
+      properties: { info: { id: 'message-1', role: 'assistant', finish: 'tool-calls' } },
+    }));
+    expect(onText).toHaveBeenLastCalledWith('');
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: { part: { id: 'text-2', messageID: 'message-2', type: 'text', text: '这是表单之后的最终回答。' } },
+    }));
+    parser.push(nestedEvent({
+      type: 'message.updated',
+      properties: { info: { id: 'message-2', role: 'assistant', finish: 'stop' } },
+    }));
+
+    expect(onText).toHaveBeenLastCalledWith('这是表单之后的最终回答。');
+    expect(onText).not.toHaveBeenLastCalledWith('先填写下面的表单。这是表单之后的最终回答。');
+  });
+
   it('ignores stale events and only completes the expected v2 run', () => {
     const onText = vi.fn();
     const onComplete = vi.fn();
@@ -201,6 +230,30 @@ describe('WorkosSseParser', () => {
     expect(last).toMatchObject({ id: 'search-1', title: '联网搜索', status: 'completed' });
     expect(last.startedAt).toBe(first.startedAt);
     expect(JSON.stringify(onActivity.mock.calls)).not.toContain('private');
+  });
+
+  it('does not duplicate question interrupts as generic tool activities', () => {
+    const onActivity = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onActivity });
+
+    parser.push(nestedEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'question-part',
+          callID: 'question-call',
+          type: 'tool',
+          tool: 'question',
+          state: { status: 'completed' },
+        },
+      },
+    }));
+    parser.push(nestedEvent({
+      type: 'tool.execute.before',
+      properties: { callId: 'question-call-2', tool: 'question' },
+    }));
+
+    expect(onActivity).not.toHaveBeenCalled();
   });
 
   it('projects generated files and images into safe artifacts', () => {
@@ -392,5 +445,75 @@ describe('WorkosSseParser', () => {
       url,
       size: 4096,
     }));
+  });
+
+  it('projects A2UI interrupts without exposing unknown fields or raw tool input', () => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_request1',
+        sessionID: 'ses_session1',
+        type: 'a2ui',
+        payload: {
+          title: '选择偏好',
+          fields: [
+            { type: 'text', label: '补充说明', default: '默认内容', private: 'must-not-reach-ui' },
+            { type: 'single-select', label: '选择风格', default: '科技', options: [{ label: '科技' }, { label: '卡通' }] },
+            { type: 'multi-select', label: '选择平台', default: ['Windows'], options: [{ label: 'Windows' }, { label: 'Linux' }] },
+            { type: 'password', label: '未知字段', default: 'secret' },
+          ],
+        },
+        tool: { messageID: 'msg_1', callID: 'call_1', input: 'must-not-reach-ui' },
+      },
+    }));
+
+    expect(onInterrupt).toHaveBeenCalledWith({
+      id: 'int_request1',
+      sessionId: 'ses_session1',
+      title: '选择偏好',
+      fields: [
+        { type: 'text', label: '补充说明', defaultValue: '默认内容' },
+        { type: 'single-select', label: '选择风格', defaultValue: '科技', options: ['科技', '卡通'] },
+        { type: 'multi-select', label: '选择平台', defaultValue: ['Windows'], options: ['Windows', 'Linux'] },
+      ],
+      toolMessageId: 'msg_1',
+      toolCallId: 'call_1',
+    });
+    expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('must-not-reach-ui');
+    expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('未知字段');
+  });
+
+  it('emits replied and rejected interrupt resolutions with safe answer values', () => {
+    const onInterruptResolution = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterruptResolution });
+
+    parser.push(nestedEvent({
+      type: 'interrupt.replied',
+      properties: {
+        sessionID: 'ses_session1',
+        requestID: 'int_request1',
+        data: { 风格: '科技', 平台: ['Windows'], unsupported: { token: 'secret' } },
+      },
+    }));
+    parser.push(nestedEvent({
+      type: 'interrupt.rejected',
+      properties: { sessionID: 'ses_session1', requestID: 'int_request2' },
+    }));
+
+    expect(onInterruptResolution).toHaveBeenNthCalledWith(1, {
+      requestId: 'int_request1',
+      sessionId: 'ses_session1',
+      outcome: 'replied',
+      data: { 风格: '科技', 平台: ['Windows'] },
+    });
+    expect(onInterruptResolution).toHaveBeenNthCalledWith(2, {
+      requestId: 'int_request2',
+      sessionId: 'ses_session1',
+      outcome: 'rejected',
+    });
+    expect(JSON.stringify(onInterruptResolution.mock.calls)).not.toContain('secret');
   });
 });

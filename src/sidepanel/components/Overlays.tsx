@@ -610,14 +610,17 @@ export function SettingsDrawer({
             </div>
             {storageUsage ? (
               <div className="storage-usage-meta">
-                <span>历史 {formatStorageBytes(storageUsage.historyBytes)}</span>
-                <span>全部 {formatStorageBytes(storageUsage.totalBytes)} / {formatStorageBytes(storageUsage.quotaBytes)}</span>
+                <span>历史 {formatStorageBytes(storageUsage.historyBytes)} · 配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
+                <span>合计 {formatStorageBytes(storageUsage.totalBytes)} / {formatStorageBytes(storageUsage.quotaBytes)}</span>
               </div>
             ) : (
               <p>{storageUsageIssue ?? '正在读取 Chrome 本地存储用量…'}</p>
             )}
             {storageUsage && storageUsageIssue && <p role="status">{storageUsageIssue}</p>}
-            <p>进度按扩展全部本地数据计算，历史是其中的一部分。</p>
+            {storageUsage && storageUsage.legacyBackupBytes > 0 && (
+              <p>迁移备份 {formatStorageBytes(storageUsage.legacyBackupBytes)}，稳定观察期结束后清理。</p>
+            )}
+            <p>历史使用 IndexedDB，配置使用扩展本地存储；可用空间为浏览器估算值。</p>
           </section>
 
           <section className="settings-section settings-section--danger">

@@ -26,11 +26,21 @@ import {
   createWorkosFileUploader,
   isWorkosFileUploadConfigured,
 } from '../services/workosFileUpload';
-import type { WorkosArtifact, WorkosToolActivity } from '../services/workosSse';
-import { hasWorkosRemoteTargetChanged, WorkosApiError } from '../services/workosTransport';
+import type {
+  WorkosA2uiInterrupt,
+  WorkosArtifact,
+  WorkosInterruptResolution,
+  WorkosToolActivity,
+} from '../services/workosSse';
+import {
+  hasWorkosRemoteTargetChanged,
+  WorkosApiError,
+  type WorkosInterruptAnswers,
+} from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import type { LocalStorageUsage } from '../services/storageUsage';
+import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
 import type {
@@ -49,6 +59,7 @@ import {
   waitForAbortable,
 } from './agentQueue';
 import { Composer } from './components/Composer';
+import { CommandPalette } from './components/CommandPalette';
 import { MessageList } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
@@ -69,6 +80,13 @@ import {
   updateAttachmentContextItem,
   updatePageContextSnapshot,
 } from './contextItems';
+import { openCommandPaletteResult } from './commandPalette';
+import {
+  messageDecisionInteractions,
+  normalizeAgentDecisionAnswers,
+  settleAgentInteraction,
+  upsertAgentInteraction,
+} from './agentDecision';
 import {
   attachmentAcceptForChannel,
   isFileUploadSupported,
@@ -84,6 +102,7 @@ import {
 import { shouldPreparePageReference } from './pageReference';
 import { PAGE_OVERVIEW_PROMPT } from './starterActions';
 import type {
+  AgentDecision,
   AssistantArtifact,
   ChatMessage,
   Conversation,
@@ -152,6 +171,23 @@ function createOpenTab(conversationId: string): OpenConversationTab {
   return { id: makeId('open-tab'), conversationId, openedAt: Date.now() };
 }
 
+function cloneAgentDecision(decision: AgentDecision): AgentDecision {
+  return {
+    ...decision,
+    fields: decision.fields.map((field) => {
+      if (field.type === 'text') return { ...field };
+      if (field.type === 'single-select') return { ...field, options: [...field.options] };
+      return { ...field, options: [...field.options], defaultValue: [...field.defaultValue] };
+    }),
+    answers: decision.answers
+      ? Object.fromEntries(Object.entries(decision.answers).map(([key, value]) => [
+          key,
+          Array.isArray(value) ? [...value] : value,
+        ]))
+      : undefined,
+  };
+}
+
 function cloneMessagesForBranch(messages: ChatMessage[]) {
   return messages.map((message) => ({
     ...message,
@@ -161,6 +197,8 @@ function cloneMessagesForBranch(messages: ChatMessage[]) {
     attachments: message.attachments?.map((attachment) => ({ ...attachment, id: makeId('attachment') })),
     contextItems: message.contextItems ? cloneContextItems(message.contextItems, makeId) : undefined,
     activities: message.activities?.map((activity) => ({ ...activity })),
+    interactions: messageDecisionInteractions(message).map(cloneAgentDecision),
+    decision: undefined,
   }));
 }
 
@@ -222,6 +260,15 @@ export default function App() {
   const [workosConnection, setWorkosConnection] = useState<WorkosConnectionSettings | null>(null);
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchWorkspace, setSearchWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
+  const [searchNavigationTarget, setSearchNavigationTarget] = useState<{
+    conversationId: string;
+    messageId: string;
+    query: string;
+    matchedTerms: string[];
+    requestId: number;
+  } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletionRequest | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
@@ -237,8 +284,10 @@ export default function App() {
   const hostBrowserWindowIdRef = useRef<number | undefined>(undefined);
   const activeBrowserTabIdRef = useRef<number | undefined>(undefined);
   const pageMetadataRequestRef = useRef(0);
+  const searchNavigationRequestRef = useRef(0);
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
+  const pendingDecisionRequestsRef = useRef(new Set<string>());
   const attachmentPreviewUrlsRef = useRef(new Set<string>());
   const attachmentFilesRef = useRef(new Map<string, File>());
   const attachmentUploadsRef = useRef(new Set<string>());
@@ -476,6 +525,48 @@ export default function App() {
     [updateConversation],
   );
 
+  const upsertMessageDecision = useCallback(
+    (conversationId: string, messageId: string, interrupt: WorkosA2uiInterrupt) => {
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          return {
+            ...message,
+            status: 'streaming',
+            stage: 'waiting-user-input',
+            respondedAt: message.respondedAt ?? Date.now(),
+            interactions: upsertAgentInteraction(messageDecisionInteractions(message), interrupt),
+            decision: undefined,
+          };
+        }),
+      }));
+    },
+    [updateConversation],
+  );
+
+  const settleMessageDecision = useCallback(
+    (conversationId: string, messageId: string, resolution: WorkosInterruptResolution) => {
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => {
+          if (message.id !== messageId) return message;
+          const interactions = messageDecisionInteractions(message);
+          if (!interactions.some((interaction) =>
+            interaction.id === resolution.requestId && interaction.sessionId === resolution.sessionId)) return message;
+          return {
+            ...message,
+            status: 'streaming',
+            stage: 'streaming',
+            interactions: settleAgentInteraction(interactions, resolution),
+            decision: undefined,
+          };
+        }),
+      }));
+    },
+    [updateConversation],
+  );
+
   const settleMessageActivities = useCallback(
     (conversationId: string, messageId: string, status: RunActivityStatus) => {
       updateConversation(conversationId, (conversation) => ({
@@ -693,15 +784,29 @@ export default function App() {
     };
   }, []);
 
+  const openCommandPalette = useCallback(() => {
+    setSearchWorkspace(workspaceRef.current);
+    setSearchOpen(true);
+    setHistoryOpen(false);
+    setSettingsOpen(false);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setHistoryOpen(false);
-      setSettingsOpen(false);
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
+        event.preventDefault();
+        openCommandPalette();
+        return;
+      }
+      if (event.key === 'Escape') {
+        setSearchOpen(false);
+        setHistoryOpen(false);
+        setSettingsOpen(false);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [openCommandPalette]);
 
   const startNewConversation = () => {
     if (!workspaceHydrated || workspace.openTabs.length >= MAX_OPEN_TABS) return;
@@ -734,6 +839,27 @@ export default function App() {
     ));
     setHistoryOpen(false);
   };
+
+  const selectSearchResult = useCallback((result: WorkspaceSearchResult, query: string) => {
+    const current = workspaceRef.current;
+    const next = openCommandPaletteResult(current, result, MAX_OPEN_TABS, createOpenTab);
+    if (next === current) return;
+    workspaceRef.current = next;
+    setWorkspace(next);
+    setSearchOpen(false);
+    if (result.messageId) {
+      searchNavigationRequestRef.current += 1;
+      setSearchNavigationTarget({
+        conversationId: result.conversationId,
+        messageId: result.messageId,
+        query,
+        matchedTerms: result.matchedTerms,
+        requestId: searchNavigationRequestRef.current,
+      });
+    } else {
+      setSearchNavigationTarget(null);
+    }
+  }, []);
 
   const archiveConversation = (conversationId: string) => {
     setWorkspace((current) => {
@@ -892,6 +1018,7 @@ export default function App() {
     });
     let receivedText = false;
     let receivedArtifact = false;
+    let receivedInterrupt = false;
     let terminalError: string | null = null;
     let branchContextConsumed = false;
     const preparation = await waitForAbortable(request.pageSnapshotPromise, signal);
@@ -1027,6 +1154,14 @@ export default function App() {
             consumeBranchContext();
             upsertMessageActivity(conversationId, messageId, activity);
           },
+          onInterrupt: (interrupt) => {
+            consumeBranchContext();
+            receivedInterrupt = true;
+            upsertMessageDecision(conversationId, messageId, interrupt);
+          },
+          onInterruptResolution: (resolution) => {
+            settleMessageDecision(conversationId, messageId, resolution);
+          },
           onError: (message) => {
             terminalError = message;
           },
@@ -1035,7 +1170,7 @@ export default function App() {
       );
       consumeBranchContext();
       if (terminalError) throw new WorkosApiError(terminalError);
-      if (!receivedText && !receivedArtifact) {
+      if (!receivedText && !receivedArtifact && !receivedInterrupt) {
         throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的内容。');
       }
       if (preparedPage && pageDecision.mode !== 'none' && messagePage) {
@@ -1133,6 +1268,99 @@ export default function App() {
     }
   };
   requestRunnerRef.current = runAgentRequest;
+
+  const resolveAgentDecision = useCallback(async (
+    conversationId: string,
+    messageId: string,
+    decisionId: string,
+    action: 'reply' | 'reject',
+    candidateAnswers: WorkosInterruptAnswers = {},
+  ) => {
+    const connection = workosConnection;
+    if (!connection || connection.transport !== 'internal-v2' || !isActiveWorkosConnectionConfigured(connection)) return;
+    const conversation = workspaceRef.current.conversations.find((item) => item.id === conversationId);
+    const message = conversation?.messages.find((item) => item.id === messageId);
+    const decision = messageDecisionInteractions(message ?? {}).find((interaction) => interaction.id === decisionId);
+    if (!conversation?.remoteUuid || !message || !decision) return;
+    if (message.status !== 'running' && message.status !== 'streaming') return;
+    if (decision.status !== 'pending' && decision.status !== 'failed') return;
+    const pendingKey = `${conversationId}:${decision.id}`;
+    if (pendingDecisionRequestsRef.current.has(pendingKey)) return;
+    pendingDecisionRequestsRef.current.add(pendingKey);
+
+    const answers = normalizeAgentDecisionAnswers(decision.fields, candidateAnswers);
+    updateConversation(conversationId, (current) => ({
+      ...current,
+      messages: current.messages.map((item) => {
+        if (item.id !== messageId) return item;
+        const interactions = messageDecisionInteractions(item);
+        if (!interactions.some((interaction) => interaction.id === decision.id)) return item;
+        return {
+          ...item,
+          stage: 'waiting-user-input',
+          interactions: interactions.map((interaction) => interaction.id === decision.id
+            ? {
+                ...interaction,
+                status: 'submitting' as const,
+                submittedAction: action,
+                ...(action === 'reply' ? { answers } : {}),
+                errorMessage: undefined,
+              }
+            : interaction),
+          decision: undefined,
+        };
+      }),
+    }));
+
+    try {
+      const transport = createWorkosTransport(connection);
+      if (action === 'reply') {
+        if (!transport.replyInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
+        await transport.replyInterrupt(conversation.remoteUuid, decision.id, answers);
+      } else {
+        if (!transport.rejectInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
+        await transport.rejectInterrupt(conversation.remoteUuid, decision.id);
+      }
+      updateConversation(conversationId, (current) => ({
+        ...current,
+        messages: current.messages.map((item) => {
+          if (item.id !== messageId) return item;
+          const interactions = messageDecisionInteractions(item);
+          const target = interactions.find((interaction) => interaction.id === decision.id);
+          if (target?.status !== 'submitting') return item;
+          return {
+            ...item,
+            interactions: interactions.map((interaction) => interaction.id === decision.id
+              ? { ...interaction, status: 'submitted' as const }
+              : interaction),
+            decision: undefined,
+          };
+        }),
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '无法提交当前选择，请重试。';
+      updateConversation(conversationId, (current) => ({
+        ...current,
+        messages: current.messages.map((item) => {
+          if (item.id !== messageId) return item;
+          const interactions = messageDecisionInteractions(item);
+          if (!interactions.some((interaction) => interaction.id === decision.id)) return item;
+          return {
+            ...item,
+            stage: 'waiting-user-input',
+            interactions: interactions.map((interaction) => interaction.id === decision.id
+              ? { ...interaction, status: 'failed' as const, errorMessage }
+              : interaction),
+            decision: undefined,
+          };
+        }),
+      }));
+      setConnectionIssue(errorMessage);
+      if (error instanceof WorkosApiError && (error.status === 401 || error.status === 403)) setSettingsOpen(true);
+    } finally {
+      pendingDecisionRequestsRef.current.delete(pendingKey);
+    }
+  }, [updateConversation, workosConnection]);
 
   const sendMessage = () => {
     if (!workspaceHydrated || workosConnection === null) return;
@@ -1608,10 +1836,13 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar onOpenSearch={openCommandPalette} onOpenSettings={() => setSettingsOpen(true)} />
       <MessageList
         key={activeConversation.id}
         messages={activeConversation.messages}
+        navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
+          ? searchNavigationTarget
+          : undefined}
         branchOrigin={branchOrigin}
         branchUnavailableReason={runSummary
           ? '请等待当前回答结束后再创建分支'
@@ -1640,6 +1871,9 @@ export default function App() {
               ? conversation
               : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
           });
+        }}
+        onResolveDecision={(message, decisionId, action, answers) => {
+          void resolveAgentDecision(activeConversation.id, message.id, decisionId, action, answers);
         }}
       />
       <Composer
@@ -1709,6 +1943,13 @@ export default function App() {
         onRestore={restoreConversation}
         onDeleteArchived={requestDeleteArchivedConversation}
         onClearArchived={requestClearArchived}
+      />
+      <CommandPalette
+        open={searchOpen}
+        workspace={searchWorkspace}
+        maxTabs={MAX_OPEN_TABS}
+        onClose={() => setSearchOpen(false)}
+        onSelect={selectSearchResult}
       />
       <SettingsDrawer
         open={settingsOpen}

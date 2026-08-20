@@ -2,10 +2,11 @@ import { KoboyoIcon } from './KoboyoIcon';
 import { YemaiMark } from './YemaiMark';
 
 interface TopBarProps {
+  onOpenSearch: () => void;
   onOpenSettings: () => void;
 }
 
-export function TopBar({ onOpenSettings }: TopBarProps) {
+export function TopBar({ onOpenSearch, onOpenSettings }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="brand-lockup">
@@ -16,6 +17,15 @@ export function TopBar({ onOpenSettings }: TopBarProps) {
       </div>
 
       <div className="topbar-meta">
+        <button
+          className="icon-button pressable"
+          type="button"
+          onClick={onOpenSearch}
+          aria-label="搜索阅读历史"
+          title="搜索阅读历史（Ctrl/⌘ K）"
+        >
+          <KoboyoIcon name="search" size={18} />
+        </button>
         <button
           className="icon-button pressable"
           type="button"

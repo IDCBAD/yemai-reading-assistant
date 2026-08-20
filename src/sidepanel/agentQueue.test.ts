@@ -45,6 +45,16 @@ describe('agent queue state', () => {
     ])).toBe('m2');
   });
 
+  it('presents an A2UI interrupt as waiting for the user', () => {
+    expect(deriveAgentRunSummary([
+      assistant('m1', 'streaming', 'waiting-user-input'),
+    ])).toMatchObject({
+      stage: 'waiting-user-input',
+      label: '等待你的选择',
+      orbState: 'listening',
+    });
+  });
+
   it('isolates active summaries by conversation', () => {
     const conversations = [
       { id: 'c1', messages: [assistant('m1', 'streaming', 'streaming')] },

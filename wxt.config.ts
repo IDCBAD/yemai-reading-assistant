@@ -6,7 +6,7 @@ export default defineConfig({
     name: '页脉 · AI 阅读助手',
     short_name: '页脉',
     description: '读过的，终会连起来。时间让零散的阅读，慢慢显出形状。',
-    version: '0.2.0',
+    version: '0.3.0',
     minimum_chrome_version: '116',
     permissions: ['sidePanel', 'storage', 'favicon'],
     host_permissions: [
