@@ -1,4 +1,5 @@
 import type { PageManifest, YemaiAccessHint, YemaiPageType } from '../shared/yemaiContext';
+import type { WorkosA2uiField, WorkosA2uiInterrupt } from '../services/workosSse';
 import type { WorkosTransportKind } from '../services/workosTransport';
 
 export type PageStatus = 'not-read' | 'reading' | 'ready' | 'read' | 'changed';
@@ -133,7 +134,7 @@ export type ContextItem =
   | LinkContextItem;
 
 export type MessageStatus = 'queued' | 'running' | 'streaming' | 'complete' | 'stopped' | 'failed';
-export type MessageStage = 'queued' | 'reading-page' | 'creating-conversation' | 'waiting-first-token' | 'streaming';
+export type MessageStage = 'queued' | 'reading-page' | 'creating-conversation' | 'waiting-first-token' | 'waiting-user-input' | 'streaming';
 export type MessagePresentation = 'page-overview';
 export type AgentOrbState = 'searching' | 'listening' | 'working' | 'composing' | 'shaping';
 export type RunActivityStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
@@ -156,6 +157,17 @@ export interface RunActivity {
   completedAt?: number;
 }
 
+export type AgentDecisionStatus = 'pending' | 'submitting' | 'submitted' | 'replied' | 'rejected' | 'failed';
+
+export interface AgentDecision extends WorkosA2uiInterrupt {
+  status: AgentDecisionStatus;
+  submittedAction?: 'reply' | 'reject';
+  answers?: Record<string, string | string[]>;
+  errorMessage?: string;
+}
+
+export type AgentDecisionField = WorkosA2uiField;
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -168,6 +180,9 @@ export interface ChatMessage {
   errorMessage?: string;
   activities?: RunActivity[];
   artifacts?: AssistantArtifact[];
+  interactions?: AgentDecision[];
+  /** @deprecated Migrated to interactions when locally stored conversations are restored. */
+  decision?: AgentDecision;
   contextItems?: ContextItem[];
   /** Legacy fields retained only for locally stored messages created before context-item snapshots. */
   references?: QuoteReference[];

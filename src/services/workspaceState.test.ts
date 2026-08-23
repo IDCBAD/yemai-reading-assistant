@@ -34,6 +34,13 @@ function conversation(): Conversation {
         size: 2048,
         status: 'available',
       }],
+      decision: {
+        id: 'int_request1',
+        sessionId: 'ses_session1',
+        title: '选择偏好',
+        fields: [{ type: 'multi-select', label: '选择平台', defaultValue: ['Windows'], options: ['Windows', 'Linux'] }],
+        status: 'pending',
+      },
     }],
     draftInput: '尚未发送的草稿',
     draftContextItems: [
@@ -89,6 +96,14 @@ describe('workspace state v6', () => {
       size: 2048,
       status: 'available',
     });
+    expect(restored?.conversations[0]?.messages[0]?.interactions?.[0]).toEqual({
+      id: 'int_request1',
+      sessionId: 'ses_session1',
+      title: '选择偏好',
+      fields: [{ type: 'multi-select', label: '选择平台', defaultValue: ['Windows'], options: ['Windows', 'Linux'] }],
+      status: 'pending',
+    });
+    expect(restored?.conversations[0]?.messages[0]?.decision).toBeUndefined();
   });
 
   it('marks interrupted streams and tools as stopped after reload', () => {
@@ -97,6 +112,22 @@ describe('workspace state v6', () => {
 
     expect(message).toMatchObject({ status: 'stopped', stage: undefined });
     expect(message?.activities?.[0]).toMatchObject({ status: 'stopped', completedAt: 500 });
+    expect(message?.interactions?.[0]?.status).toBe('pending');
+  });
+
+  it('migrates a legacy singleton decision into ordered interactions', () => {
+    const snapshot = createWorkspaceSnapshot(workspace()) as unknown as {
+      conversations: Array<{ messages: Array<Record<string, unknown>> }>;
+    };
+    const message = snapshot.conversations[0]!.messages[0]!;
+    const [legacyDecision] = message.interactions as unknown[];
+    delete message.interactions;
+    message.decision = legacyDecision;
+
+    const restored = normalizeWorkspaceSnapshot(snapshot, 500);
+
+    expect(restored?.conversations[0]?.messages[0]?.interactions).toEqual([legacyDecision]);
+    expect(restored?.conversations[0]?.messages[0]?.decision).toBeUndefined();
   });
 
   it('deduplicates conversations opened in multiple tabs and repairs the active tab', () => {

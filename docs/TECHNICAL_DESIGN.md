@@ -16,6 +16,8 @@
 - `@mozilla/readability`：普通文章正文抽取
 - `turndown`：语义 HTML 转 Markdown
 - `react-markdown` + `remark-gfm`：Agent 输出渲染
+- Dexie：IndexedDB 实体表、事务与增量持久化
+- MiniSearch：本地全文检索、字段权重和英文前缀/模糊匹配
 - Vitest：纯逻辑单元测试
 
 第一版不引入大型状态库和动效库。状态使用 React Reducer 与显式 Repository；动效以 CSS transition 为主。
@@ -203,27 +205,30 @@ interface SelectionQuote {
 
 ## 7. 本地存储
 
-### `chrome.storage.local`
+### IndexedDB
 
 保存：
 
-- Token
-- 当前打开 Tab ID
-- 已打开 Tab 与会话 ID 的绑定
 - 会话索引与消息
 - 页面元数据和哈希
-- 用户设置
 - 会话草稿与结构化分支元数据
+- Agent 输出产物元数据
 
-不保存已发送页面的完整正文。第一版不申请 `unlimitedStorage`。设置页通过 `chrome.storage.local.getBytesInUse('workspaceState')` 读取历史占用，通过 `getBytesInUse(null)` 读取全部扩展本地占用，并以 `QUOTA_BYTES`（Chrome 当前为 10 MiB）作为进度基准。占用读取安排在工作区尾随保存之后，避免展示尚未落盘的旧数值。
+历史按 `conversations`、`messages`、`conversationSources` 和 `artifacts` 拆表。Repository 继续向 React 层提供 `WorkspaceState` 投影，并通过实体签名只写入发生变化的记录；流式消息更新不再重写完整历史。
+
+### `chrome.storage.local`
+
+保存 Token、用户设置、打开工作页与当前工作页等小型配置。历史迁移完成后，旧 `workspaceState` 暂时保留为恢复材料，但不再运行时双写。
+
+不保存已发送页面的完整正文，也不申请 `unlimitedStorage`。设置页分别估算 IndexedDB 历史体积、读取扩展配置占用，并使用 `navigator.storage.estimate()` 展示浏览器估算配额；该配额不是固定的 10 MiB 精确上限。
 
 `archivedAt` 仅表示本地历史分类。归档和恢复不会调用 WorkOS API；工作区恢复时若发现归档会话仍被某个 `OpenConversationTab` 引用，会自动取消归档以维持状态不变量。
 
 永久删除只接受带 `archivedAt` 且未被工作页引用的会话。单条删除不级联删除分支；批量清空也保留任何异常情况下仍被工作页引用的记录。释放附件预览和上传状态前需要排除仍被保留会话共享的附件 ID 与 `blob:` URL。所有永久删除都只更新本地工作区，不调用远端会话或文件删除接口。
 
-本地工作区使用带版本号的 `workspaceState` 快照，包含会话字典、已打开 Tab、消息、草稿、`conversationUuid`、当前 Tab ID、分支元数据和待发送的分支上下文。启动时先校验快照结构，再恢复 React 状态；损坏或未知版本的快照不会直接进入 UI。
+旧本地工作区使用带版本号的 `workspaceState` 快照。首次打开 v0.3a 时先使用已有 v1～v6 normalizer 校验和升级，再通过一次性事务迁入 IndexedDB。数据库回读校验成功后才写工作页状态；损坏、未知版本或回读失败的数据不会直接进入 UI。
 
-流式文本会频繁更新，不能在每个 delta 上写入 Storage。Side Panel 使用 350ms 尾随保存，并在 `visibilitychange: hidden`、`pagehide` 和组件卸载时立即补写最新内存快照。恢复快照时，所有遗留的 `streaming / running / pending` 状态统一收口为 `stopped`，因为已经断开的 SSE 无法可靠续接。
+流式文本会频繁更新。Side Panel 继续使用 350ms 尾随保存，并在 `visibilitychange: hidden`、`pagehide` 和组件卸载时补写最新内存状态；保存队列会合并等待期间的更新，Repository 只写变化的消息实体。恢复时，所有遗留的 `streaming / running / pending` 状态统一收口为 `stopped`，因为已经断开的 SSE 无法可靠续接。
 
 启动时必须执行：
 
@@ -452,9 +457,9 @@ content_scripts.matches:
 - Chrome 受限页面无法注入内容脚本。
 - 动态站点正文抽取只能渐进增强，不保证通用完美。
 
-## 14. 旧模型迁移（已实现）
+## 14. 旧模型与 IndexedDB 迁移（已实现）
 
-`workspaceState` 已从 v1 升级到 v2。加载时先识别版本：v2 直接校验和恢复，v1 进入显式迁移，损坏或未知版本不会进入 UI。迁移只写入新的 v2 快照，不把旧结构强行断言为新类型。
+`workspaceState` 当前版本为 v6，加载时继续显式识别并升级 v1～v6，损坏或未知版本不会进入 UI。规范化后的数据再迁入 IndexedDB，不把旧结构强行断言为新类型。完整事务、恢复标记和发布回滚策略见 `docs/INDEXEDDB_MIGRATION.md`。
 
 迁移原则：
 
@@ -463,6 +468,37 @@ content_scripts.matches:
 3. 旧会话所有页面元数据合并进新的 `pages` 集合。
 4. 活跃旧 Tab 的草稿迁入主会话；其他旧 Tab 的未发送草稿不得静默丢弃，应转换为独立本地草稿会话。
 5. 迁移后为当前会话建立一个 `OpenConversationTab`；历史中的其他会话保持关闭状态，需要时再加载。
-6. v2 再次加载不会重复迁移；单元测试覆盖 UUID、消息顺序、页面来源、活动草稿、非活动草稿、流式中断和重复分支后缀。
+6. 已完成的迁移不会重复导入；单元测试覆盖 UUID、消息顺序、页面来源、活动草稿、非活动草稿、流式中断和重复分支后缀。
 
-当前实现使用会话数组而非字典作为本地历史索引，以保持已有排序与渲染逻辑简单；`OpenConversationTab.conversationId` 仍是唯一绑定键，语义与上述目标模型一致。后续历史规模需要搜索或分页时，可在 Repository 层改为字典加顺序索引，不影响 UI 契约。
+React 投影仍使用会话数组以保持已有排序与渲染逻辑简单；底层 IndexedDB 已按实体拆表，`OpenConversationTab.conversationId` 仍是唯一绑定键。后续搜索和分页可以直接增加 Repository 查询，不影响 UI 契约。
+
+## 15. 全局搜索与消息定位（已实现）
+
+IndexedDB 是历史数据的唯一事实源；搜索索引是可丢弃的派生数据。用户打开命令面板时，Side Panel 从当时的 `WorkspaceState` 快照构建 MiniSearch 内存索引，面板关闭后不承担持久化一致性职责。这样可以避免流式回答每个 token 同时触发历史写入和搜索索引写入，也不需要为 v0.3a 已迁移的数据库增加第二轮 schema 迁移。
+
+一个会话生成一条标题文档，每条消息生成一条消息文档。字段权重依次为：会话标题、用户提问、Agent 回答、页面元数据、附件或产物文件名。消息文档只保存安全投影：可见正文、有限来源信息和文件名；内部推理、工具参数、完整工具输出、凭据和文件二进制不进入搜索文档。
+
+中文、日文、韩文及混合文本使用 `Intl.Segmenter` 做词级分段，因此“智能体可靠性”可以命中包含“智能体的可靠性”的正文，同时“达人类型”不会因相邻字符而误命中“人类”。拉丁文字支持前缀查询，只有长度足够的纯字母词才启用低比例模糊匹配；数字不做模糊匹配。日期、URL、文件名和带连接符的标识符属于结构化字面量，必须以完整形式出现在同一个索引字段中，不能从正文、页面和文件名跨字段拼接。查询使用 AND 组合，结果摘要从 MiniSearch 实际命中的字段和词项截取，而不是从任意包含单字的字段猜测。
+
+搜索结果选择链路为：
+
+```text
+CommandPalette result
+→ 若归档则清除 archivedAt
+→ 打开或激活唯一工作页
+→ MessageList 按 data-message-id 查找用户/Agent 消息
+→ 用 CSS Custom Highlight 标记正文命中词
+→ 立即滚动到消息内部首个命中词并显示定位反馈
+```
+
+恢复归档与打开工作页由一个纯函数完成。工作页达到上限时，函数返回原工作区，不会出现“已经恢复但没有打开”的半完成状态。命令面板使用 `dialog + listbox/option` 语义，支持 `Ctrl/⌘ + K`、上下方向键、Enter 和 Escape；键盘触发的高频交互不使用进出场动画。
+
+## 16. 阅读卡片（已实现）
+
+Dexie schema v2 新增 `readingCards` 实体表。卡片不进入 `WorkspaceState`，也不参与工作区增量对比；Side Panel 通过独立 Repository 加载、写入和删除卡片，避免一次收藏操作触发会话、消息、来源和产物表的同步。
+
+每张卡片使用 `reading-card:{conversationId}:{messageId}` 作为稳定主键，重复收藏同一回答只更新同一行。实体保存回答 Markdown 快照、展示标题、摘要、有限来源、Agent 产物元数据、来源会话/消息 ID 和时间戳；不保存凭据、内部推理、工具参数、原始事件或文件二进制。
+
+卡片与原消息是弱引用关系：删除卡片不修改原消息，删除或清空会话也不级联删除卡片。原会话存在时，返回链路复用工作页唯一绑定和消息定位能力；若会话已归档，恢复与打开在一个纯工作区变换中完成；工作页满额或原消息不存在时保持当前工作区不变。
+
+全局搜索构建内存索引时额外接收当前阅读卡片快照。卡片标题、正文、来源和产物文件名使用与会话搜索相同的分词和结构化字面量规则；当卡片与其来源消息同时命中时，结果层保留卡片并抑制重复消息。选择卡片结果直接打开卡片详情，不消耗工作页名额。

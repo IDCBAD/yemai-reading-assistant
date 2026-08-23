@@ -21,6 +21,8 @@ export interface ExecuteRequest {
   attachments?: Array<{ url: string; filename: string; mime?: string }>;
 }
 
+export type WorkosInterruptAnswers = Record<string, string | string[]>;
+
 export interface WorkosTransport {
   readonly kind: WorkosTransportKind;
   createConversation(signal?: AbortSignal): Promise<string>;
@@ -28,6 +30,17 @@ export interface WorkosTransport {
     conversationUuid: string,
     request: ExecuteRequest,
     callbacks: WorkosSseCallbacks,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  replyInterrupt?(
+    conversationUuid: string,
+    requestId: string,
+    answers: WorkosInterruptAnswers,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  rejectInterrupt?(
+    conversationUuid: string,
+    requestId: string,
     signal?: AbortSignal,
   ): Promise<void>;
 }

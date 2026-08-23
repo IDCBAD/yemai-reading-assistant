@@ -2,6 +2,8 @@ export interface WorkosSseCallbacks {
   onText: (text: string) => void;
   onActivity?: (activity: WorkosToolActivity) => void;
   onArtifact?: (artifact: WorkosArtifact) => void;
+  onInterrupt?: (interrupt: WorkosA2uiInterrupt) => void;
+  onInterruptResolution?: (resolution: WorkosInterruptResolution) => void;
   onComplete?: () => void;
   onError?: (message: string) => void;
 }
@@ -36,6 +38,42 @@ export interface WorkosArtifact {
   size?: number;
   thumbnailUrl?: string;
   status: 'available' | 'failed';
+}
+
+export type WorkosA2uiField =
+  | {
+      type: 'text';
+      label: string;
+      defaultValue: string;
+    }
+  | {
+      type: 'single-select';
+      label: string;
+      defaultValue: string;
+      options: string[];
+    }
+  | {
+      type: 'multi-select';
+      label: string;
+      defaultValue: string[];
+      options: string[];
+    };
+
+/** Safe, allow-listed projection of a WorkOS A2UI interrupt. */
+export interface WorkosA2uiInterrupt {
+  id: string;
+  sessionId: string;
+  title: string;
+  fields: WorkosA2uiField[];
+  toolMessageId?: string;
+  toolCallId?: string;
+}
+
+export interface WorkosInterruptResolution {
+  requestId: string;
+  sessionId: string;
+  outcome: 'replied' | 'rejected';
+  data?: Record<string, string | string[]>;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -101,6 +139,113 @@ function safeLabel(value: string | undefined) {
   const label = value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!label || label.startsWith('{') || label.startsWith('[')) return undefined;
   return label.slice(0, 48);
+}
+
+function safeText(value: unknown, maximumLength: number) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\u0000/g, '').slice(0, maximumLength);
+}
+
+function safeObjectKey(value: string | undefined) {
+  const key = safeLabel(value)?.slice(0, 180);
+  return key && !['__proto__', 'constructor', 'prototype'].includes(key) ? key : undefined;
+}
+
+function safeIdentifier(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+  const identifier = value.trim();
+  if (!identifier || identifier.length > 160 || !/^[A-Za-z0-9_-]+$/.test(identifier)) return undefined;
+  return identifier;
+}
+
+function projectA2uiOptions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const candidate of value.slice(0, 24)) {
+    const rawLabel = isRecord(candidate) ? candidate.label : candidate;
+    const label = safeLabel(typeof rawLabel === 'string' ? rawLabel : undefined)?.slice(0, 120);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    options.push(label);
+  }
+  return options;
+}
+
+function projectA2uiField(value: unknown): WorkosA2uiField | undefined {
+  if (!isRecord(value)) return undefined;
+  const type = firstString(value, ['type']);
+  const label = safeObjectKey(firstString(value, ['label']));
+  if (!type || !label) return undefined;
+  if (type === 'text') {
+    return { type, label, defaultValue: safeText(value.default, 4_000) };
+  }
+  if (type === 'single-select') {
+    const options = projectA2uiOptions(value.options);
+    if (!options.length) return undefined;
+    const fallback = safeText(value.default, 120);
+    return { type, label, options, defaultValue: options.includes(fallback) ? fallback : '' };
+  }
+  if (type === 'multi-select') {
+    const options = projectA2uiOptions(value.options);
+    if (!options.length) return undefined;
+    const rawDefaults = Array.isArray(value.default) ? value.default : [];
+    const defaultValue = rawDefaults
+      .filter((item): item is string => typeof item === 'string' && options.includes(item))
+      .slice(0, options.length);
+    return { type, label, options, defaultValue: [...new Set(defaultValue)] };
+  }
+  return undefined;
+}
+
+function projectA2uiInterrupt(properties: UnknownRecord): WorkosA2uiInterrupt | undefined {
+  if (firstString(properties, ['type']) !== 'a2ui') return undefined;
+  const id = safeIdentifier(properties.id);
+  const sessionId = safeIdentifier(properties.sessionID ?? properties.sessionId);
+  const payload = isRecord(properties.payload) ? properties.payload : undefined;
+  if (!id || !sessionId || !payload || !Array.isArray(payload.fields)) return undefined;
+  const seenLabels = new Set<string>();
+  const fields = payload.fields.slice(0, 12).flatMap((value) => {
+    const field = projectA2uiField(value);
+    if (!field || seenLabels.has(field.label)) return [];
+    seenLabels.add(field.label);
+    return [field];
+  });
+  if (!fields.length) return undefined;
+  const tool = isRecord(properties.tool) ? properties.tool : undefined;
+  return {
+    id,
+    sessionId,
+    title: safeLabel(firstString(payload, ['title']))?.slice(0, 120) ?? '需要你的选择',
+    fields,
+    ...(tool && safeIdentifier(tool.messageID ?? tool.messageId)
+      ? { toolMessageId: safeIdentifier(tool.messageID ?? tool.messageId) }
+      : {}),
+    ...(tool && safeIdentifier(tool.callID ?? tool.callId)
+      ? { toolCallId: safeIdentifier(tool.callID ?? tool.callId) }
+      : {}),
+  };
+}
+
+function projectInterruptReplyData(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const data: Record<string, string | string[]> = {};
+  for (const [rawKey, rawValue] of Object.entries(value).slice(0, 12)) {
+    const key = safeObjectKey(rawKey);
+    if (!key) continue;
+    if (typeof rawValue === 'string') {
+      data[key] = safeText(rawValue, 4_000);
+      continue;
+    }
+    if (Array.isArray(rawValue)) {
+      data[key] = rawValue
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => safeText(item, 120))
+        .filter(Boolean)
+        .slice(0, 24);
+    }
+  }
+  return data;
 }
 
 function safeFilename(value: string | undefined) {
@@ -266,6 +411,10 @@ export class WorkosSseParser {
   private buffer = '';
   private textParts = new Map<string, string>();
   private partOrder: string[] = [];
+  private partMessageIds = new Map<string, string>();
+  private messagePartOrder = new Map<string, string[]>();
+  private messageOrder: string[] = [];
+  private messageFinishes = new Map<string, string>();
   private partTypes = new Map<string, string>();
   private pendingDeltas = new Map<string, string[]>();
   private toolActivities = new Map<string, WorkosToolActivity>();
@@ -330,6 +479,44 @@ export class WorkosSseParser {
         : event;
     const eventType = firstString(event, ['type', 'event', 'name']) ?? eventName ?? '';
 
+    if (eventType === 'interrupt') {
+      const interrupt = projectA2uiInterrupt(properties);
+      if (interrupt) this.callbacks.onInterrupt?.(interrupt);
+      return;
+    }
+
+    if (eventType === 'interrupt.replied' || eventType === 'interrupt.rejected') {
+      const requestId = safeIdentifier(properties.requestID ?? properties.requestId);
+      const sessionId = safeIdentifier(properties.sessionID ?? properties.sessionId);
+      if (!requestId || !sessionId) return;
+      const outcome = eventType === 'interrupt.replied' ? 'replied' : 'rejected';
+      this.callbacks.onInterruptResolution?.({
+        requestId,
+        sessionId,
+        outcome,
+        ...(outcome === 'replied' ? { data: projectInterruptReplyData(properties.data) ?? {} } : {}),
+      });
+      return;
+    }
+
+    if (eventType === 'message.updated') {
+      const info = isRecord(properties.info)
+        ? properties.info
+        : isRecord(properties.message)
+          ? properties.message
+          : properties;
+      const messageId = firstString(info, ['id', 'messageID', 'messageId'])
+        ?? firstString(properties, ['messageID', 'messageId']);
+      const finish = firstString(info, ['finish', 'finishReason', 'status'])
+        ?? firstString(properties, ['finish', 'finishReason']);
+      if (messageId) {
+        this.rememberMessage(messageId);
+        if (finish) this.messageFinishes.set(messageId, finish.toLowerCase());
+        this.emitText();
+      }
+      return;
+    }
+
     if (eventType === 'message.part.updated') {
       const part = isRecord(properties.part) ? properties.part : properties;
       const partId = firstString(part, ['id', 'partID', 'partId']);
@@ -354,6 +541,12 @@ export class WorkosSseParser {
         return;
       }
       if (!this.partOrder.includes(partId)) this.partOrder.push(partId);
+      this.rememberTextPart(
+        partId,
+        firstString(part, ['messageID', 'messageId'])
+          ?? firstString(properties, ['messageID', 'messageId'])
+          ?? '__legacy__',
+      );
       const snapshot = firstString(part, ['text', 'content']);
       if (snapshot !== undefined) this.textParts.set(partId, snapshot);
       const pending = this.pendingDeltas.get(partId);
@@ -383,6 +576,10 @@ export class WorkosSseParser {
       const delta = firstString(properties, ['delta', 'text', 'content']);
       const field = firstString(properties, ['field']);
       if (!partId || delta === undefined || (field && field !== 'text')) return;
+      const messageId = firstString(properties, ['messageID', 'messageId'])
+        ?? this.partMessageIds.get(partId)
+        ?? '__legacy__';
+      this.rememberTextPart(partId, messageId);
       const partType = this.partTypes.get(partId);
       if (partType === 'text') {
         this.textParts.set(partId, `${this.textParts.get(partId) ?? ''}${delta}`);
@@ -413,8 +610,27 @@ export class WorkosSseParser {
   }
 
   private emitText() {
-    const text = this.partOrder.map((partId) => this.textParts.get(partId) ?? '').join('');
+    const visibleMessageId = [...this.messageOrder].reverse().find((messageId) => {
+      const finish = this.messageFinishes.get(messageId)?.replace(/[\s_]/g, '-');
+      return finish !== 'tool-calls' && (this.messagePartOrder.get(messageId)?.length ?? 0) > 0;
+    });
+    const text = visibleMessageId
+      ? (this.messagePartOrder.get(visibleMessageId) ?? [])
+          .map((partId) => this.textParts.get(partId) ?? '')
+          .join('')
+      : '';
     this.callbacks.onText(text);
+  }
+
+  private rememberMessage(messageId: string) {
+    if (!this.messageOrder.includes(messageId)) this.messageOrder.push(messageId);
+  }
+
+  private rememberTextPart(partId: string, messageId: string) {
+    this.partMessageIds.set(partId, messageId);
+    this.rememberMessage(messageId);
+    const order = this.messagePartOrder.get(messageId) ?? [];
+    if (!order.includes(partId)) this.messagePartOrder.set(messageId, [...order, partId]);
   }
 
   private processToolPart(partId: string, part: UnknownRecord) {
@@ -432,7 +648,9 @@ export class WorkosSseParser {
     const startedAt = normalizeTimestamp(time ? firstNumber(time, ['start', 'startedAt', 'startTime']) : undefined);
     const completedAt = normalizeTimestamp(time ? firstNumber(time, ['end', 'completedAt', 'endTime']) : undefined);
     const status = toolStatus(rawStatus, completedAt ? 'completed' : 'running');
-    this.emitToolActivity({ id, title, status, startedAt, completedAt });
+    if (!this.isQuestionTool(part, state)) {
+      this.emitToolActivity({ id, title, status, startedAt, completedAt });
+    }
 
     // WorkOS v2 delivers generated files inside a completed tool part rather
     // than as a standalone file/artifact part. Only project the explicit,
@@ -482,6 +700,7 @@ export class WorkosSseParser {
 
   private processToolEvent(eventType: string, properties: UnknownRecord) {
     const tool = isRecord(properties.tool) ? properties.tool : undefined;
+    if (this.isQuestionTool(properties, tool)) return;
     const id = firstString(properties, ['callID', 'callId', 'toolCallId', 'id'])
       ?? (tool ? firstString(tool, ['callID', 'callId', 'id']) : undefined)
       ?? `tool:${this.readToolTitle(properties, tool)}`;
@@ -510,6 +729,14 @@ export class WorkosSseParser {
     const toolName = firstString(primary, ['tool'])
       ?? (secondary ? firstString(secondary, ['tool']) : undefined);
     return safeLabel(explicitTitle ?? toolName) ?? '运行工具';
+  }
+
+  private isQuestionTool(primary: UnknownRecord, secondary?: UnknownRecord) {
+    const toolName = firstString(primary, ['tool'])
+      ?? (secondary ? firstString(secondary, ['tool']) : undefined)
+      ?? firstString(primary, ['name'])
+      ?? (secondary ? firstString(secondary, ['name']) : undefined);
+    return toolName?.trim().toLowerCase() === 'question';
   }
 
   private emitToolActivity(update: WorkosToolActivity) {

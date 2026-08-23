@@ -94,7 +94,8 @@ export function Composer({
   const hasUploadingAttachments = contextItems.some(
     (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
   );
-  const canSend = hasContent && !hasUploadingAttachments;
+  const waitingForDecision = runSummary?.stage === 'waiting-user-input';
+  const canSend = hasContent && !hasUploadingAttachments && !waitingForDecision;
   const isDraggingFiles = dragDepth > 0;
   const composerState = [
     runSummary ? 'is-running' : 'is-idle',
@@ -339,9 +340,11 @@ export function Composer({
                 if (canSend) onSend();
               }
             }}
-            placeholder={selections.length > 0
-              ? `针对已引用的 ${selections.length} 段内容提问…`
-              : '继续追问，或粘贴图片提问…'}
+            placeholder={waitingForDecision
+              ? '请先完成上方选择…'
+              : selections.length > 0
+                ? `针对已引用的 ${selections.length} 段内容提问…`
+                : '继续追问，或粘贴图片提问…'}
             rows={2}
             aria-label="输入问题"
             aria-describedby="composer-paste-hint composer-paste-status"
@@ -405,8 +408,8 @@ export function Composer({
                 type="button"
                 onClick={onSend}
                 disabled={!canSend}
-                aria-label={hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
-                tooltip={hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? '发送消息' : '输入内容后发送'}
+                aria-label={waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
+                tooltip={waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? '发送消息' : '输入内容后发送'}
               >
                 <KoboyoIcon name="send" size={17} />
               </IconTooltipButton>

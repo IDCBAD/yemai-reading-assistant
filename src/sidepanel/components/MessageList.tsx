@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,9 +7,16 @@ import { contextAttachments, contextItemsFromMessage, contextPage, contextSelect
 import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { isNearMessageBottom, messageDistanceFromBottom } from '../messageScroll';
+import { findSearchTextMatches } from '../../search/searchTextMatches';
+import {
+  MIN_CONVERSATION_RAIL_TURNS,
+  activeConversationTurnId,
+  compactConversationTurnLabel,
+} from '../conversationRail';
 import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
 import { STARTER_ACTIONS } from '../starterActions';
 import { parsePageOverview } from '../pageOverview';
+import { messageDecisionInteractions } from '../agentDecision';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
@@ -18,10 +25,20 @@ import { PageOverviewCard } from './PageOverviewCard';
 import { YemaiMark } from './YemaiMark';
 import { AnswerContextTrace } from './AnswerContextTrace';
 import { AssistantArtifacts } from './AssistantArtifacts';
+import { ConversationPreviewRail, type ConversationPreviewRailItem } from './ConversationPreviewRail';
 import { MermaidDiagram } from './MermaidDiagram';
+import { AgentDecisionCard, AgentDecisionReceipt } from './AgentDecisionCard';
+import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 
 interface MessageListProps {
   messages: ChatMessage[];
+  savedMessageIds: ReadonlySet<string>;
+  navigationTarget?: {
+    messageId: string;
+    query: string;
+    matchedTerms: string[];
+    requestId: number;
+  };
   branchOrigin?: {
     title: string;
     timestamp?: number;
@@ -33,8 +50,24 @@ interface MessageListProps {
   onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
+  onToggleReadingCard: (
+    message: ChatMessage,
+    contextSources: AnswerContextSource[],
+    origin?: ReadingCardFeedbackOrigin,
+  ) => void;
   onOpenBranchOrigin: () => void;
   onAddAssistantQuote: (quote: QuoteReference) => void;
+  onResolveDecision: (
+    message: ChatMessage,
+    decisionId: string,
+    action: 'reply' | 'reject',
+    answers?: WorkosInterruptAnswers,
+  ) => void;
+}
+
+export interface ReadingCardFeedbackOrigin {
+  x: number;
+  y: number;
 }
 
 const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
@@ -120,13 +153,15 @@ function ActivityStatusIcon({ status }: { status: RunActivityStatus }) {
 
 function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
   const [expanded, setExpanded] = useState(false);
-  const activeCount = activities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
-  const failedCount = activities.filter((activity) => activity.status === 'failed').length;
+  const visibleActivities = activities.filter((activity) => activity.title.trim().toLowerCase() !== 'question');
+  if (visibleActivities.length === 0) return null;
+  const activeCount = visibleActivities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
+  const failedCount = visibleActivities.filter((activity) => activity.status === 'failed').length;
   const summary = activeCount > 0
-    ? `正在运行 ${activities.length} 个工具`
+    ? `正在运行 ${visibleActivities.length} 个工具`
     : failedCount > 0
-      ? `${activities.length} 个工具中有 ${failedCount} 个失败`
-      : `运行了 ${activities.length} 个工具`;
+      ? `${visibleActivities.length} 个工具中有 ${failedCount} 个失败`
+      : `运行了 ${visibleActivities.length} 个工具`;
 
   return (
     <section className="run-activity" aria-label="Agent 运行过程">
@@ -142,7 +177,7 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
       </button>
       {expanded && (
         <div className="run-activity-list">
-          {activities.map((activity) => {
+          {visibleActivities.map((activity) => {
             const duration = formatDuration(activity);
             return (
               <div className={`run-activity-item is-${activity.status}`} key={activity.id}>
@@ -183,6 +218,9 @@ function AssistantMessage({
   onUseFollowUp,
   onRetry,
   onBranch,
+  saved,
+  onToggleReadingCard,
+  onResolveDecision,
   branchUnavailableReason,
 }: {
   message: ChatMessage;
@@ -190,9 +228,18 @@ function AssistantMessage({
   onUseFollowUp: (question: string) => void;
   onRetry: () => void;
   onBranch: () => void;
+  saved: boolean;
+  onToggleReadingCard: (origin?: ReadingCardFeedbackOrigin) => void;
+  onResolveDecision: (
+    decisionId: string,
+    action: 'reply' | 'reject',
+    answers?: WorkosInterruptAnswers,
+  ) => void;
   branchUnavailableReason?: string;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [bookmarkConfirmed, setBookmarkConfirmed] = useState(false);
+  const bookmarkConfirmationTimerRef = useRef<number | null>(null);
   const runNote = getRunNote(message);
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
@@ -212,11 +259,42 @@ function AssistantMessage({
     }
   };
   const hasArtifacts = Boolean(message.artifacts?.length);
+  const interactions = messageDecisionInteractions(message);
+  const resolvedInteractions = interactions.filter((interaction) =>
+    interaction.status === 'replied' || interaction.status === 'rejected');
+  const activeInteraction = [...interactions].reverse().find((interaction) =>
+    interaction.status !== 'replied' && interaction.status !== 'rejected');
   const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming';
   const footerAvailable = actionsAvailable || message.status === 'failed';
 
+  useEffect(() => () => {
+    if (bookmarkConfirmationTimerRef.current !== null) {
+      window.clearTimeout(bookmarkConfirmationTimerRef.current);
+    }
+  }, []);
+
+  const toggleReadingCard = (event: MouseEvent<HTMLButtonElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const origin = event.detail === 0
+      ? undefined
+      : { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+    if (!saved) {
+      if (bookmarkConfirmationTimerRef.current !== null) {
+        window.clearTimeout(bookmarkConfirmationTimerRef.current);
+      }
+      setBookmarkConfirmed(true);
+      bookmarkConfirmationTimerRef.current = window.setTimeout(() => {
+        setBookmarkConfirmed(false);
+        bookmarkConfirmationTimerRef.current = null;
+      }, 220);
+    } else {
+      setBookmarkConfirmed(false);
+    }
+    onToggleReadingCard(origin);
+  };
+
   return (
-    <article className="message message--assistant" data-assistant-message-id={message.id}>
+    <article className="message message--assistant" data-message-id={message.id} data-assistant-message-id={message.id}>
       <div className="assistant-rail" aria-hidden="true">
         <span className="assistant-mark">
           <YemaiMark />
@@ -225,11 +303,27 @@ function AssistantMessage({
       </div>
       <div className="message-content">
         {message.activities && message.activities.length > 0 && <RunActivityPanel activities={message.activities} />}
+        {resolvedInteractions.length > 0 && (
+          <div className="agent-decision-history" aria-label="决策记录">
+            {resolvedInteractions.map((interaction) => (
+              <AgentDecisionReceipt decision={interaction} key={interaction.id} />
+            ))}
+          </div>
+        )}
+        {activeInteraction && (
+          <AgentDecisionCard
+            key={activeInteraction.id}
+            decision={activeInteraction}
+            active={message.status === 'running' || message.status === 'streaming'}
+            onReply={(answers) => onResolveDecision(activeInteraction.id, 'reply', answers)}
+            onReject={() => onResolveDecision(activeInteraction.id, 'reject')}
+          />
+        )}
         <div
           className={`markdown-body${pageOverview ? ' markdown-body--page-overview' : ''}`}
           data-assistant-selectable="true"
         >
-          {!message.content && runNote && (
+          {!message.content && interactions.length === 0 && runNote && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
             </div>
@@ -257,7 +351,9 @@ function AssistantMessage({
               {message.content}
             </ReactMarkdown>
           )}
-          {message.status === 'streaming' && message.content && <span className="stream-cursor" aria-label="正在生成" />}
+          {message.status === 'streaming' && message.stage !== 'waiting-user-input' && message.content && (
+            <span className="stream-cursor" aria-label="正在生成" />
+          )}
         </div>
         {hasArtifacts && <AssistantArtifacts artifacts={message.artifacts!} />}
         {Boolean(message.content || hasArtifacts) && message.status !== 'streaming' && (
@@ -278,6 +374,28 @@ function AssistantMessage({
             )}
             {actionsAvailable && (
               <>
+                <IconTooltipButton
+                  className={`assistant-action assistant-bookmark-action pressable${saved ? ' is-saved' : ''}${bookmarkConfirmed ? ' did-save' : ''}`}
+                  type="button"
+                  onClick={toggleReadingCard}
+                  aria-label={saved ? '取消收藏回答' : '收藏为阅读卡片'}
+                  aria-pressed={saved}
+                  tooltip={saved ? '已收藏，点击取消' : '收藏回答'}
+                >
+                  <svg className="assistant-bookmark-glyph" viewBox="0 0 20 20" aria-hidden="true">
+                    <path
+                      className="assistant-bookmark-glyph__fill"
+                      d="M6 3.25h8A1.75 1.75 0 0 1 15.75 5v11.72a.75.75 0 0 1-1.14.64L10 14.58l-4.61 2.78a.75.75 0 0 1-1.14-.64V5A1.75 1.75 0 0 1 6 3.25Z"
+                    />
+                    <path
+                      d="M6 3.25h8A1.75 1.75 0 0 1 15.75 5v11.72a.75.75 0 0 1-1.14.64L10 14.58l-4.61 2.78a.75.75 0 0 1-1.14-.64V5A1.75 1.75 0 0 1 6 3.25Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeLinejoin="round"
+                      strokeWidth="1.6"
+                    />
+                  </svg>
+                </IconTooltipButton>
                 {message.content && (
                   <IconTooltipButton
                     className="assistant-action pressable"
@@ -634,7 +752,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
     }
   };
   return (
-    <article className="message message--user">
+    <article className="message message--user" data-message-id={message.id} data-user-message-id={message.id}>
       <div className="user-message-stack">
         {pageItem && (
           <div
@@ -700,14 +818,18 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
 
 export function MessageList({
   messages,
+  savedMessageIds,
+  navigationTarget,
   branchOrigin,
   branchUnavailableReason,
   onUseStarter,
   onEditUserMessage,
   onRetry,
   onBranch,
+  onToggleReadingCard,
   onOpenBranchOrigin,
   onAddAssistantQuote,
+  onResolveDecision,
 }: MessageListProps) {
   const messagesRef = useRef<HTMLElement>(null);
   const stickToBottomRef = useRef(true);
@@ -716,11 +838,59 @@ export function MessageList({
   const returnTimerRef = useRef<number | null>(null);
   const touchStartYRef = useRef<number | null>(null);
   const previousMessageCountRef = useRef(messages.length);
+  const conversationRailItemsRef = useRef<ConversationPreviewRailItem[]>([]);
   const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [showConversationRail, setShowConversationRail] = useState(false);
+  const [activeTurnId, setActiveTurnId] = useState('');
+  const [navigationAnnouncement, setNavigationAnnouncement] = useState('');
   const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
+  const conversationRailItems = useMemo<ConversationPreviewRailItem[]>(() => {
+    let turnIndex = 0;
+    return messages.flatMap((message) => {
+      if (message.role !== 'user') return [];
+      turnIndex += 1;
+      const contextItems = contextItemsFromMessage(message);
+      const attachment = contextAttachments(contextItems)[0];
+      const selection = contextSelections(contextItems)[0];
+      const page = contextPage(contextItems);
+      const fallback = attachment
+        ? `附件：${attachment.filename}`
+        : selection
+          ? `引用：${selection.text}`
+          : page
+            ? `关于 ${page.page.title}`
+            : `第 ${turnIndex} 轮提问`;
+      return [{
+        id: message.id,
+        label: compactConversationTurnLabel(message.content, fallback),
+        createdAt: message.createdAt,
+      }];
+    });
+  }, [messages]);
+  conversationRailItemsRef.current = conversationRailItems;
   const hasMessages = messages.length > 0;
   const responseStreaming = messages.some((message) => message.status === 'streaming' || message.status === 'running');
+
+  const updateConversationRail = useCallback(() => {
+    const root = messagesRef.current;
+    const items = conversationRailItemsRef.current;
+    if (!root || items.length < MIN_CONVERSATION_RAIL_TURNS) {
+      setShowConversationRail(false);
+      return;
+    }
+    const scrollable = root.scrollHeight > root.clientHeight + 48;
+    setShowConversationRail(scrollable);
+    if (!scrollable) return;
+    const rootRect = root.getBoundingClientRect();
+    const readingLine = rootRect.top + Math.min(120, root.clientHeight * 0.24);
+    const anchors = Array.from(root.querySelectorAll<HTMLElement>('[data-user-message-id]')).map((element) => ({
+      id: element.dataset.userMessageId ?? '',
+      top: element.getBoundingClientRect().top,
+    })).filter((anchor) => anchor.id);
+    const nextActiveId = activeConversationTurnId(anchors, readingLine);
+    if (nextActiveId) setActiveTurnId((current) => current === nextActiveId ? current : nextActiveId);
+  }, []);
 
   useEffect(() => {
     const root = messagesRef.current;
@@ -792,6 +962,35 @@ export function MessageList({
   useEffect(() => {
     const root = messagesRef.current;
     if (!root) return;
+    let frame = 0;
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        updateConversationRail();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
+    resizeObserver.observe(root);
+    root.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+    scheduleUpdate();
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      root.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, [hasMessages, updateConversationRail]);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(updateConversationRail);
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, updateConversationRail]);
+
+  useEffect(() => {
+    const root = messagesRef.current;
+    if (!root) return;
 
     const updateSelection = () => {
       window.requestAnimationFrame(() => {
@@ -852,6 +1051,66 @@ export function MessageList({
 
   useLayoutEffect(() => {
     const root = messagesRef.current;
+    if (!root || !navigationTarget) return;
+    const target = Array.from(root.querySelectorAll<HTMLElement>('[data-message-id]'))
+      .find((element) => element.dataset.messageId === navigationTarget.messageId);
+    if (!target) return;
+    const highlightName = 'yemai-search-match';
+    const highlightRegistry = (CSS as unknown as {
+      highlights?: { set: (name: string, highlight: unknown) => void; delete: (name: string) => boolean };
+    }).highlights;
+    const HighlightConstructor = (globalThis as unknown as {
+      Highlight?: new (...ranges: Range[]) => unknown;
+    }).Highlight;
+    highlightRegistry?.delete(highlightName);
+    const searchable = target.querySelector<HTMLElement>('.markdown-body, .user-message-card') ?? target;
+    const walker = document.createTreeWalker(searchable, NodeFilter.SHOW_TEXT);
+    const ranges: Range[] = [];
+    let current = walker.nextNode();
+    while (current && ranges.length < 60) {
+      const value = current.textContent ?? '';
+      const remaining = 60 - ranges.length;
+      findSearchTextMatches(value, navigationTarget.query, navigationTarget.matchedTerms, remaining)
+        .forEach((match) => {
+          const range = document.createRange();
+          range.setStart(current!, match.start);
+          range.setEnd(current!, match.end);
+          ranges.push(range);
+        });
+      current = walker.nextNode();
+    }
+    if (highlightRegistry && HighlightConstructor && ranges.length > 0) {
+      highlightRegistry.set(highlightName, new HighlightConstructor(...ranges));
+    }
+    const rootRect = root.getBoundingClientRect();
+    const matchRect = ranges[0]?.getBoundingClientRect();
+    const anchorRect = matchRect && (matchRect.width > 0 || matchRect.height > 0)
+      ? matchRect
+      : target.getBoundingClientRect();
+    const targetTop = root.scrollTop + anchorRect.top - rootRect.top - Math.min(84, root.clientHeight * 0.18);
+    stickToBottomRef.current = false;
+    manuallyDetachedRef.current = true;
+    returningToBottomRef.current = false;
+    setShowScrollToBottom(true);
+    root.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
+    target.classList.add('is-search-target');
+    setNavigationAnnouncement(navigationTarget.query
+      ? `已定位到包含“${navigationTarget.query}”的消息`
+      : '已定位到搜索结果');
+    const timer = window.setTimeout(() => {
+      target.classList.remove('is-search-target');
+      highlightRegistry?.delete(highlightName);
+      setNavigationAnnouncement('');
+    }, 2800);
+    return () => {
+      window.clearTimeout(timer);
+      target.classList.remove('is-search-target');
+      highlightRegistry?.delete(highlightName);
+    };
+  }, [navigationTarget]);
+
+  useLayoutEffect(() => {
+    const root = messagesRef.current;
     if (!root) return;
     const messageAppended = messages.length > previousMessageCountRef.current;
     previousMessageCountRef.current = messages.length;
@@ -884,6 +1143,21 @@ export function MessageList({
     }, reduceMotion ? 0 : 420);
   };
 
+  const scrollToConversationTurn = (messageId: string, behavior: ScrollBehavior) => {
+    const root = messagesRef.current;
+    if (!root) return;
+    const target = Array.from(root.querySelectorAll<HTMLElement>('[data-user-message-id]'))
+      .find((element) => element.dataset.userMessageId === messageId);
+    if (!target) return;
+    const rootRect = root.getBoundingClientRect();
+    const targetTop = root.scrollTop + target.getBoundingClientRect().top - rootRect.top - 18;
+    stickToBottomRef.current = false;
+    manuallyDetachedRef.current = true;
+    returningToBottomRef.current = false;
+    setShowScrollToBottom(true);
+    root.scrollTo({ top: Math.max(0, targetTop), behavior });
+  };
+
   if (messages.length === 0) {
     return (
       <div className="message-stage">
@@ -908,6 +1182,7 @@ export function MessageList({
 
   return (
     <div className="message-stage">
+      <span className="visually-hidden" role="status" aria-live="polite">{navigationAnnouncement}</span>
       <main className="messages" aria-live="polite" ref={messagesRef}>
       {branchOrigin && (
         <button
@@ -938,6 +1213,14 @@ export function MessageList({
             onUseFollowUp={onUseStarter}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
+            saved={savedMessageIds.has(message.id)}
+            onToggleReadingCard={(origin) => onToggleReadingCard(
+              message,
+              answerContexts.get(message.id) ?? [],
+              origin,
+            )}
+            onResolveDecision={(decisionId, action, answers) =>
+              onResolveDecision(message, decisionId, action, answers)}
             branchUnavailableReason={branchUnavailableReason}
             key={message.id}
           />
@@ -972,6 +1255,15 @@ export function MessageList({
         document.body,
       )}
       </main>
+      {showConversationRail && (
+        <ConversationPreviewRail
+          items={conversationRailItems}
+          activeId={conversationRailItems.some((item) => item.id === activeTurnId)
+            ? activeTurnId
+            : conversationRailItems[0]?.id ?? ''}
+          onSelect={scrollToConversationTurn}
+        />
+      )}
       <button
         className="scroll-to-latest pressable"
         type="button"

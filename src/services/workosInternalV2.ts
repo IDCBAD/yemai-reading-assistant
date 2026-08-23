@@ -9,6 +9,7 @@ import {
   WORKOS_API_ORIGIN,
   WorkosApiError,
   type ExecuteRequest,
+  type WorkosInterruptAnswers,
   type WorkosTransport,
 } from './workosTransport';
 
@@ -56,6 +57,31 @@ function encryptIdentity(value: string) {
   const encrypted = encryptor.encrypt(value);
   if (!encrypted) throw new WorkosApiError('无法生成 WorkOS v2 身份凭证，请更新连接配置。');
   return encrypted;
+}
+
+function encodedPathIdentifier(value: string, label: string) {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 160 || !/^[A-Za-z0-9_-]+$/.test(normalized)) {
+    throw new WorkosApiError(`${label} 无法识别，请重新发起当前问题。`);
+  }
+  return encodeURIComponent(normalized);
+}
+
+async function parseOptionalJsonEnvelope(response: Response) {
+  const body = await response.text();
+  if (!body.trim()) {
+    if (!response.ok) throw new WorkosApiError(`WorkOS 请求失败（HTTP ${response.status}）。`, response.status);
+    return;
+  }
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('json')) {
+    if (!response.ok) throw new WorkosApiError(`WorkOS 请求失败（HTTP ${response.status}）。`, response.status);
+    return;
+  }
+  await parseJsonEnvelope<unknown>(new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  }), 'internal-v2');
 }
 
 export function internalV2Headers(
@@ -185,5 +211,44 @@ export class InternalV2Transport implements WorkosTransport {
       signal?.removeEventListener('abort', onAbort);
       reader?.releaseLock();
     }
+  }
+
+  async replyInterrupt(
+    conversationUuid: string,
+    requestId: string,
+    answers: WorkosInterruptAnswers,
+    signal?: AbortSignal,
+  ) {
+    await this.resolveInterrupt(conversationUuid, requestId, 'reply', answers, signal);
+  }
+
+  async rejectInterrupt(conversationUuid: string, requestId: string, signal?: AbortSignal) {
+    await this.resolveInterrupt(conversationUuid, requestId, 'reject', {}, signal);
+  }
+
+  private async resolveInterrupt(
+    conversationUuid: string,
+    requestId: string,
+    action: 'reply' | 'reject',
+    body: WorkosInterruptAnswers | Record<string, never>,
+    signal?: AbortSignal,
+  ) {
+    const encodedUuid = encodedPathIdentifier(conversationUuid, 'WorkOS 会话');
+    const encodedRequestId = encodedPathIdentifier(requestId, '表单请求');
+    let response: Response;
+    try {
+      response = await fetch(
+        `${WORKOS_API_ORIGIN}/api/agent/v2/conversations/${encodedUuid}/interrupt/${encodedRequestId}/${action}`,
+        {
+          method: 'POST',
+          headers: internalV2Headers(this.credentials),
+          body: JSON.stringify(body),
+          signal,
+        },
+      );
+    } catch (error) {
+      throw connectionError(error, action === 'reply' ? '无法提交当前选择，请重试。' : '无法跳过当前表单，请重试。');
+    }
+    await parseOptionalJsonEnvelope(response);
   }
 }

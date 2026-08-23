@@ -114,4 +114,32 @@ describe('InternalV2Transport', () => {
       status: 401,
     }));
   });
+
+  it('replies to and rejects A2UI interrupts with their distinct endpoints and bodies', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return new Response(JSON.stringify({ success: true, code: 200, data: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+
+    const transport = new InternalV2Transport(credentials, agentUuid);
+    await transport.replyInterrupt('conversation-v2', 'int_request1', {
+      补充说明: '使用科技蓝',
+      选择平台: ['Windows', 'Linux'],
+    });
+    await transport.rejectInterrupt('conversation-v2', 'int_request2');
+
+    expect(requests[0]?.url).toContain('/conversations/conversation-v2/interrupt/int_request1/reply');
+    expect(requests[0]?.init?.method).toBe('POST');
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      补充说明: '使用科技蓝',
+      选择平台: ['Windows', 'Linux'],
+    });
+    expect(requests[1]?.url).toContain('/conversations/conversation-v2/interrupt/int_request2/reject');
+    expect(requests[1]?.init?.method).toBe('POST');
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({});
+  });
 });

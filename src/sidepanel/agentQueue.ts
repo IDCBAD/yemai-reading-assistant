@@ -85,6 +85,7 @@ const STAGE_PRESENTATION: Record<
   'reading-page': { label: '正在读取页面', orbState: 'searching' },
   'creating-conversation': { label: '正在建立会话', orbState: 'working' },
   'waiting-first-token': { label: '正在连接 Agent', orbState: 'listening' },
+  'waiting-user-input': { label: '等待你的选择', orbState: 'listening' },
   streaming: { label: '正在组织回答', orbState: 'shaping' },
 };
 

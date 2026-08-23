@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 export type KoboyoIconName =
   | 'archive'
   | 'bot'
+  | 'bookmark'
   | 'copy'
   | 'cross'
   | 'cycle'
@@ -17,6 +18,7 @@ export type KoboyoIconName =
   | 'paperclip'
   | 'plus'
   | 'quote'
+  | 'search'
   | 'send'
   | 'selection'
   | 'settings'
