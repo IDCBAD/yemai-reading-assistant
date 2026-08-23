@@ -6,6 +6,26 @@
 
 ### 新增
 
+- Agent 完整回答支持收藏为独立阅读卡片，并以正文快照、来源和产物元数据保存在 IndexedDB。
+- 顶栏新增阅读卡片入口，支持卡片列表、正文阅读、取消收藏以及在原对话仍存在时精确返回来源消息。
+- 全局搜索纳入阅读卡片；同一回答已收藏时优先展示卡片结果，避免与原消息重复。
+
+### 调整
+
+- IndexedDB 升级到 v2，阅读卡片使用独立实体表，不进入会话 `WorkspaceState`；清空会话历史不会删除收藏卡片。
+- 阅读卡片来源复用 Chrome favicon 识别；收藏按钮使用更明确的实色状态和一次性确认动效，并尊重系统的减少动态效果设置。
+- 全局搜索与阅读卡片采用 Cobalt Workbench 排版层级，提高输入、标题、摘要和元信息字号；搜索结果改为连续记录与左侧选中指示，卡片详情同步提升正文行高。
+
+### 修复
+
+- 修复阅读卡片数量徽标样式误作用于关闭按钮外层，导致关闭按钮像脱离卡片头部的问题。
+
+## [0.3.0] - 2026-08-20
+
+页脉本地历史实体化、全局搜索和长会话导航版本。
+
+### 新增
+
 - 将会话、消息、来源和 Agent 产物迁移到 IndexedDB 实体表，保留旧快照恢复材料，并以增量写入降低长会话的保存放大。
 - 新增全局全文搜索与 `Ctrl/⌘ + K` 命令面板，覆盖会话标题、提问、回答、网页、引用、附件和产物文件名。
 - 搜索结果支持自动恢复归档会话、打开或激活对应工作页，并精确定位到命中的用户或 Agent 消息。
@@ -97,6 +117,7 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.3.0
 [0.2.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0

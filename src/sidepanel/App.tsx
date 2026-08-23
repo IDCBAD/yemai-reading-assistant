@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { browser } from 'wxt/browser';
 import { normalizeSourceIdentityUrl } from '../content/pageManifest';
 import {
@@ -39,7 +39,9 @@ import {
 } from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
+import { loadReadingCards, removeReadingCard, saveReadingCard } from '../services/readingCardStorage';
 import type { LocalStorageUsage } from '../services/storageUsage';
+import type { ReadingCardRow } from '../data/database';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -58,9 +60,11 @@ import {
   reconcileTransientMessages,
   waitForAbortable,
 } from './agentQueue';
+import type { AnswerContextSource } from './answerContext';
 import { Composer } from './components/Composer';
 import { CommandPalette } from './components/CommandPalette';
-import { MessageList } from './components/MessageList';
+import { MessageList, type ReadingCardFeedbackOrigin } from './components/MessageList';
+import { ReadingCardsPanel } from './components/ReadingCardsPanel';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
 import {
@@ -100,6 +104,7 @@ import {
   type BrowserTabChange,
 } from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
+import { createReadingCard, openReadingCardSourceInWorkspace, readingCardId } from './readingCards';
 import { PAGE_OVERVIEW_PROMPT } from './starterActions';
 import type {
   AgentDecision,
@@ -246,6 +251,13 @@ interface PagePreparationResult {
   error?: string;
 }
 
+interface ReadingCardFeedback {
+  id: number;
+  count: number;
+  origin?: ReadingCardFeedbackOrigin;
+  destination?: ReadingCardFeedbackOrigin;
+}
+
 function pageSnapshotKey(conversationId: string, url: string) {
   return `${conversationId}\n${url}`;
 }
@@ -260,6 +272,11 @@ export default function App() {
   const [workosConnection, setWorkosConnection] = useState<WorkosConnectionSettings | null>(null);
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [readingCardsOpen, setReadingCardsOpen] = useState(false);
+  const [readingCards, setReadingCards] = useState<ReadingCardRow[]>([]);
+  const [readingCardsIssue, setReadingCardsIssue] = useState<string | undefined>();
+  const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
+  const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchWorkspace, setSearchWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
   const [searchNavigationTarget, setSearchNavigationTarget] = useState<{
@@ -271,6 +288,7 @@ export default function App() {
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletionRequest | null>(null);
+  const [readingCardDeletion, setReadingCardDeletion] = useState<ReadingCardRow | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [localStorageUsageIssue, setLocalStorageUsageIssue] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
@@ -280,6 +298,10 @@ export default function App() {
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
+  const readingCardsRef = useRef<ReadingCardRow[]>([]);
+  const readingCardWritesRef = useRef(new Set<string>());
+  const readingCardFeedbackSequenceRef = useRef(0);
+  const readingCardFeedbackTimerRef = useRef<number | null>(null);
   const currentPageRef = useRef<PageContext>(CURRENT_PAGE);
   const hostBrowserWindowIdRef = useRef<number | undefined>(undefined);
   const activeBrowserTabIdRef = useRef<number | undefined>(undefined);
@@ -313,6 +335,9 @@ export default function App() {
     () => deriveActiveConversationIds(workspace.conversations),
     [workspace.conversations],
   );
+  const savedMessageIds = useMemo(() => new Set(readingCards
+    .filter((card) => card.sourceConversationId === activeConversation.id)
+    .map((card) => card.sourceMessageId)), [activeConversation.id, readingCards]);
   const runSummary = useMemo(
     () => deriveAgentRunSummary(activeConversation.messages),
     [activeConversation.messages],
@@ -364,6 +389,10 @@ export default function App() {
     workspaceRef.current = workspace;
   }, [workspace]);
 
+  useEffect(() => {
+    readingCardsRef.current = readingCards;
+  }, [readingCards]);
+
   useEffect(() => () => {
     attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentPreviewUrlsRef.current.clear();
@@ -391,6 +420,23 @@ export default function App() {
       })
       .finally(() => {
         if (mounted) setWorkspaceHydrated(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadReadingCards()
+      .then((cards) => {
+        if (!mounted) return;
+        readingCardsRef.current = cards;
+        setReadingCards(cards);
+        setReadingCardsIssue(undefined);
+      })
+      .catch(() => {
+        if (mounted) setReadingCardsIssue('无法读取本地收藏，暂时不能保证重启后恢复。');
       });
     return () => {
       mounted = false;
@@ -788,7 +834,131 @@ export default function App() {
     setSearchWorkspace(workspaceRef.current);
     setSearchOpen(true);
     setHistoryOpen(false);
+    setReadingCardsOpen(false);
     setSettingsOpen(false);
+  }, []);
+
+  const closeReadingCards = useCallback(() => {
+    setReadingCardsOpen(false);
+    setReadingCardSelectionId(undefined);
+  }, []);
+
+  const openReadingCards = useCallback(() => {
+    setReadingCardSelectionId(undefined);
+    setReadingCardsOpen(true);
+    setHistoryOpen(false);
+    setSearchOpen(false);
+    setSettingsOpen(false);
+  }, []);
+
+  const showReadingCardFeedback = useCallback((origin?: ReadingCardFeedbackOrigin) => {
+    const trigger = document.querySelector<HTMLElement>('[data-reading-cards-trigger="true"]');
+    const bounds = trigger?.getBoundingClientRect();
+    const destination = bounds
+      ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+      : undefined;
+    readingCardFeedbackSequenceRef.current += 1;
+    setReadingCardFeedback({
+      id: readingCardFeedbackSequenceRef.current,
+      count: 1,
+      origin,
+      destination,
+    });
+    if (readingCardFeedbackTimerRef.current !== null) {
+      window.clearTimeout(readingCardFeedbackTimerRef.current);
+    }
+    readingCardFeedbackTimerRef.current = window.setTimeout(() => {
+      setReadingCardFeedback(null);
+      readingCardFeedbackTimerRef.current = null;
+    }, 460);
+  }, []);
+
+  useEffect(() => () => {
+    if (readingCardFeedbackTimerRef.current !== null) {
+      window.clearTimeout(readingCardFeedbackTimerRef.current);
+    }
+  }, []);
+
+  const toggleReadingCard = useCallback(async (
+    message: ChatMessage,
+    contextSources: AnswerContextSource[],
+    origin?: ReadingCardFeedbackOrigin,
+  ) => {
+    const currentWorkspace = workspaceRef.current;
+    const currentTab = currentWorkspace.openTabs.find((tab) => tab.id === currentWorkspace.activeOpenTabId)
+      ?? currentWorkspace.openTabs[0];
+    const conversation = currentWorkspace.conversations.find((item) => item.id === currentTab?.conversationId);
+    if (!conversation) return;
+    const id = readingCardId(conversation.id, message.id);
+    if (readingCardWritesRef.current.has(id)) return;
+    readingCardWritesRef.current.add(id);
+    const previous = readingCardsRef.current;
+    const existing = previous.find((card) => card.id === id);
+    const next = existing
+      ? previous.filter((card) => card.id !== id)
+      : [createReadingCard(conversation, message, contextSources), ...previous];
+    readingCardsRef.current = next;
+    setReadingCards(next);
+    setReadingCardsIssue(undefined);
+    if (!existing) showReadingCardFeedback(origin);
+    try {
+      if (existing) await removeReadingCard(id);
+      else await saveReadingCard(next[0]!);
+    } catch {
+      readingCardsRef.current = previous;
+      setReadingCards(previous);
+      setReadingCardsIssue(existing
+        ? '取消收藏失败，卡片仍然保留。'
+        : '收藏失败，请检查扩展本地存储。');
+    } finally {
+      readingCardWritesRef.current.delete(id);
+    }
+  }, [showReadingCardFeedback]);
+
+  const removeSavedReadingCard = useCallback(async (card: ReadingCardRow) => {
+    if (readingCardWritesRef.current.has(card.id)) return;
+    readingCardWritesRef.current.add(card.id);
+    const previous = readingCardsRef.current;
+    const next = previous.filter((item) => item.id !== card.id);
+    readingCardsRef.current = next;
+    setReadingCards(next);
+    setReadingCardsIssue(undefined);
+    try {
+      await removeReadingCard(card.id);
+    } catch {
+      readingCardsRef.current = previous;
+      setReadingCards(previous);
+      setReadingCardsIssue('取消收藏失败，卡片仍然保留。');
+    } finally {
+      readingCardWritesRef.current.delete(card.id);
+    }
+  }, []);
+
+  const openReadingCardSource = useCallback((card: ReadingCardRow) => {
+    const current = workspaceRef.current;
+    const target = current.conversations.find((conversation) => conversation.id === card.sourceConversationId
+      && conversation.messages.some((message) => message.id === card.sourceMessageId));
+    if (!target) {
+      setReadingCardsIssue('原对话已被删除，这张卡片仍可独立阅读。');
+      return;
+    }
+    const alreadyOpen = current.openTabs.some((tab) => tab.conversationId === target.id);
+    if (!alreadyOpen && current.openTabs.length >= MAX_OPEN_TABS) {
+      setReadingCardsIssue(`已打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个。`);
+      return;
+    }
+    const next = openReadingCardSourceInWorkspace(current, card, MAX_OPEN_TABS, createOpenTab);
+    workspaceRef.current = next;
+    setWorkspace(next);
+    setReadingCardsOpen(false);
+    searchNavigationRequestRef.current += 1;
+    setSearchNavigationTarget({
+      conversationId: target.id,
+      messageId: card.sourceMessageId,
+      query: '',
+      matchedTerms: [],
+      requestId: searchNavigationRequestRef.current,
+    });
   }, []);
 
   useEffect(() => {
@@ -841,6 +1011,12 @@ export default function App() {
   };
 
   const selectSearchResult = useCallback((result: WorkspaceSearchResult, query: string) => {
+    if (result.kind === 'reading-card' && result.readingCardId) {
+      setSearchOpen(false);
+      setReadingCardSelectionId(result.readingCardId);
+      setReadingCardsOpen(true);
+      return;
+    }
     const current = workspaceRef.current;
     const next = openCommandPaletteResult(current, result, MAX_OPEN_TABS, createOpenTab);
     if (next === current) return;
@@ -1836,10 +2012,39 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <TopBar onOpenSearch={openCommandPalette} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar
+        onOpenSearch={openCommandPalette}
+        onOpenReadingCards={readingCardsOpen ? closeReadingCards : openReadingCards}
+        readingCardsOpen={readingCardsOpen}
+        readingCardFeedbackCount={readingCardFeedback?.count ?? 0}
+        onOpenSettings={() => {
+          setSettingsOpen(true);
+          setReadingCardsOpen(false);
+          setSearchOpen(false);
+          setHistoryOpen(false);
+        }}
+      />
+      {readingCardFeedback?.origin && readingCardFeedback.destination && (
+        <span
+          className="reading-card-flight"
+          key={readingCardFeedback.id}
+          style={{
+            left: readingCardFeedback.origin.x,
+            top: readingCardFeedback.origin.y,
+            '--reading-card-flight-x': `${readingCardFeedback.destination.x - readingCardFeedback.origin.x}px`,
+            '--reading-card-flight-y': `${readingCardFeedback.destination.y - readingCardFeedback.origin.y}px`,
+            '--reading-card-flight-mid-x': `${(readingCardFeedback.destination.x - readingCardFeedback.origin.x) * 0.66}px`,
+            '--reading-card-flight-mid-y': `${(readingCardFeedback.destination.y - readingCardFeedback.origin.y) * 0.54 - 18}px`,
+          } as CSSProperties}
+          aria-hidden="true"
+        >
+          <span className="reading-card-flight-token"><span /></span>
+        </span>
+      )}
       <MessageList
         key={activeConversation.id}
         messages={activeConversation.messages}
+        savedMessageIds={savedMessageIds}
         navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
           ? searchNavigationTarget
           : undefined}
@@ -1859,6 +2064,9 @@ export default function App() {
         }}
         onRetry={retryMessage}
         onBranch={branchFromMessage}
+        onToggleReadingCard={(message, contextSources, origin) => {
+          void toggleReadingCard(message, contextSources, origin);
+        }}
         onOpenBranchOrigin={() => {
           if (branchParent) selectHistory(branchParent.id);
         }}
@@ -1895,7 +2103,12 @@ export default function App() {
         onSelectTab={selectTab}
         onCloseTab={closeTab}
         onNewConversation={startNewConversation}
-        onToggleHistory={() => setHistoryOpen((value) => !value)}
+        onToggleHistory={() => {
+          setReadingCardsOpen(false);
+          setSearchOpen(false);
+          setSettingsOpen(false);
+          setHistoryOpen((value) => !value);
+        }}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
         onContextIncludedChange={changeContextItemIncluded}
         onRetryAttachment={retryAttachment}
@@ -1947,9 +2160,20 @@ export default function App() {
       <CommandPalette
         open={searchOpen}
         workspace={searchWorkspace}
+        readingCards={readingCards}
         maxTabs={MAX_OPEN_TABS}
         onClose={() => setSearchOpen(false)}
         onSelect={selectSearchResult}
+      />
+      <ReadingCardsPanel
+        open={readingCardsOpen}
+        cards={readingCards}
+        conversations={workspace.conversations}
+        selectedCardId={readingCardSelectionId}
+        issue={readingCardsIssue}
+        onClose={closeReadingCards}
+        onRemove={setReadingCardDeletion}
+        onOpenSource={openReadingCardSource}
       />
       <SettingsDrawer
         open={settingsOpen}
@@ -1977,10 +2201,21 @@ export default function App() {
           ? '该会话及消息将从页脉本机永久删除，但 WorkOS 后台会话与已上传文件仍然保留。'
           : historyDeletion?.kind === 'archived'
             ? '所有已归档会话及消息将从页脉本机永久删除，但不会影响仍在使用的会话或 WorkOS 后台数据。'
-            : '插件中的会话、工作页和消息会被移除，但 WorkOS 后台会话与已上传文件仍然保留。'}
+            : '插件中的会话、工作页和消息会被移除；阅读卡片、WorkOS 后台会话与已上传文件仍然保留。'}
         confirmLabel={historyDeletion?.kind === 'archived' ? '清空已归档' : historyDeletion?.kind === 'conversation' ? '删除本地记录' : '清空本地记录'}
         onCancel={() => setHistoryDeletion(null)}
         onConfirm={confirmHistoryDeletion}
+      />
+      <ConfirmDialog
+        open={readingCardDeletion !== null}
+        title={readingCardDeletion ? `取消收藏“${readingCardDeletion.title}”？` : '取消收藏？'}
+        description="这张阅读卡片会从本机删除；如果原对话仍然存在，回答内容不会受到影响。"
+        confirmLabel="取消收藏"
+        onCancel={() => setReadingCardDeletion(null)}
+        onConfirm={() => {
+          if (readingCardDeletion) void removeSavedReadingCard(readingCardDeletion);
+          setReadingCardDeletion(null);
+        }}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import MiniSearch, { type SearchResult as MiniSearchResult } from 'minisearch';
+import type { ReadingCardRow } from '../data/database';
 import { contextItemsFromMessage } from '../sidepanel/contextItems';
 import type { ChatMessage, ContextItem, Conversation, WorkspaceState } from '../sidepanel/types';
 import {
@@ -8,13 +9,14 @@ import {
   segmentSearchWords,
 } from './searchTextMatches';
 
-export type WorkspaceSearchResultKind = 'conversation' | 'message';
+export type WorkspaceSearchResultKind = 'conversation' | 'message' | 'reading-card';
 
 export interface WorkspaceSearchResult {
   id: string;
   kind: WorkspaceSearchResultKind;
   conversationId: string;
   messageId?: string;
+  readingCardId?: string;
   role?: ChatMessage['role'];
   title: string;
   subtitle: string;
@@ -31,6 +33,7 @@ interface WorkspaceSearchDocument {
   kind: WorkspaceSearchResultKind;
   conversationId: string;
   messageId: string;
+  readingCardId: string;
   role: '' | ChatMessage['role'];
   conversationTitle: string;
   subtitle: string;
@@ -86,6 +89,7 @@ function messageDocument(conversation: Conversation, message: ChatMessage): Work
     kind: 'message',
     conversationId: conversation.id,
     messageId: message.id,
+    readingCardId: '',
     role: message.role,
     conversationTitle: conversation.title,
     subtitle: message.role === 'user' ? '你的提问' : '页脉回答',
@@ -106,6 +110,7 @@ function conversationDocument(conversation: Conversation): WorkspaceSearchDocume
     kind: 'conversation',
     conversationId: conversation.id,
     messageId: '',
+    readingCardId: '',
     role: '',
     conversationTitle: conversation.title,
     subtitle: conversation.subtitle,
@@ -119,11 +124,34 @@ function conversationDocument(conversation: Conversation): WorkspaceSearchDocume
   };
 }
 
-export function buildWorkspaceSearchDocuments(workspace: WorkspaceState): WorkspaceSearchDocument[] {
-  return workspace.conversations.flatMap((conversation) => [
+function readingCardDocument(card: ReadingCardRow): WorkspaceSearchDocument {
+  return {
+    id: card.id,
+    kind: 'reading-card',
+    conversationId: card.sourceConversationId,
+    messageId: card.sourceMessageId,
+    readingCardId: card.id,
+    role: 'assistant',
+    conversationTitle: card.title,
+    subtitle: '阅读卡片',
+    searchTitle: card.title,
+    userContent: '',
+    assistantContent: card.bodyMarkdown,
+    pageText: unique(card.sources.flatMap((source) => [source.title, source.site ?? '', source.url])).join(' '),
+    artifactText: unique(card.artifacts.map((artifact) => artifact.filename)).join(' '),
+    updatedAt: card.updatedAt,
+    archived: false,
+  };
+}
+
+export function buildWorkspaceSearchDocuments(workspace: WorkspaceState, readingCards: ReadingCardRow[] = []): WorkspaceSearchDocument[] {
+  return [
+    ...workspace.conversations.flatMap((conversation) => [
     conversationDocument(conversation),
     ...conversation.messages.map((message) => messageDocument(conversation, message)),
-  ]);
+    ]),
+    ...readingCards.map(readingCardDocument),
+  ];
 }
 
 function plainSnippet(value: string) {
@@ -154,7 +182,7 @@ function hasExactStructuredMatch(document: WorkspaceSearchDocument, query: strin
 function matchedFields(hit: MiniSearchResult, document: WorkspaceSearchDocument) {
   const fields = unique(Object.values(hit.match).flat())
     .filter((field): field is SearchField => SEARCH_FIELDS.includes(field as SearchField));
-  const priority = document.kind === 'message'
+  const priority = document.kind === 'message' || document.kind === 'reading-card'
     ? ['userContent', 'assistantContent', 'pageText', 'artifactText', 'searchTitle'] satisfies SearchField[]
     : ['searchTitle', 'pageText', 'artifactText', 'userContent', 'assistantContent'] satisfies SearchField[];
   return priority.filter((field) => fields.includes(field));
@@ -167,6 +195,15 @@ const MATCH_LABELS: Record<SearchField, string> = {
   pageText: '网页或引用',
   artifactText: '附件或产物',
 };
+
+function matchLabel(document: WorkspaceSearchDocument, field: SearchField) {
+  if (document.kind !== 'reading-card') return MATCH_LABELS[field];
+  if (field === 'searchTitle') return '卡片标题';
+  if (field === 'assistantContent') return '卡片正文';
+  if (field === 'pageText') return '卡片来源';
+  if (field === 'artifactText') return '卡片产物';
+  return MATCH_LABELS[field];
+}
 
 function createSnippet(document: WorkspaceSearchDocument, query: string, hit: MiniSearchResult) {
   const fields = matchedFields(hit, document);
@@ -190,13 +227,13 @@ function createSnippet(document: WorkspaceSearchDocument, query: string, hit: Mi
   const candidate = selected?.value ?? '';
   const matchIndex = selected?.firstMatch?.start;
   if (candidate.length <= 108 && (matchIndex === undefined || matchIndex <= 28)) {
-    return { snippet: candidate, matchLabel: selected ? MATCH_LABELS[selected.field] : undefined };
+    return { snippet: candidate, matchLabel: selected ? matchLabel(document, selected.field) : undefined };
   }
   const start = Math.max(0, (matchIndex ?? 0) - 28);
   const end = Math.min(candidate.length, start + 108);
   return {
     snippet: `${start > 0 ? '…' : ''}${candidate.slice(start, end).trim()}${end < candidate.length ? '…' : ''}`,
-    matchLabel: selected ? MATCH_LABELS[selected.field] : undefined,
+    matchLabel: selected ? matchLabel(document, selected.field) : undefined,
   };
 }
 
@@ -211,6 +248,7 @@ function toWorkspaceResult(
     kind: document.kind,
     conversationId: document.conversationId,
     ...(document.messageId ? { messageId: document.messageId } : {}),
+    ...(document.readingCardId ? { readingCardId: document.readingCardId } : {}),
     ...(document.role ? { role: document.role } : {}),
     title: document.conversationTitle,
     subtitle: document.subtitle,
@@ -229,8 +267,8 @@ export interface WorkspaceSearchIndex {
   documentCount: number;
 }
 
-export function createWorkspaceSearchIndex(workspace: WorkspaceState): WorkspaceSearchIndex {
-  const documents = buildWorkspaceSearchDocuments(workspace);
+export function createWorkspaceSearchIndex(workspace: WorkspaceState, readingCards: ReadingCardRow[] = []): WorkspaceSearchIndex {
+  const documents = buildWorkspaceSearchDocuments(workspace, readingCards);
   const documentsById = new Map(documents.map((document) => [document.id, document]));
   const search = new MiniSearch<WorkspaceSearchDocument>({
     idField: 'id',
@@ -259,12 +297,18 @@ export function createWorkspaceSearchIndex(workspace: WorkspaceState): Workspace
       const normalizedQuery = normalizeSearchText(query);
       if (!normalizedQuery) return [];
       const exactStructured = requiresExactStructuredMatch(normalizedQuery);
-      return search.search(normalizedQuery)
+      const results = search.search(normalizedQuery)
         .flatMap((hit) => {
           const document = documentsById.get(String(hit.id));
           if (!document || (exactStructured && !hasExactStructuredMatch(document, normalizedQuery))) return [];
           return [toWorkspaceResult(hit, document, query)];
-        })
+        });
+      const cardSources = new Set(results
+        .filter((result) => result.kind === 'reading-card')
+        .map((result) => `${result.conversationId}\n${result.messageId ?? ''}`));
+      return results
+        .filter((result) => result.kind !== 'message'
+          || !cardSources.has(`${result.conversationId}\n${result.messageId ?? ''}`))
         .slice(0, limit);
     },
     recent(limit = 8) {

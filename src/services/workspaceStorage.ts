@@ -3,6 +3,7 @@ import type { WorkspaceState } from '../sidepanel/types';
 import { yemaiDatabase, type WorkspaceUiState } from '../data/database';
 import { migrateLegacyWorkspace, LEGACY_UI_BACKUP_META_KEY } from '../data/legacyWorkspaceMigration';
 import { WorkspaceRepository } from '../data/workspaceRepository';
+import { estimateReadingCardBytes } from './readingCardStorage';
 import {
   DEFAULT_LOCAL_STORAGE_QUOTA_BYTES,
   type LocalStorageUsage,
@@ -141,13 +142,15 @@ export async function loadLocalStorageUsage(): Promise<LocalStorageUsage> {
   const storageEstimate = typeof navigator !== 'undefined'
     ? navigator.storage?.estimate?.().catch(() => undefined)
     : Promise.resolve(undefined);
-  const [historyBytes, localBytes, legacyBackupBytes, estimate] = await Promise.all([
+  const [workspaceBytes, readingCardBytes, localBytes, legacyBackupBytes, estimate] = await Promise.all([
     repository.estimateBytes(),
+    estimateReadingCardBytes(),
     browser.storage.local.getBytesInUse(null),
     browser.storage.local.getBytesInUse(WORKSPACE_STORAGE_KEY),
     storageEstimate,
   ]);
   const settingsBytes = Math.max(0, localBytes - legacyBackupBytes);
+  const historyBytes = workspaceBytes + readingCardBytes;
   const totalBytes = historyBytes + localBytes;
   return {
     historyBytes,

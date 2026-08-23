@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createWorkspaceSearchIndex, type WorkspaceSearchResult } from '../../search/workspaceSearch';
+import type { ReadingCardRow } from '../../data/database';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { commandPaletteHighlightParts, nextCommandPaletteIndex } from '../commandPalette';
 import type { WorkspaceState } from '../types';
@@ -8,6 +9,7 @@ import { KoboyoIcon } from './KoboyoIcon';
 interface CommandPaletteProps {
   open: boolean;
   workspace: WorkspaceState;
+  readingCards: ReadingCardRow[];
   maxTabs: number;
   onClose: () => void;
   onSelect: (result: WorkspaceSearchResult, query: string) => void;
@@ -22,6 +24,7 @@ function ResultText({ value, query, matchedTerms }: { value: string; query: stri
 export function CommandPalette({
   open,
   workspace,
+  readingCards,
   maxTabs,
   onClose,
   onSelect,
@@ -32,12 +35,13 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLElement>(null);
-  const searchIndex = useMemo(() => createWorkspaceSearchIndex(workspace), [workspace]);
+  const searchIndex = useMemo(() => createWorkspaceSearchIndex(workspace, readingCards), [readingCards, workspace]);
   const results = useMemo(
     () => deferredQuery.trim() ? searchIndex.search(deferredQuery, 24) : searchIndex.recent(10),
     [deferredQuery, searchIndex],
   );
   const disabledIndexes = useMemo(() => new Set(results.flatMap((result, index) => {
+    if (result.kind === 'reading-card') return [];
     const alreadyOpen = workspace.openTabs.some((tab) => tab.conversationId === result.conversationId);
     return !alreadyOpen && workspace.openTabs.length >= maxTabs ? [index] : [];
   })), [maxTabs, results, workspace.openTabs]);
@@ -179,7 +183,11 @@ export function CommandPalette({
               >
                 <span className={`command-result-icon command-result-icon--${result.role ?? result.kind}`}>
                   <KoboyoIcon
-                    name={result.kind === 'conversation' ? 'quote' : result.role === 'assistant' ? 'bot' : 'selection'}
+                    name={result.kind === 'reading-card'
+                      ? 'bookmark'
+                      : result.kind === 'conversation'
+                        ? 'quote'
+                        : result.role === 'assistant' ? 'bot' : 'selection'}
                     size={14}
                   />
                 </span>
@@ -199,15 +207,17 @@ export function CommandPalette({
                       />
                     </span>
                   )}
-                  <small>
-                    {disabled
-                      ? `已打开 ${maxTabs} 个工作页，请先关闭一个`
-                      : result.archived
-                        ? `${result.matchLabel ?? result.subtitle} · 打开时恢复`
-                        : result.matchLabel ?? result.subtitle}
-                  </small>
+                  <span className="command-result-meta">
+                    <small>
+                      {disabled
+                        ? `已打开 ${maxTabs} 个工作页，请先关闭一个`
+                        : result.archived
+                          ? `${result.matchLabel ?? result.subtitle} · 打开时恢复`
+                          : result.matchLabel ?? result.subtitle}
+                    </small>
+                    <time dateTime={timestamp.dateTime} title={timestamp.fullLabel}>{timestamp.label}</time>
+                  </span>
                 </span>
-                <time dateTime={timestamp.dateTime} title={timestamp.fullLabel}>{timestamp.label}</time>
               </button>
             );
           })}

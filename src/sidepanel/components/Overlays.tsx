@@ -610,7 +610,7 @@ export function SettingsDrawer({
             </div>
             {storageUsage ? (
               <div className="storage-usage-meta">
-                <span>历史 {formatStorageBytes(storageUsage.historyBytes)} · 配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
+                <span>会话与阅读卡片 {formatStorageBytes(storageUsage.historyBytes)} · 配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
                 <span>合计 {formatStorageBytes(storageUsage.totalBytes)} / {formatStorageBytes(storageUsage.quotaBytes)}</span>
               </div>
             ) : (
@@ -625,7 +625,7 @@ export function SettingsDrawer({
 
           <section className="settings-section settings-section--danger">
             <strong>删除本地数据</strong>
-            <p>清除插件中的会话、工作页和消息，不删除 WorkOS 后台数据。</p>
+            <p>清除会话、工作页和消息；阅读卡片与 WorkOS 后台数据会保留。</p>
             <button className="danger-button pressable" type="button" onClick={onClearHistory}>
               <KoboyoIcon name="trash" size={15} />
               清空本地历史

@@ -11,7 +11,7 @@ import type {
 import type { WorkosTransportKind } from '../services/workosTransport';
 
 export const YEMAI_DATABASE_NAME = 'yemai-reading-assistant';
-export const YEMAI_DATABASE_VERSION = 1;
+export const YEMAI_DATABASE_VERSION = 2;
 
 export interface ConversationRow {
   id: string;
@@ -55,6 +55,26 @@ export interface ArtifactRow extends AssistantArtifact {
   position: number;
 }
 
+export interface ReadingCardSource {
+  title: string;
+  url: string;
+  site?: string;
+}
+
+export interface ReadingCardRow {
+  id: string;
+  sourceConversationId: string;
+  sourceMessageId: string;
+  title: string;
+  excerpt: string;
+  bodyMarkdown: string;
+  sources: ReadingCardSource[];
+  artifacts: AssistantArtifact[];
+  messageCreatedAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface WorkspaceUiState {
   openTabs: OpenConversationTab[];
   activeOpenTabId: string;
@@ -71,16 +91,22 @@ export class YemaiDatabase extends Dexie {
   messages!: Table<MessageRow, string>;
   conversationSources!: Table<ConversationSourceRow, string>;
   artifacts!: Table<ArtifactRow, string>;
+  readingCards!: Table<ReadingCardRow, string>;
   meta!: Table<MetaRow, string>;
 
   constructor(name = YEMAI_DATABASE_NAME) {
     super(name);
-    this.version(YEMAI_DATABASE_VERSION).stores({
+    const workspaceStores = {
       conversations: '&id,position,updatedAt,archivedAt,parentConversationId',
       messages: '&id,conversationId,[conversationId+position],createdAt,role,status',
       conversationSources: '&id,conversationId,[conversationId+position],sourceId,revisionId,url,sentAt',
       artifacts: '&key,id,conversationId,messageId,[messageId+position],filename,status',
       meta: '&key',
+    };
+    this.version(1).stores(workspaceStores);
+    this.version(YEMAI_DATABASE_VERSION).stores({
+      ...workspaceStores,
+      readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
     });
   }
 }

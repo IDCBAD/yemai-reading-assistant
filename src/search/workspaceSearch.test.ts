@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ReadingCardRow } from '../data/database';
 import type { ChatMessage, Conversation, WorkspaceState } from '../sidepanel/types';
 import { createWorkspaceSearchIndex, tokenizeWorkspaceSearch } from './workspaceSearch';
 
@@ -162,5 +163,33 @@ describe('createWorkspaceSearchIndex', () => {
     const newer = conversation({ id: 'newer', title: '最近会话', updatedAt: 50 });
     expect(createWorkspaceSearchIndex(workspace([older, newer])).recent().map((result) => result.title))
       .toEqual(['最近会话', '较早会话']);
+  });
+
+  it('searches saved reading cards and suppresses the duplicate source message', () => {
+    const item = conversation({
+      messages: [message('message-15', 'assistant', '这是值得独立收藏的关键结论。')],
+    });
+    const card: ReadingCardRow = {
+      id: 'reading-card:conversation-1:message-15',
+      sourceConversationId: item.id,
+      sourceMessageId: 'message-15',
+      title: '关键结论卡片',
+      excerpt: '这是值得独立收藏的关键结论。',
+      bodyMarkdown: '这是值得独立收藏的关键结论。',
+      sources: [],
+      artifacts: [],
+      messageCreatedAt: 15,
+      createdAt: 20,
+      updatedAt: 20,
+    };
+
+    const results = createWorkspaceSearchIndex(workspace([item]), [card]).search('独立收藏');
+
+    expect(results[0]).toMatchObject({
+      kind: 'reading-card',
+      readingCardId: card.id,
+      matchLabel: '卡片正文',
+    });
+    expect(results.filter((result) => result.kind === 'message')).toHaveLength(0);
   });
 });

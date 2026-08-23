@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,6 +32,7 @@ import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 
 interface MessageListProps {
   messages: ChatMessage[];
+  savedMessageIds: ReadonlySet<string>;
   navigationTarget?: {
     messageId: string;
     query: string;
@@ -49,6 +50,11 @@ interface MessageListProps {
   onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
   onBranch: (message: ChatMessage) => void;
+  onToggleReadingCard: (
+    message: ChatMessage,
+    contextSources: AnswerContextSource[],
+    origin?: ReadingCardFeedbackOrigin,
+  ) => void;
   onOpenBranchOrigin: () => void;
   onAddAssistantQuote: (quote: QuoteReference) => void;
   onResolveDecision: (
@@ -57,6 +63,11 @@ interface MessageListProps {
     action: 'reply' | 'reject',
     answers?: WorkosInterruptAnswers,
   ) => void;
+}
+
+export interface ReadingCardFeedbackOrigin {
+  x: number;
+  y: number;
 }
 
 const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
@@ -207,6 +218,8 @@ function AssistantMessage({
   onUseFollowUp,
   onRetry,
   onBranch,
+  saved,
+  onToggleReadingCard,
   onResolveDecision,
   branchUnavailableReason,
 }: {
@@ -215,6 +228,8 @@ function AssistantMessage({
   onUseFollowUp: (question: string) => void;
   onRetry: () => void;
   onBranch: () => void;
+  saved: boolean;
+  onToggleReadingCard: (origin?: ReadingCardFeedbackOrigin) => void;
   onResolveDecision: (
     decisionId: string,
     action: 'reply' | 'reject',
@@ -223,6 +238,8 @@ function AssistantMessage({
   branchUnavailableReason?: string;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [bookmarkConfirmed, setBookmarkConfirmed] = useState(false);
+  const bookmarkConfirmationTimerRef = useRef<number | null>(null);
   const runNote = getRunNote(message);
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
@@ -249,6 +266,32 @@ function AssistantMessage({
     interaction.status !== 'replied' && interaction.status !== 'rejected');
   const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming';
   const footerAvailable = actionsAvailable || message.status === 'failed';
+
+  useEffect(() => () => {
+    if (bookmarkConfirmationTimerRef.current !== null) {
+      window.clearTimeout(bookmarkConfirmationTimerRef.current);
+    }
+  }, []);
+
+  const toggleReadingCard = (event: MouseEvent<HTMLButtonElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const origin = event.detail === 0
+      ? undefined
+      : { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+    if (!saved) {
+      if (bookmarkConfirmationTimerRef.current !== null) {
+        window.clearTimeout(bookmarkConfirmationTimerRef.current);
+      }
+      setBookmarkConfirmed(true);
+      bookmarkConfirmationTimerRef.current = window.setTimeout(() => {
+        setBookmarkConfirmed(false);
+        bookmarkConfirmationTimerRef.current = null;
+      }, 220);
+    } else {
+      setBookmarkConfirmed(false);
+    }
+    onToggleReadingCard(origin);
+  };
 
   return (
     <article className="message message--assistant" data-message-id={message.id} data-assistant-message-id={message.id}>
@@ -331,6 +374,28 @@ function AssistantMessage({
             )}
             {actionsAvailable && (
               <>
+                <IconTooltipButton
+                  className={`assistant-action assistant-bookmark-action pressable${saved ? ' is-saved' : ''}${bookmarkConfirmed ? ' did-save' : ''}`}
+                  type="button"
+                  onClick={toggleReadingCard}
+                  aria-label={saved ? '取消收藏回答' : '收藏为阅读卡片'}
+                  aria-pressed={saved}
+                  tooltip={saved ? '已收藏，点击取消' : '收藏回答'}
+                >
+                  <svg className="assistant-bookmark-glyph" viewBox="0 0 20 20" aria-hidden="true">
+                    <path
+                      className="assistant-bookmark-glyph__fill"
+                      d="M6 3.25h8A1.75 1.75 0 0 1 15.75 5v11.72a.75.75 0 0 1-1.14.64L10 14.58l-4.61 2.78a.75.75 0 0 1-1.14-.64V5A1.75 1.75 0 0 1 6 3.25Z"
+                    />
+                    <path
+                      d="M6 3.25h8A1.75 1.75 0 0 1 15.75 5v11.72a.75.75 0 0 1-1.14.64L10 14.58l-4.61 2.78a.75.75 0 0 1-1.14-.64V5A1.75 1.75 0 0 1 6 3.25Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeLinejoin="round"
+                      strokeWidth="1.6"
+                    />
+                  </svg>
+                </IconTooltipButton>
                 {message.content && (
                   <IconTooltipButton
                     className="assistant-action pressable"
@@ -753,6 +818,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
 
 export function MessageList({
   messages,
+  savedMessageIds,
   navigationTarget,
   branchOrigin,
   branchUnavailableReason,
@@ -760,6 +826,7 @@ export function MessageList({
   onEditUserMessage,
   onRetry,
   onBranch,
+  onToggleReadingCard,
   onOpenBranchOrigin,
   onAddAssistantQuote,
   onResolveDecision,
@@ -1146,6 +1213,12 @@ export function MessageList({
             onUseFollowUp={onUseStarter}
             onRetry={() => onRetry(message)}
             onBranch={() => onBranch(message)}
+            saved={savedMessageIds.has(message.id)}
+            onToggleReadingCard={(origin) => onToggleReadingCard(
+              message,
+              answerContexts.get(message.id) ?? [],
+              origin,
+            )}
             onResolveDecision={(decisionId, action, answers) =>
               onResolveDecision(message, decisionId, action, answers)}
             branchUnavailableReason={branchUnavailableReason}
