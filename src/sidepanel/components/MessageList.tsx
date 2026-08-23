@@ -832,6 +832,7 @@ export function MessageList({
   onResolveDecision,
 }: MessageListProps) {
   const messagesRef = useRef<HTMLElement>(null);
+  const scrollToLatestRef = useRef<HTMLButtonElement>(null);
   const stickToBottomRef = useRef(true);
   const manuallyDetachedRef = useRef(false);
   const returningToBottomRef = useRef(false);
@@ -1128,6 +1129,9 @@ export function MessageList({
     const root = messagesRef.current;
     if (!root) return;
     if (returnTimerRef.current !== null) window.clearTimeout(returnTimerRef.current);
+    if (document.activeElement === scrollToLatestRef.current) {
+      root.focus({ preventScroll: true });
+    }
     stickToBottomRef.current = true;
     manuallyDetachedRef.current = false;
     returningToBottomRef.current = true;
@@ -1183,7 +1187,7 @@ export function MessageList({
   return (
     <div className="message-stage">
       <span className="visually-hidden" role="status" aria-live="polite">{navigationAnnouncement}</span>
-      <main className="messages" aria-live="polite" ref={messagesRef}>
+      <main className="messages" aria-live="polite" ref={messagesRef} tabIndex={-1}>
       {branchOrigin && (
         <button
           className="branch-origin"
@@ -1265,12 +1269,13 @@ export function MessageList({
         />
       )}
       <button
+        ref={scrollToLatestRef}
         className="scroll-to-latest pressable"
         type="button"
         data-visible={showScrollToBottom ? '' : undefined}
         data-streaming={responseStreaming ? '' : undefined}
         aria-label="回到最新内容"
-        aria-hidden={!showScrollToBottom}
+        inert={!showScrollToBottom}
         tabIndex={showScrollToBottom ? 0 : -1}
         onClick={scrollToLatest}
       >
