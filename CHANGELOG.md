@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+暂无。
+
+## [0.4.1] - 2026-08-24
+
+页脉搜索生命周期与发布工程收口版本。
+
+### 调整
+
+- 全局搜索改为显式会话生命周期：只在打开搜索时冻结工作区与阅读卡片快照，同一次打开期间复用该快照，关闭后再次打开才读取最新数据。
+- 全局搜索、MiniSearch 与阅读卡片抽屉改为按需加载；生产构建的 Side Panel 首屏脚本由 808,952 B 降至 775,296 B，搜索与卡片分别拆为独立分包。
+- 开发构建在扩展名称、短名称、版本显示和操作提示中增加 `DEV`，避免与生产构建混淆。
+- 统一应用、锁文件和 Manifest 版本为 `0.4.1`，并补充独立验收门禁与发布边界。
+
+### 修复
+
+- 修复搜索关闭时仍因工作区更新或流式回答而重复创建全文索引的问题。
+- 修复同一次搜索打开期间工作区变化会重建索引并使结果跳动的问题；关闭再打开后仍可检索最新内容。
+
+## [0.4.0] - 2026-08-21
+
 ### 新增
 
 - Agent 完整回答支持收藏为独立阅读卡片，并以正文快照、来源和产物元数据保存在 IndexedDB。
@@ -118,7 +138,9 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.1
+[0.4.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.0
 [0.3.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.3.0
 [0.2.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0
 [0.1.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.1.0

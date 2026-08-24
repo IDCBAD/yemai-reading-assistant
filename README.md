@@ -83,6 +83,8 @@ npm run build
 2. 点击“加载已解压的扩展程序”。
 3. 选择项目中的 `.output/chrome-mv3` 目录。
 
+`.output/chrome-mv3` 是生产构建；`.output/chrome-mv3-dev` 仅用于本地开发，扩展名称会明确显示 `DEV`。不要同时加载两个目录作为日常使用版本。
+
 开发时可以运行：
 
 ```bash
@@ -164,7 +166,7 @@ flowchart LR
 | `npm run build` | 生成 Chrome MV3 生产构建 |
 | `npm run zip` | 打包可分发扩展压缩包 |
 
-生产构建目前会提示 Side Panel 主分包超过 500 kB。它不影响扩展运行，但后续可以通过按需加载设置页、Markdown 渲染和非首屏能力进一步拆分。
+全局搜索、MiniSearch 和阅读卡片界面已经按需加载。生产构建仍会提示 Side Panel 主分包超过 500 kB；它不影响扩展运行，后续可以继续拆分设置页和其他非首屏能力，Markdown 渲染因主消息流直接依赖，需要单独评估交互收益与复杂度。
 
 ## 当前限制与后续方向
 
@@ -188,7 +190,7 @@ flowchart LR
 
 ## 当前状态
 
-当前稳定版本为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)，`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线。新功能应从独立分支开发，并在合并前至少运行：
+当前代码版本为 `0.4.1`；最新已发布安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线；`v0.4.1` 只有在独立验收通过后才创建标签与 Release。新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check

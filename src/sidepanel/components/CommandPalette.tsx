@@ -1,15 +1,12 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createWorkspaceSearchIndex, type WorkspaceSearchResult } from '../../search/workspaceSearch';
-import type { ReadingCardRow } from '../../data/database';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { commandPaletteHighlightParts, nextCommandPaletteIndex } from '../commandPalette';
-import type { WorkspaceState } from '../types';
+import type { WorkspaceSearchSession } from '../searchSession';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface CommandPaletteProps {
-  open: boolean;
-  workspace: WorkspaceState;
-  readingCards: ReadingCardRow[];
+  session: WorkspaceSearchSession;
   maxTabs: number;
   onClose: () => void;
   onSelect: (result: WorkspaceSearchResult, query: string) => void;
@@ -22,20 +19,19 @@ function ResultText({ value, query, matchedTerms }: { value: string; query: stri
 }
 
 export function CommandPalette({
-  open,
-  workspace,
-  readingCards,
+  session,
   maxTabs,
   onClose,
   onSelect,
 }: CommandPaletteProps) {
+  const { workspace, readingCards } = session;
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLElement>(null);
-  const searchIndex = useMemo(() => createWorkspaceSearchIndex(workspace, readingCards), [readingCards, workspace]);
+  const searchIndex = useMemo(() => createWorkspaceSearchIndex(workspace, readingCards), [session]);
   const results = useMemo(
     () => deferredQuery.trim() ? searchIndex.search(deferredQuery, 24) : searchIndex.recent(10),
     [deferredQuery, searchIndex],
@@ -47,26 +43,22 @@ export function CommandPalette({
   })), [maxTabs, results, workspace.openTabs]);
 
   useLayoutEffect(() => {
-    if (!open) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery('');
     setActiveIndex(0);
     inputRef.current?.focus();
     return () => previouslyFocused?.focus();
-  }, [open]);
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const firstEnabled = results.findIndex((_, index) => !disabledIndexes.has(index));
     setActiveIndex(firstEnabled);
-  }, [deferredQuery, disabledIndexes, open, results]);
+  }, [deferredQuery, disabledIndexes, results]);
 
   useEffect(() => {
     if (activeIndex < 0) return;
     listRef.current?.querySelector<HTMLElement>(`[data-result-index="${activeIndex}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex]);
-
-  if (!open) return null;
 
   const chooseResult = (index: number) => {
     const result = results[index];
