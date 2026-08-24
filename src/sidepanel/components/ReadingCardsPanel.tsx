@@ -18,6 +18,8 @@ interface ReadingCardsPanelProps {
   onClose: () => void;
   onRemove: (card: ReadingCardRow) => void;
   onOpenSource: (card: ReadingCardRow) => void;
+  onExportCard: (card: ReadingCardRow) => Promise<void>;
+  onExportAll: (cards: ReadingCardRow[]) => Promise<void>;
 }
 
 function safeArtifactUrl(value?: string) {
@@ -39,14 +41,22 @@ export function ReadingCardsPanel({
   onClose,
   onRemove,
   onOpenSource,
+  onExportCard,
+  onExportAll,
 }: ReadingCardsPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
   selectedIdRef.current = selectedId;
+
+  const showExportFeedback = (key: string) => {
+    setExportFeedback(key);
+    window.setTimeout(() => setExportFeedback((current) => current === key ? null : current), 1_500);
+  };
 
   useEffect(() => {
     let frame: number | undefined;
@@ -134,6 +144,21 @@ export function ReadingCardsPanel({
             <h2>{selected ? selected.title : '阅读卡片'}</h2>
           </div>
           <div className="reading-cards-header-actions">
+            {!selected && cards.length > 0 && (
+              <button
+                className="reading-cards-export-all pressable"
+                type="button"
+                onClick={() => {
+                  void onExportAll(cards)
+                    .then(() => showExportFeedback('all'))
+                    .catch(() => undefined);
+                }}
+                aria-live="polite"
+              >
+                <KoboyoIcon name={exportFeedback === 'all' ? 'solid-checkmark' : 'file'} size={12} />
+                {exportFeedback === 'all' ? '已下载' : '导出全部'}
+              </button>
+            )}
             {!selected && <span className="reading-cards-count">{cards.length} 项</span>}
             {selected && (
               <button className="reading-cards-back pressable" type="button" onClick={() => setSelectedId(null)}>
@@ -227,6 +252,19 @@ export function ReadingCardsPanel({
               >
                 <KoboyoIcon name="quote" size={13} />
                 {readingCardSourceAvailable(selected, conversations) ? '回到原对话' : '原对话已删除'}
+              </button>
+              <button
+                className="reading-card-export-button pressable"
+                type="button"
+                onClick={() => {
+                  void onExportCard(selected)
+                    .then(() => showExportFeedback(selected.id))
+                    .catch(() => undefined);
+                }}
+                aria-live="polite"
+              >
+                <KoboyoIcon name={exportFeedback === selected.id ? 'solid-checkmark' : 'file'} size={12} />
+                {exportFeedback === selected.id ? '已下载' : '导出 Markdown'}
               </button>
               <button className="reading-card-remove-button pressable" type="button" onClick={() => onRemove(selected)}>
                 <KoboyoIcon name="trash" size={12} />

@@ -156,6 +156,8 @@ flowchart LR
 - React Markdown、Remark GFM、按需加载的 Mermaid
 - Vitest
 
+v0.5 在设置页提供“本地数据备份”：可以把会话、消息、来源、Agent 产物和阅读卡片导出为版本化 `.yemai.json` 文件，在另一份页脉安装中先预览再合并或替换恢复。连接 Token 和身份 UUID 不进入备份。阅读卡片还可以单张或全部导出为普通 Markdown，确保内容不依赖页脉才能继续阅读。
+
 ## 开发命令
 
 | 命令 | 作用 |
@@ -173,7 +175,7 @@ flowchart LR
 - 增加 X / Twitter 详情页和线程的专用抽取策略。
 - 继续优化智能框选的候选块粒度与复杂页面兼容性。
 - 探索批量读取多个链接，但不会在交互和状态模型确认前提前接入。
-- 增加 WorkOS 远端历史同步及更完整的导出能力。
+- 增加 WorkOS 远端历史同步；本地知识资产已经具备备份、迁移与 Markdown 出口。
 - 优化 Side Panel 首屏分包体积。
 
 ## 设计与技术文档
@@ -183,6 +185,7 @@ flowchart LR
 - [产品需求与 MVP 范围](docs/PRODUCT_SPEC.md)
 - [技术架构设计](docs/TECHNICAL_DESIGN.md)
 - [统一上下文工作台架构](docs/context-workbench-architecture.md)
+- [v0.5 本地备份与迁移验收标准](docs/V0.5_ACCEPTANCE.md)
 - [实施与验收计划](docs/IMPLEMENTATION_PLAN.md)
 - [WorkOS Agent 安全指令建议](docs/WORKOS_AGENT_PROMPT.md)
 - [WorkOS v2 传输迁移说明](docs/WORKOS_V2_TRANSPORT_MIGRATION.md)
@@ -190,7 +193,7 @@ flowchart LR
 
 ## 当前状态
 
-当前代码版本为 `0.4.1`；最新已发布安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线；`v0.4.1` 只有在独立验收通过后才创建标签与 Release。新功能应从独立分支开发，并在合并前至少运行：
+当前候选代码版本为 `0.5.0`；最新已发布安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线；`v0.5.0` 只有在独立验收通过后才提交、合并、创建标签与 Release。新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check

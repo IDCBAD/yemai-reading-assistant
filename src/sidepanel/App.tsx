@@ -40,6 +40,13 @@ import {
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
 import { loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { loadReadingCards, removeReadingCard, saveReadingCard } from '../services/readingCardStorage';
+import type {
+  LocalBackupExportReceipt,
+  LocalBackupImportMode,
+  LocalBackupImportReceipt,
+  LocalBackupPreview,
+  LocalBackupStatus,
+} from '../services/localBackup';
 import type { LocalStorageUsage } from '../services/storageUsage';
 import type { ReadingCardRow } from '../data/database';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
@@ -298,6 +305,8 @@ export default function App() {
   const [readingCardDeletion, setReadingCardDeletion] = useState<ReadingCardRow | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [localStorageUsageIssue, setLocalStorageUsageIssue] = useState<string | null>(null);
+  const [localBackupStatus, setLocalBackupStatus] = useState<LocalBackupStatus | null>(null);
+  const [localBackupStatusIssue, setLocalBackupStatusIssue] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
   const [smartSelectionActive, setSmartSelectionActive] = useState(false);
@@ -486,12 +495,22 @@ export default function App() {
         .catch(() => {
           if (mounted) setLocalStorageUsageIssue('暂时无法计算本地占用。');
         });
+      void import('../services/localBackup')
+        .then((module) => module.loadLocalBackupStatus())
+        .then((status) => {
+          if (!mounted) return;
+          setLocalBackupStatus(status);
+          setLocalBackupStatusIssue(null);
+        })
+        .catch(() => {
+          if (mounted) setLocalBackupStatusIssue('暂时无法统计本地知识资产。');
+        });
     }, 450);
     return () => {
       mounted = false;
       window.clearTimeout(timer);
     };
-  }, [settingsOpen, workspace, workspaceHydrated]);
+  }, [readingCards, settingsOpen, workspace, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated) return;
@@ -1960,6 +1979,66 @@ export default function App() {
     });
   };
 
+  const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
+    await saveWorkspaceState(workspaceRef.current);
+    const { exportLocalBackup } = await import('../services/localBackup');
+    const receipt = await exportLocalBackup();
+    setLocalBackupStatus({ counts: receipt.counts, lastExportedAt: receipt.exportedAt });
+    setLocalBackupStatusIssue(null);
+    void loadLocalStorageUsage()
+      .then((usage) => {
+        setLocalStorageUsage(usage);
+        setLocalStorageUsageIssue(null);
+      })
+      .catch(() => setLocalStorageUsageIssue('暂时无法计算本地占用。'));
+    return receipt;
+  };
+
+  const inspectBackup = async (file: File): Promise<LocalBackupPreview> => {
+    const { inspectLocalBackup } = await import('../services/localBackup');
+    return inspectLocalBackup(file);
+  };
+
+  const importBackup = async (
+    file: File,
+    mode: LocalBackupImportMode,
+  ): Promise<LocalBackupImportReceipt> => {
+    stopAllRequests();
+    await saveWorkspaceState(workspaceRef.current);
+    setWorkspaceHydrated(false);
+    try {
+      const { importLocalBackup } = await import('../services/localBackup');
+      const receipt = await importLocalBackup(file, mode);
+      window.setTimeout(() => window.location.reload(), 650);
+      return receipt;
+    } catch (error) {
+      setWorkspaceHydrated(true);
+      throw error;
+    }
+  };
+
+  const exportCardMarkdown = async (card: ReadingCardRow) => {
+    try {
+      const module = await import('../services/readingCardExport');
+      module.exportReadingCardMarkdown(card);
+      setReadingCardsIssue(undefined);
+    } catch (error) {
+      setReadingCardsIssue('Markdown 导出失败，请重试。');
+      throw error;
+    }
+  };
+
+  const exportAllCardsMarkdown = async (cards: ReadingCardRow[]) => {
+    try {
+      const module = await import('../services/readingCardExport');
+      module.exportAllReadingCardsMarkdown(cards);
+      setReadingCardsIssue(undefined);
+    } catch (error) {
+      setReadingCardsIssue('Markdown 导出失败，请重试。');
+      throw error;
+    }
+  };
+
   const confirmHistoryDeletion = () => {
     if (!workspaceHydrated || !historyDeletion) return;
     const current = workspaceRef.current;
@@ -2195,6 +2274,8 @@ export default function App() {
             onClose={closeReadingCards}
             onRemove={setReadingCardDeletion}
             onOpenSource={openReadingCardSource}
+            onExportCard={exportCardMarkdown}
+            onExportAll={exportAllCardsMarkdown}
           />
         </Suspense>
       )}
@@ -2205,11 +2286,16 @@ export default function App() {
         bubbleEnabled={selectionBubbleEnabled}
         storageUsage={localStorageUsage}
         storageUsageIssue={localStorageUsageIssue}
+        backupStatus={localBackupStatus}
+        backupStatusIssue={localBackupStatusIssue}
         onSaveConnection={saveConnection}
         onTestConnection={testConnection}
         onImportWorkosCredentials={importWorkosLoginCredentials}
         onRemoveCredentials={removeCredentials}
         onBubbleEnabledChange={changeSelectionBubble}
+        onExportBackup={exportBackup}
+        onInspectBackup={inspectBackup}
+        onImportBackup={importBackup}
         onClose={() => setSettingsOpen(false)}
         onClearHistory={() => setHistoryDeletion({ kind: 'all' })}
       />

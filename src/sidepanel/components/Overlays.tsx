@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   validateAgentUuid,
   type InternalV2Credentials,
@@ -11,6 +11,13 @@ import {
   storageUsagePercent,
   type LocalStorageUsage,
 } from '../../services/storageUsage';
+import type {
+  LocalBackupExportReceipt,
+  LocalBackupImportMode,
+  LocalBackupImportReceipt,
+  LocalBackupPreview,
+  LocalBackupStatus,
+} from '../../services/localBackup';
 import type { WorkosTransportKind } from '../../services/workosTransport';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
@@ -202,11 +209,16 @@ interface SettingsDrawerProps {
   bubbleEnabled: boolean;
   storageUsage: LocalStorageUsage | null;
   storageUsageIssue: string | null;
+  backupStatus: LocalBackupStatus | null;
+  backupStatusIssue: string | null;
   onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
   onRemoveCredentials: (kind: WorkosTransportKind) => Promise<void>;
   onBubbleEnabledChange: (enabled: boolean) => void;
+  onExportBackup: () => Promise<LocalBackupExportReceipt>;
+  onInspectBackup: (file: File) => Promise<LocalBackupPreview>;
+  onImportBackup: (file: File, mode: LocalBackupImportMode) => Promise<LocalBackupImportReceipt>;
   onClose: () => void;
   onClearHistory: () => void;
 }
@@ -218,11 +230,16 @@ export function SettingsDrawer({
   bubbleEnabled,
   storageUsage,
   storageUsageIssue,
+  backupStatus,
+  backupStatusIssue,
   onSaveConnection,
   onTestConnection,
   onImportWorkosCredentials,
   onRemoveCredentials,
   onBubbleEnabledChange,
+  onExportBackup,
+  onInspectBackup,
+  onImportBackup,
   onClose,
   onClearHistory,
 }: SettingsDrawerProps) {
@@ -232,6 +249,14 @@ export function SettingsDrawer({
   const [testState, setTestState] = useState<'idle' | 'testing' | 'passed' | 'error'>('idle');
   const [importState, setImportState] = useState<'idle' | 'importing' | 'imported' | 'error'>('idle');
   const [copyTemplateState, setCopyTemplateState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [backupExportState, setBackupExportState] = useState<'idle' | 'exporting' | 'exported' | 'error'>('idle');
+  const [backupExportIssue, setBackupExportIssue] = useState<string | null>(null);
+  const [backupFile, setBackupFile] = useState<File | null>(null);
+  const [backupPreview, setBackupPreview] = useState<LocalBackupPreview | null>(null);
+  const [backupImportState, setBackupImportState] = useState<'idle' | 'inspecting' | 'ready' | 'importing' | 'imported' | 'error'>('idle');
+  const [backupImportIssue, setBackupImportIssue] = useState<string | null>(null);
+  const [replaceBackupConfirmOpen, setReplaceBackupConfirmOpen] = useState(false);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -242,6 +267,13 @@ export function SettingsDrawer({
     setTestState('idle');
     setImportState('idle');
     setCopyTemplateState('idle');
+    setBackupExportState('idle');
+    setBackupExportIssue(null);
+    setBackupFile(null);
+    setBackupPreview(null);
+    setBackupImportState('idle');
+    setBackupImportIssue(null);
+    setReplaceBackupConfirmOpen(false);
     setLocalError(null);
   }, [open, settings]);
 
@@ -312,6 +344,67 @@ export function SettingsDrawer({
       window.setTimeout(() => setCopyTemplateState('idle'), 2000);
     }
   };
+
+  const exportBackup = () => {
+    setBackupExportState('exporting');
+    setBackupExportIssue(null);
+    void onExportBackup()
+      .then(() => {
+        setBackupExportState('exported');
+        window.setTimeout(() => setBackupExportState('idle'), 1_600);
+      })
+      .catch((error: unknown) => {
+        setBackupExportState('error');
+        setBackupExportIssue(error instanceof Error ? error.message : '本地备份导出失败，请重试。');
+      });
+  };
+
+  const inspectBackup = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+    setBackupFile(file);
+    setBackupPreview(null);
+    setBackupImportIssue(null);
+    setReplaceBackupConfirmOpen(false);
+    if (!file) {
+      setBackupImportState('idle');
+      return;
+    }
+    setBackupImportState('inspecting');
+    void onInspectBackup(file)
+      .then((preview) => {
+        setBackupPreview(preview);
+        setBackupImportState('ready');
+      })
+      .catch((error: unknown) => {
+        setBackupImportState('error');
+        setBackupImportIssue(error instanceof Error ? error.message : '无法读取这份备份，请换一个文件重试。');
+      });
+  };
+
+  const importBackup = (mode: LocalBackupImportMode) => {
+    if (!backupFile || !backupPreview) return;
+    setBackupImportState('importing');
+    setBackupImportIssue(null);
+    setReplaceBackupConfirmOpen(false);
+    void onImportBackup(backupFile, mode)
+      .then(() => setBackupImportState('imported'))
+      .catch((error: unknown) => {
+        setBackupImportState('error');
+        setBackupImportIssue(error instanceof Error ? error.message : '备份导入失败，本机数据没有改变；请重试或换一份备份。');
+      });
+  };
+
+  const lastBackupLabel = backupStatus?.lastExportedAt
+    ? new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date(backupStatus.lastExportedAt))
+    : '尚未导出';
 
   if (!open) return null;
 
@@ -621,6 +714,139 @@ export function SettingsDrawer({
               <p>迁移备份 {formatStorageBytes(storageUsage.legacyBackupBytes)}，稳定观察期结束后清理。</p>
             )}
             <p>历史使用 IndexedDB，配置使用扩展本地存储；可用空间为浏览器估算值。</p>
+          </section>
+
+          <section className="settings-section local-backup-section">
+            <div className="local-backup-heading">
+              <div>
+                <strong>本地数据备份</strong>
+                <p>把会话和阅读卡片保存为可迁移的页脉备份。</p>
+              </div>
+              <span>格式 v1</span>
+            </div>
+            {backupStatus ? (
+              <dl className="local-backup-counts" aria-label="本地知识资产数量">
+                <div><dt>会话</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.conversations)}</dd></div>
+                <div><dt>消息</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.messages)}</dd></div>
+                <div><dt>来源</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.sources)}</dd></div>
+                <div><dt>产物</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.artifacts)}</dd></div>
+                <div><dt>阅读卡片</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.readingCards)}</dd></div>
+              </dl>
+            ) : (
+              <p>{backupStatusIssue ?? '正在统计本地知识资产…'}</p>
+            )}
+            <div className="local-backup-action-row">
+              <div>
+                <span>上次导出</span>
+                <strong>{lastBackupLabel}</strong>
+              </div>
+              <button
+                className={`local-backup-export-button is-${backupExportState} pressable`}
+                type="button"
+                disabled={!backupStatus || backupExportState === 'exporting'}
+                onClick={exportBackup}
+                aria-live="polite"
+              >
+                <KoboyoIcon
+                  name={backupExportState === 'exporting'
+                    ? 'cycle'
+                    : backupExportState === 'exported'
+                      ? 'solid-checkmark'
+                      : 'file'}
+                  size={14}
+                  className={backupExportState === 'exporting' ? 'is-spinning' : ''}
+                />
+                {backupExportState === 'exporting'
+                  ? '正在整理…'
+                  : backupExportState === 'exported'
+                    ? '已开始下载'
+                    : backupExportState === 'error'
+                      ? '重新导出'
+                      : '导出页脉备份'}
+              </button>
+            </div>
+            {(backupExportIssue || (backupStatus && backupStatusIssue)) && (
+              <p className="local-backup-error" role="status">{backupExportIssue ?? backupStatusIssue}</p>
+            )}
+            <p className="local-backup-privacy">不包含 Token、身份 UUID、临时文件内容和当前界面状态。</p>
+            <div className="local-backup-import">
+              <div className="local-backup-import-heading">
+                <div>
+                  <strong>从备份恢复</strong>
+                  <p>先检查文件和内容数量，再决定如何写入。</p>
+                </div>
+                <button
+                  className="local-backup-file-button pressable"
+                  type="button"
+                  disabled={backupImportState === 'inspecting' || backupImportState === 'importing'}
+                  onClick={() => backupFileInputRef.current?.click()}
+                  aria-live="polite"
+                >
+                  <KoboyoIcon name="file" size={13} />
+                  {backupImportState === 'inspecting' ? '正在检查…' : backupPreview ? '换一个文件' : '选择备份'}
+                </button>
+                <input
+                  ref={backupFileInputRef}
+                  className="local-backup-file-input"
+                  type="file"
+                  name="yemaiBackupFile"
+                  aria-label="选择页脉备份文件"
+                  accept=".json,.yemai.json,application/json"
+                  onChange={inspectBackup}
+                  tabIndex={-1}
+                />
+              </div>
+              {backupPreview && (
+                <div className="local-backup-preview">
+                  <div className="local-backup-preview-copy">
+                    <strong title={backupPreview.filename}>{backupPreview.filename}</strong>
+                    <span>
+                      页脉 {backupPreview.appVersion} · {formatStorageBytes(backupPreview.bytes)} · {' '}
+                      {new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(backupPreview.exportedAt))}
+                    </span>
+                  </div>
+                  <p>
+                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.conversations)} 个会话 · {' '}
+                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.messages)} 条消息 · {' '}
+                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.readingCards)} 张卡片
+                  </p>
+                  <div className="local-backup-import-actions">
+                    <button
+                      className="local-backup-merge-button pressable"
+                      type="button"
+                      disabled={backupImportState === 'importing' || backupImportState === 'imported'}
+                      onClick={() => importBackup('merge')}
+                      aria-live="polite"
+                    >
+                      {backupImportState === 'importing'
+                        ? '正在写入…'
+                        : backupImportState === 'imported'
+                          ? '导入完成，即将刷新'
+                          : '合并到本机'}
+                    </button>
+                    <button
+                      className="local-backup-replace-button pressable"
+                      type="button"
+                      disabled={backupImportState === 'importing' || backupImportState === 'imported'}
+                      onClick={() => setReplaceBackupConfirmOpen(true)}
+                    >
+                      替换全部…
+                    </button>
+                  </div>
+                </div>
+              )}
+              {replaceBackupConfirmOpen && backupPreview && (
+                <div className="local-backup-replace-confirm" role="alert">
+                  <strong>确认替换全部本地知识？</strong>
+                  <p>现有会话、消息、来源、产物和阅读卡片都会被这份备份替换；连接凭据与设置不受影响。</p>
+                  <div>
+                    <button className="secondary-button pressable" type="button" onClick={() => setReplaceBackupConfirmOpen(false)}>取消</button>
+                    <button className="danger-confirm pressable" type="button" onClick={() => importBackup('replace')}>确认替换</button>
+                  </div>
+                </div>
+              )}
+              {backupImportIssue && <p className="local-backup-error" role="alert">{backupImportIssue}</p>}
+            </div>
           </section>
 
           <section className="settings-section settings-section--danger">
