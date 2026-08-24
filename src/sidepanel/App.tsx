@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { browser } from 'wxt/browser';
 import { normalizeSourceIdentityUrl } from '../content/pageManifest';
 import {
@@ -62,9 +62,7 @@ import {
 } from './agentQueue';
 import type { AnswerContextSource } from './answerContext';
 import { Composer } from './components/Composer';
-import { CommandPalette } from './components/CommandPalette';
 import { MessageList, type ReadingCardFeedbackOrigin } from './components/MessageList';
-import { ReadingCardsPanel } from './components/ReadingCardsPanel';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
 import {
@@ -105,6 +103,10 @@ import {
 } from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
 import { createReadingCard, openReadingCardSourceInWorkspace, readingCardId } from './readingCards';
+import {
+  WorkspaceSearchSessionController,
+  type WorkspaceSearchSession,
+} from './searchSession';
 import { PAGE_OVERVIEW_PROMPT } from './starterActions';
 import type {
   AgentDecision,
@@ -118,6 +120,11 @@ import type {
   WorkspaceState,
 } from './types';
 import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
+
+const CommandPalette = lazy(() => import('./components/CommandPalette')
+  .then((module) => ({ default: module.CommandPalette })));
+const ReadingCardsPanel = lazy(() => import('./components/ReadingCardsPanel')
+  .then((module) => ({ default: module.ReadingCardsPanel })));
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -274,11 +281,11 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [readingCardsOpen, setReadingCardsOpen] = useState(false);
   const [readingCards, setReadingCards] = useState<ReadingCardRow[]>([]);
+  const [readingCardsLoaded, setReadingCardsLoaded] = useState(false);
   const [readingCardsIssue, setReadingCardsIssue] = useState<string | undefined>();
   const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
   const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchWorkspace, setSearchWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
+  const [searchSession, setSearchSession] = useState<WorkspaceSearchSession | null>(null);
   const [searchNavigationTarget, setSearchNavigationTarget] = useState<{
     conversationId: string;
     messageId: string;
@@ -299,6 +306,7 @@ export default function App() {
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
+  const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
   const readingCardWritesRef = useRef(new Set<string>());
   const readingCardFeedbackSequenceRef = useRef(0);
   const readingCardFeedbackTimerRef = useRef<number | null>(null);
@@ -831,11 +839,18 @@ export default function App() {
   }, []);
 
   const openCommandPalette = useCallback(() => {
-    setSearchWorkspace(workspaceRef.current);
-    setSearchOpen(true);
+    setSearchSession(searchSessionControllerRef.current.open(
+      workspaceRef.current,
+      readingCardsRef.current,
+    ));
     setHistoryOpen(false);
     setReadingCardsOpen(false);
     setSettingsOpen(false);
+  }, []);
+
+  const closeCommandPalette = useCallback(() => {
+    searchSessionControllerRef.current.close();
+    setSearchSession(null);
   }, []);
 
   const closeReadingCards = useCallback(() => {
@@ -845,11 +860,12 @@ export default function App() {
 
   const openReadingCards = useCallback(() => {
     setReadingCardSelectionId(undefined);
+    setReadingCardsLoaded(true);
     setReadingCardsOpen(true);
     setHistoryOpen(false);
-    setSearchOpen(false);
+    closeCommandPalette();
     setSettingsOpen(false);
-  }, []);
+  }, [closeCommandPalette]);
 
   const showReadingCardFeedback = useCallback((origin?: ReadingCardFeedbackOrigin) => {
     const trigger = document.querySelector<HTMLElement>('[data-reading-cards-trigger="true"]');
@@ -969,14 +985,14 @@ export default function App() {
         return;
       }
       if (event.key === 'Escape') {
-        setSearchOpen(false);
+        closeCommandPalette();
         setHistoryOpen(false);
         setSettingsOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [openCommandPalette]);
+  }, [closeCommandPalette, openCommandPalette]);
 
   const startNewConversation = () => {
     if (!workspaceHydrated || workspace.openTabs.length >= MAX_OPEN_TABS) return;
@@ -1012,8 +1028,9 @@ export default function App() {
 
   const selectSearchResult = useCallback((result: WorkspaceSearchResult, query: string) => {
     if (result.kind === 'reading-card' && result.readingCardId) {
-      setSearchOpen(false);
+      closeCommandPalette();
       setReadingCardSelectionId(result.readingCardId);
+      setReadingCardsLoaded(true);
       setReadingCardsOpen(true);
       return;
     }
@@ -1022,7 +1039,7 @@ export default function App() {
     if (next === current) return;
     workspaceRef.current = next;
     setWorkspace(next);
-    setSearchOpen(false);
+    closeCommandPalette();
     if (result.messageId) {
       searchNavigationRequestRef.current += 1;
       setSearchNavigationTarget({
@@ -1035,7 +1052,7 @@ export default function App() {
     } else {
       setSearchNavigationTarget(null);
     }
-  }, []);
+  }, [closeCommandPalette]);
 
   const archiveConversation = (conversationId: string) => {
     setWorkspace((current) => {
@@ -2020,7 +2037,7 @@ export default function App() {
         onOpenSettings={() => {
           setSettingsOpen(true);
           setReadingCardsOpen(false);
-          setSearchOpen(false);
+          closeCommandPalette();
           setHistoryOpen(false);
         }}
       />
@@ -2105,7 +2122,7 @@ export default function App() {
         onNewConversation={startNewConversation}
         onToggleHistory={() => {
           setReadingCardsOpen(false);
-          setSearchOpen(false);
+          closeCommandPalette();
           setSettingsOpen(false);
           setHistoryOpen((value) => !value);
         }}
@@ -2157,24 +2174,30 @@ export default function App() {
         onDeleteArchived={requestDeleteArchivedConversation}
         onClearArchived={requestClearArchived}
       />
-      <CommandPalette
-        open={searchOpen}
-        workspace={searchWorkspace}
-        readingCards={readingCards}
-        maxTabs={MAX_OPEN_TABS}
-        onClose={() => setSearchOpen(false)}
-        onSelect={selectSearchResult}
-      />
-      <ReadingCardsPanel
-        open={readingCardsOpen}
-        cards={readingCards}
-        conversations={workspace.conversations}
-        selectedCardId={readingCardSelectionId}
-        issue={readingCardsIssue}
-        onClose={closeReadingCards}
-        onRemove={setReadingCardDeletion}
-        onOpenSource={openReadingCardSource}
-      />
+      {searchSession && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            session={searchSession}
+            maxTabs={MAX_OPEN_TABS}
+            onClose={closeCommandPalette}
+            onSelect={selectSearchResult}
+          />
+        </Suspense>
+      )}
+      {readingCardsLoaded && (
+        <Suspense fallback={null}>
+          <ReadingCardsPanel
+            open={readingCardsOpen}
+            cards={readingCards}
+            conversations={workspace.conversations}
+            selectedCardId={readingCardSelectionId}
+            issue={readingCardsIssue}
+            onClose={closeReadingCards}
+            onRemove={setReadingCardDeletion}
+            onOpenSource={openReadingCardSource}
+          />
+        </Suspense>
+      )}
       <SettingsDrawer
         open={settingsOpen}
         settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
