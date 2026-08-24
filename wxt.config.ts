@@ -8,8 +8,8 @@ export default defineConfig({
       name: development ? '页脉 · AI 阅读助手 DEV' : '页脉 · AI 阅读助手',
       short_name: development ? '页脉 DEV' : '页脉',
       description: '读过的，终会连起来。时间让零散的阅读，慢慢显出形状。',
-      version: '0.4.1',
-      version_name: development ? '0.4.1 DEV' : '0.4.1',
+      version: '0.5.0',
+      version_name: development ? '0.5.0 DEV' : '0.5.0',
       minimum_chrome_version: '116',
       permissions: ['sidePanel', 'storage', 'favicon'],
       host_permissions: [

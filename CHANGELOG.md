@@ -6,6 +6,29 @@
 
 暂无。
 
+## [0.5.0] - 2026-08-24
+
+页脉本地知识资产备份、迁移与可读导出版本。
+
+### 新增
+
+- 设置页新增版本化页脉备份，可在一个只读事务中导出会话、消息、来源、Agent 产物和阅读卡片，并显示各类资产数量与上次导出时间。
+- 新增备份文件预览与安全导入：写入前校验文件大小、格式版本、实体结构、数量和引用关系；默认合并，重复导入不会制造重复数据。
+- 新增“替换全部本地知识”高风险流程，二次确认后在单个 IndexedDB 事务中清空并恢复五类资产，任一写入或回读失败都会整体回滚。
+- 阅读卡片支持单张导出 Markdown，以及把全部卡片合并导出为一个 Markdown 文件；保留标题、正文、来源、收藏时间和可用的产物链接。
+
+### 安全
+
+- 备份 Module 不读取扩展连接配置和数据库元数据；Token、User UUID、Organization UUID 不会进入备份。
+- 导出时移除临时 `blob:` / `data:` 地址、当前浏览器标签绑定和内部会话交接文本；导入发现这些字段时在数据库写入前拒绝。
+- 导入完成后重新加载工作区，连接凭据、Agent 设置和其他本机偏好不被覆盖。
+
+### 修复
+
+- 修复仅含图片或文件产物、正文为空的合法回答被备份导入误判为“消息结构不完整”的问题；空正文仍需保持正确的字符串类型。
+- 修复尚未绑定网页、URL 为空的占位来源被备份导入误判为“来源缺少有效 URL”的问题。
+- 备份确有字段缺失时，校验提示会指出具体实体、序号和字段名，便于定位原因。
+
 ## [0.4.1] - 2026-08-24
 
 页脉搜索生命周期与发布工程收口版本。
@@ -138,7 +161,8 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.1
 [0.4.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.0
 [0.3.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.3.0
