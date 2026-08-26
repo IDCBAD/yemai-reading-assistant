@@ -7,8 +7,6 @@ import {
 import { YEMAI_AGENT_MD_TEMPLATE } from '../../services/recommendedAgentTemplate';
 import {
   formatStorageBytes,
-  formatStoragePercent,
-  storageUsagePercent,
   type LocalStorageUsage,
 } from '../../services/storageUsage';
 import type {
@@ -19,11 +17,17 @@ import type {
   LocalBackupStatus,
 } from '../../services/localBackup';
 import type { WorkosTransportKind } from '../../services/workosTransport';
+import {
+  actionPresentation,
+  clearHistoryImpact,
+  replaceKnowledgeImpact,
+} from '../actionSemantics';
 import { buildConversationForest, type ConversationTreeNode } from '../conversationHierarchy';
 import type { Conversation, OpenConversationTab } from '../types';
 import { uploadChannelCapabilities } from '../fileTypes';
+import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
-import { KoboyoIcon } from './KoboyoIcon';
+import { KoboyoIcon, type KoboyoIconName } from './KoboyoIcon';
 
 interface HistoryPopoverProps {
   open: boolean;
@@ -177,7 +181,7 @@ export function HistoryPopover({
           </button>
           {view === 'archived' && archivedConversations.length > 0 ? (
             <button className="history-clear-archived pressable" type="button" onClick={onClearArchived}>
-              <KoboyoIcon name="trash" size={11} />
+              <KoboyoIcon name="history-clear" size={13} />
               清空已归档
             </button>
           ) : (
@@ -256,6 +260,7 @@ export function SettingsDrawer({
   const [backupImportState, setBackupImportState] = useState<'idle' | 'inspecting' | 'ready' | 'importing' | 'imported' | 'error'>('idle');
   const [backupImportIssue, setBackupImportIssue] = useState<string | null>(null);
   const [replaceBackupConfirmOpen, setReplaceBackupConfirmOpen] = useState(false);
+  const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -274,6 +279,7 @@ export function SettingsDrawer({
     setBackupImportState('idle');
     setBackupImportIssue(null);
     setReplaceBackupConfirmOpen(false);
+    setClearHistoryConfirmOpen(false);
     setLocalError(null);
   }, [open, settings]);
 
@@ -324,8 +330,6 @@ export function SettingsDrawer({
   };
 
   const agentUuidError = draft.agentUuid.trim() ? validateAgentUuid(draft.agentUuid) : null;
-  const localStoragePercent = storageUsage ? storageUsagePercent(storageUsage) : 0;
-  const storageTone = localStoragePercent >= 90 ? 'critical' : localStoragePercent >= 70 ? 'warning' : 'normal';
   const activeConfigured = validateAgentUuid(draft.agentUuid) === null && (draft.transport === 'public-v1'
     ? Boolean(draft.publicApiToken.trim())
     : Boolean(
@@ -351,7 +355,7 @@ export function SettingsDrawer({
     void onExportBackup()
       .then(() => {
         setBackupExportState('exported');
-        window.setTimeout(() => setBackupExportState('idle'), 1_600);
+        window.setTimeout(() => setBackupExportState('idle'), 800);
       })
       .catch((error: unknown) => {
         setBackupExportState('error');
@@ -405,7 +409,28 @@ export function SettingsDrawer({
         hour12: false,
       }).format(new Date(backupStatus.lastExportedAt))
     : '尚未导出';
-
+  const backupExportPresentation = actionPresentation(
+    'export-backup',
+    backupExportState === 'exporting'
+      ? 'working'
+      : backupExportState === 'exported'
+        ? 'success'
+        : backupExportState,
+  );
+  const backupFilePresentation = actionPresentation(
+    'select-backup',
+    backupImportState === 'inspecting'
+      ? 'working'
+      : backupPreview
+        ? 'success'
+        : backupImportState === 'error'
+          ? 'error'
+          : 'idle',
+  );
+  const clearImpact = backupStatus ? clearHistoryImpact(backupStatus.counts) : null;
+  const replaceImpact = backupStatus && backupPreview
+    ? replaceKnowledgeImpact(backupStatus.counts, backupPreview.counts)
+    : null;
   if (!open) return null;
 
   return (
@@ -413,10 +438,7 @@ export function SettingsDrawer({
       <button className="overlay-scrim" type="button" tabIndex={-1} onClick={onClose} aria-label="关闭设置" />
       <aside className="drawer drawer--right" role="dialog" aria-label="设置" aria-modal="true">
         <div className="drawer-header">
-          <div>
-            <p className="eyebrow">本机设置</p>
-            <h2>连接与隐私</h2>
-          </div>
+          <h2>设置</h2>
           <button className="icon-button pressable" type="button" onClick={onClose} aria-label="关闭设置">
             <KoboyoIcon name="cross" size={16} />
           </button>
@@ -430,6 +452,7 @@ export function SettingsDrawer({
               submitConnection();
             }}
           >
+            <strong>WorkOS 连接</strong>
             <label htmlFor="workos-agent-uuid">Agent UUID</label>
             <div className="agent-uuid-field">
               <input
@@ -440,11 +463,9 @@ export function SettingsDrawer({
                 placeholder="粘贴你自己的 Agent UUID"
                 autoComplete="off"
                 spellCheck={false}
-                aria-describedby="workos-agent-uuid-help"
                 aria-invalid={Boolean(agentUuidError)}
               />
             </div>
-            <p className="field-help" id="workos-agent-uuid-help">v1 与 v2 共用。更换后，下一条消息会连接新 Agent，并携带当前会话的可见上下文。</p>
             {agentUuidError && <p className="token-error" role="alert">{agentUuidError}</p>}
 
             <label>连接通道</label>
@@ -472,14 +493,30 @@ export function SettingsDrawer({
             </div>
             <div className="transport-capabilities" aria-label="当前连接支持的附件类型">
               <span>当前连接支持</span>
-              <ul>
-                {uploadChannelCapabilities(draft.transport).map((capability) => (
-                  <li key={capability}>
-                    <KoboyoIcon name="solid-checkmark" size={10} />
-                    {capability}
-                  </li>
-                ))}
-              </ul>
+              <div className="capability-logo-loop">
+                <div className="capability-logo-track">
+                  {[false, true].map((duplicate) => (
+                    <ul
+                      className="capability-logo-group"
+                      key={duplicate ? 'duplicate' : 'primary'}
+                      aria-hidden={duplicate || undefined}
+                    >
+                      {uploadChannelCapabilities(draft.transport).map((capability) => (
+                        <li key={capability.id}>
+                          <span className="capability-logo-icon" aria-hidden="true">
+                            <FileTypeIcon
+                              filename={capability.filename}
+                              mime={capability.mime}
+                              variant="token"
+                            />
+                          </span>
+                          <span>{capability.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {draft.transport === 'public-v1' ? (
@@ -500,18 +537,16 @@ export function SettingsDrawer({
                     <KoboyoIcon name={showToken ? 'eye-off' : 'eye'} size={16} />
                   </button>
                 </div>
-                <p className="field-help">官方配置简单，但 WorkOS 当前的 v1 多轮流式存在已确认问题。</p>
+                <p className="field-help">v1 暂不支持稳定的多轮流式对话。</p>
               </>
             ) : (
               <>
                 <div className="experimental-note">
-                  <strong>个人实验通道</strong>
-                  <p>使用 WorkOS 当前网页端协议。接口正式开放前，平台更新可能导致连接失效。</p>
+                  <p>实验功能，WorkOS 更新后可能暂时不可用。</p>
                 </div>
                 <div className={`credential-import is-${importState}`}>
                   <div>
                     <strong>WorkOS 登录信息</strong>
-                    <p>读取 3 项固定字段，只填入当前表单。</p>
                   </div>
                   <button
                     className="credential-import-button pressable"
@@ -586,7 +621,6 @@ export function SettingsDrawer({
                     />
                   </label>
                 </div>
-                <p className="field-help">身份标识会在每次请求前按 WorkOS 网页端规则加密，只保存在本机扩展中。</p>
               </>
             )}
             {(localError || connectionIssue) && (
@@ -618,7 +652,7 @@ export function SettingsDrawer({
                 type="submit"
                 disabled={!activeConfigured || saveState === 'saving'}
               >
-                {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存在本机' : '保存连接'}
+                {saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存' : '保存连接'}
               </button>
             </div>
             {activeConfigured && (
@@ -646,7 +680,7 @@ export function SettingsDrawer({
             <div className="agent-template-heading">
               <div>
                 <strong>Agent.md 推荐模板</strong>
-                <p>复制到 WorkOS Agent 的最高优先级人设中，让 Agent 正确理解页脉的上下文和安全边界。</p>
+                <p>让 Agent 正确识别页脉提供的上下文。</p>
               </div>
               <button
                 className="copy-template-button pressable"
@@ -669,60 +703,41 @@ export function SettingsDrawer({
           <section className="settings-section settings-section--row">
             <div>
               <strong>划词悬浮入口</strong>
-              <p>侧边栏关闭时，划词后显示轻量入口。</p>
+              <p>侧边栏关闭时，划词显示快捷入口。</p>
             </div>
             <button className={`switch pressable${bubbleEnabled ? ' is-on' : ''}`} type="button" role="switch" aria-checked={bubbleEnabled} onClick={() => onBubbleEnabledChange(!bubbleEnabled)}>
               <span />
             </button>
           </section>
 
-          <section className="security-note">
-            <KoboyoIcon name="shield-check" size={18} />
-            <div>
-              <strong>凭据仅在本机流转</strong>
-              <p>只有主动获取时才读取 WorkOS 的 3 个固定字段；不会进入聊天正文，也不会自动保存。</p>
-            </div>
-          </section>
-
           <section className="settings-section storage-usage-section">
-            <div className="storage-usage-heading">
-              <strong>本地历史占用空间</strong>
-              <span className={`is-${storageTone}`}>
-                {storageUsage ? formatStoragePercent(localStoragePercent) : '计算中'}
-              </span>
-            </div>
-            <div
-              className={`storage-usage-track is-${storageTone}`}
-              role="progressbar"
-              aria-label="扩展本地存储占用"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={storageUsage ? Math.round(localStoragePercent) : undefined}
-            >
-              <span style={{ transform: `scaleX(${localStoragePercent / 100})` }} />
-            </div>
+            <strong>本地知识占用</strong>
             {storageUsage ? (
-              <div className="storage-usage-meta">
-                <span>会话与阅读卡片 {formatStorageBytes(storageUsage.historyBytes)} · 配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
-                <span>合计 {formatStorageBytes(storageUsage.totalBytes)} / {formatStorageBytes(storageUsage.quotaBytes)}</span>
-              </div>
+              <>
+                <div className="storage-usage-card">
+                  <div>
+                    <span>已使用</span>
+                    <strong>约 {formatStorageBytes(storageUsage.knowledgeBytes)}</strong>
+                  </div>
+                  <small>本机</small>
+                </div>
+                <div className="storage-usage-breakdown">
+                  <span>会话与卡片 {formatStorageBytes(storageUsage.historyBytes)}</span>
+                  <span>配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
+                </div>
+              </>
             ) : (
-              <p>{storageUsageIssue ?? '正在读取 Chrome 本地存储用量…'}</p>
+              <p>{storageUsageIssue ?? '正在计算本地知识占用…'}</p>
             )}
             {storageUsage && storageUsageIssue && <p role="status">{storageUsageIssue}</p>}
-            {storageUsage && storageUsage.legacyBackupBytes > 0 && (
-              <p>迁移备份 {formatStorageBytes(storageUsage.legacyBackupBytes)}，稳定观察期结束后清理。</p>
-            )}
-            <p>历史使用 IndexedDB，配置使用扩展本地存储；可用空间为浏览器估算值。</p>
           </section>
 
           <section className="settings-section local-backup-section">
             <div className="local-backup-heading">
               <div>
                 <strong>本地数据备份</strong>
-                <p>把会话和阅读卡片保存为可迁移的页脉备份。</p>
+                <p>把会话和阅读卡片保存到本地。</p>
               </div>
-              <span>格式 v1</span>
             </div>
             {backupStatus ? (
               <dl className="local-backup-counts" aria-label="本地知识资产数量">
@@ -748,32 +763,21 @@ export function SettingsDrawer({
                 aria-live="polite"
               >
                 <KoboyoIcon
-                  name={backupExportState === 'exporting'
-                    ? 'cycle'
-                    : backupExportState === 'exported'
-                      ? 'solid-checkmark'
-                      : 'file'}
+                  name={backupExportPresentation.icon}
                   size={14}
-                  className={backupExportState === 'exporting' ? 'is-spinning' : ''}
+                  className={backupExportPresentation.spinning ? 'is-spinning' : ''}
                 />
-                {backupExportState === 'exporting'
-                  ? '正在整理…'
-                  : backupExportState === 'exported'
-                    ? '已开始下载'
-                    : backupExportState === 'error'
-                      ? '重新导出'
-                      : '导出页脉备份'}
+                {backupExportPresentation.label}
               </button>
             </div>
             {(backupExportIssue || (backupStatus && backupStatusIssue)) && (
               <p className="local-backup-error" role="status">{backupExportIssue ?? backupStatusIssue}</p>
             )}
-            <p className="local-backup-privacy">不包含 Token、身份 UUID、临时文件内容和当前界面状态。</p>
             <div className="local-backup-import">
               <div className="local-backup-import-heading">
                 <div>
                   <strong>从备份恢复</strong>
-                  <p>先检查文件和内容数量，再决定如何写入。</p>
+                  <p>导入本地备份文件。</p>
                 </div>
                 <button
                   className="local-backup-file-button pressable"
@@ -782,15 +786,19 @@ export function SettingsDrawer({
                   onClick={() => backupFileInputRef.current?.click()}
                   aria-live="polite"
                 >
-                  <KoboyoIcon name="file" size={13} />
-                  {backupImportState === 'inspecting' ? '正在检查…' : backupPreview ? '换一个文件' : '选择备份'}
+                  <KoboyoIcon
+                    name={backupFilePresentation.icon}
+                    size={14}
+                    className={backupFilePresentation.spinning ? 'is-spinning' : ''}
+                  />
+                  {backupFilePresentation.label}
                 </button>
                 <input
                   ref={backupFileInputRef}
                   className="local-backup-file-input"
                   type="file"
                   name="yemaiBackupFile"
-                  aria-label="选择页脉备份文件"
+                  aria-label="选择本地备份文件"
                   accept=".json,.yemai.json,application/json"
                   onChange={inspectBackup}
                   tabIndex={-1}
@@ -828,7 +836,9 @@ export function SettingsDrawer({
                       className="local-backup-replace-button pressable"
                       type="button"
                       disabled={backupImportState === 'importing' || backupImportState === 'imported'}
-                      onClick={() => setReplaceBackupConfirmOpen(true)}
+                      aria-expanded={replaceBackupConfirmOpen}
+                      aria-controls="replace-knowledge-impact"
+                      onClick={() => setReplaceBackupConfirmOpen((current) => !current)}
                     >
                       替换全部…
                     </button>
@@ -836,12 +846,32 @@ export function SettingsDrawer({
                 </div>
               )}
               {replaceBackupConfirmOpen && backupPreview && (
-                <div className="local-backup-replace-confirm" role="alert">
-                  <strong>确认替换全部本地知识？</strong>
-                  <p>现有会话、消息、来源、产物和阅读卡片都会被这份备份替换；连接凭据与设置不受影响。</p>
-                  <div>
+                <div
+                  id="replace-knowledge-impact"
+                  className="destructive-impact-panel"
+                  role="region"
+                  aria-labelledby="replace-knowledge-impact-title"
+                >
+                  <div className="destructive-impact-heading">
+                    <span><KoboyoIcon name="database-replace" size={19} /></span>
+                    <div>
+                      <strong id="replace-knowledge-impact-title">替换本地数据？</strong>
+                    </div>
+                  </div>
+                  {replaceImpact && (
+                    <div className="knowledge-count-comparison" aria-label="替换前后消息数量">
+                      <div><span>当前本机</span><strong>{replaceImpact.currentMessages} 条消息</strong></div>
+                      <span aria-hidden="true">→</span>
+                      <div><span>导入后</span><strong>{replaceImpact.incomingMessages} 条消息</strong></div>
+                    </div>
+                  )}
+                  <dl className="destructive-impact-list">
+                    <div className="is-affected"><dt>将替换</dt><dd>{replaceImpact?.affected ?? '现有本地知识资产'}</dd></div>
+                    <div><dt>仍保留</dt><dd>{replaceImpact?.preserved ?? '连接设置和界面偏好'}</dd></div>
+                  </dl>
+                  <div className="destructive-impact-actions">
                     <button className="secondary-button pressable" type="button" onClick={() => setReplaceBackupConfirmOpen(false)}>取消</button>
-                    <button className="danger-confirm pressable" type="button" onClick={() => importBackup('replace')}>确认替换</button>
+                    <button className="danger-confirm pressable" type="button" onClick={() => importBackup('replace')}>替换全部知识</button>
                   </div>
                 </div>
               )}
@@ -851,11 +881,40 @@ export function SettingsDrawer({
 
           <section className="settings-section settings-section--danger">
             <strong>删除本地数据</strong>
-            <p>清除会话、工作页和消息；阅读卡片与 WorkOS 后台数据会保留。</p>
-            <button className="danger-button pressable" type="button" onClick={onClearHistory}>
-              <KoboyoIcon name="trash" size={15} />
+            <button
+              className="danger-button pressable"
+              type="button"
+              aria-expanded={clearHistoryConfirmOpen}
+              aria-controls="clear-history-impact"
+              onClick={() => setClearHistoryConfirmOpen((current) => !current)}
+            >
+              <KoboyoIcon name="history-clear" size={16} />
               清空本地历史
             </button>
+            {clearHistoryConfirmOpen && (
+              <div
+                id="clear-history-impact"
+                className="destructive-impact-panel"
+                role="region"
+                aria-labelledby="clear-history-impact-title"
+              >
+                <div className="destructive-impact-heading">
+                  <span><KoboyoIcon name="history-clear" size={19} /></span>
+                  <div>
+                    <strong id="clear-history-impact-title">清空本地历史？</strong>
+                    <p>完成后会创建一个新的空会话。</p>
+                  </div>
+                </div>
+                <dl className="destructive-impact-list">
+                  <div className="is-affected"><dt>将删除</dt><dd>{clearImpact?.affected ?? '全部本机会话、消息和临时资源'}</dd></div>
+                  <div><dt>仍保留</dt><dd>{clearImpact?.preserved ?? '阅读卡片和连接设置'}</dd></div>
+                </dl>
+                <div className="destructive-impact-actions">
+                  <button className="secondary-button pressable" type="button" onClick={() => setClearHistoryConfirmOpen(false)}>取消</button>
+                  <button className="danger-confirm pressable" type="button" onClick={onClearHistory}>清空本地历史</button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </aside>
@@ -865,34 +924,85 @@ export function SettingsDrawer({
 
 interface ConfirmDialogProps {
   open: boolean;
+  icon: KoboyoIconName;
   title: string;
   description: string;
+  affected: string;
+  preserved: string;
   confirmLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function ConfirmDialog({ open, title, description, confirmLabel, onCancel, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({
+  open,
+  icon,
+  title,
+  description,
+  affected,
+  preserved,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: ConfirmDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => cancelRef.current?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancel();
+      if (event.key === 'Escape') {
+        onCancel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])') ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const activeElement = document.activeElement;
+      if (event.shiftKey && (activeElement === first || !dialogRef.current?.contains(activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (activeElement === last || !dialogRef.current?.contains(activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus();
+    };
   }, [open, onCancel]);
 
   if (!open) return null;
 
   return (
     <div className="dialog-layer" role="presentation">
-      <button className="dialog-scrim" type="button" tabIndex={-1} onClick={onCancel} aria-label="取消删除" />
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <span className="dialog-icon" aria-hidden="true"><KoboyoIcon name="trash" size={19} /></span>
+      <button className="dialog-scrim" type="button" tabIndex={-1} onClick={onCancel} aria-label="取消当前操作" />
+      <div
+        ref={dialogRef}
+        className="confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-description"
+      >
+        <span className="dialog-icon" aria-hidden="true"><KoboyoIcon name={icon} size={19} /></span>
         <h2 id="confirm-title">{title}</h2>
-        <p>{description}</p>
+        <p id="confirm-description">{description}</p>
+        <dl className="confirm-dialog-scope">
+          <div className="is-affected"><dt>将删除</dt><dd>{affected}</dd></div>
+          <div><dt>仍保留</dt><dd>{preserved}</dd></div>
+        </dl>
         <div className="dialog-actions">
-          <button className="secondary-button pressable" type="button" onClick={onCancel}>取消</button>
+          <button ref={cancelRef} className="secondary-button pressable" type="button" onClick={onCancel}>取消</button>
           <button className="danger-confirm pressable" type="button" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>

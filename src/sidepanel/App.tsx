@@ -91,6 +91,12 @@ import {
 } from './contextItems';
 import { openCommandPaletteResult } from './commandPalette';
 import {
+  historyDeletionPresentation,
+  removeReadingCardForUndo,
+  restoreReadingCardFromUndo,
+  type ReadingCardRemovalUndo,
+} from './actionSemantics';
+import {
   messageDecisionInteractions,
   normalizeAgentDecisionAnswers,
   settleAgentInteraction,
@@ -248,9 +254,8 @@ function conversationAttachmentResources(conversation: Conversation): Attachment
 }
 
 type HistoryDeletionRequest =
-  | { kind: 'all' }
-  | { kind: 'archived'; count: number }
-  | { kind: 'conversation'; conversationId: string; title: string };
+  | { kind: 'archived'; count: number; messageCount: number }
+  | { kind: 'conversation'; conversationId: string; title: string; messageCount: number };
 
 interface QueuedAgentRequest {
   conversationId: string;
@@ -302,7 +307,7 @@ export default function App() {
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletionRequest | null>(null);
-  const [readingCardDeletion, setReadingCardDeletion] = useState<ReadingCardRow | null>(null);
+  const [readingCardRemovalUndo, setReadingCardRemovalUndo] = useState<ReadingCardRemovalUndo | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [localStorageUsageIssue, setLocalStorageUsageIssue] = useState<string | null>(null);
   const [localBackupStatus, setLocalBackupStatus] = useState<LocalBackupStatus | null>(null);
@@ -319,6 +324,8 @@ export default function App() {
   const readingCardWritesRef = useRef(new Set<string>());
   const readingCardFeedbackSequenceRef = useRef(0);
   const readingCardFeedbackTimerRef = useRef<number | null>(null);
+  const readingCardRemovalTimerRef = useRef<number | null>(null);
+  const readingCardRemovalTasksRef = useRef(new Map<string, Promise<void>>());
   const currentPageRef = useRef<PageContext>(CURRENT_PAGE);
   const hostBrowserWindowIdRef = useRef<number | undefined>(undefined);
   const activeBrowserTabIdRef = useRef<number | undefined>(undefined);
@@ -912,6 +919,9 @@ export default function App() {
     if (readingCardFeedbackTimerRef.current !== null) {
       window.clearTimeout(readingCardFeedbackTimerRef.current);
     }
+    if (readingCardRemovalTimerRef.current !== null) {
+      window.clearTimeout(readingCardRemovalTimerRef.current);
+    }
   }, []);
 
   const toggleReadingCard = useCallback(async (
@@ -954,20 +964,62 @@ export default function App() {
     if (readingCardWritesRef.current.has(card.id)) return;
     readingCardWritesRef.current.add(card.id);
     const previous = readingCardsRef.current;
-    const next = previous.filter((item) => item.id !== card.id);
-    readingCardsRef.current = next;
-    setReadingCards(next);
+    const removal = removeReadingCardForUndo(previous, card, Date.now());
+    readingCardsRef.current = removal.cards;
+    setReadingCards(removal.cards);
+    setReadingCardsIssue(undefined);
+    setReadingCardRemovalUndo(removal.undo);
+    if (readingCardRemovalTimerRef.current !== null) {
+      window.clearTimeout(readingCardRemovalTimerRef.current);
+    }
+    readingCardRemovalTimerRef.current = window.setTimeout(() => {
+      setReadingCardRemovalUndo((current) => current?.card.id === card.id ? null : current);
+      readingCardRemovalTimerRef.current = null;
+    }, 5_000);
+
+    const task = removeReadingCard(card.id)
+      .catch(() => {
+        readingCardsRef.current = previous;
+        setReadingCards(previous);
+        setReadingCardRemovalUndo((current) => current?.card.id === card.id ? null : current);
+        setReadingCardsIssue('取消收藏失败，卡片仍然保留。');
+        throw new Error('reading card removal failed');
+      })
+      .finally(() => {
+        readingCardWritesRef.current.delete(card.id);
+        readingCardRemovalTasksRef.current.delete(card.id);
+      });
+    readingCardRemovalTasksRef.current.set(card.id, task);
+    await task.catch(() => undefined);
+  }, []);
+
+  const undoRemovedReadingCard = useCallback(async () => {
+    if (!readingCardRemovalUndo) return;
+    const undo = readingCardRemovalUndo;
+    const current = readingCardsRef.current;
+    const restored = restoreReadingCardFromUndo(current, undo, Date.now());
+    if (restored === current) {
+      setReadingCardRemovalUndo(null);
+      return;
+    }
+    if (readingCardRemovalTimerRef.current !== null) {
+      window.clearTimeout(readingCardRemovalTimerRef.current);
+      readingCardRemovalTimerRef.current = null;
+    }
+    setReadingCardRemovalUndo(null);
+    readingCardsRef.current = restored;
+    setReadingCards(restored);
     setReadingCardsIssue(undefined);
     try {
-      await removeReadingCard(card.id);
+      await readingCardRemovalTasksRef.current.get(undo.card.id)?.catch(() => undefined);
+      await saveReadingCard(undo.card);
     } catch {
-      readingCardsRef.current = previous;
-      setReadingCards(previous);
-      setReadingCardsIssue('取消收藏失败，卡片仍然保留。');
-    } finally {
-      readingCardWritesRef.current.delete(card.id);
+      const next = readingCardsRef.current.filter((item) => item.id !== undo.card.id);
+      readingCardsRef.current = next;
+      setReadingCards(next);
+      setReadingCardsIssue('撤销未能保存，请重新收藏这条回答。');
     }
-  }, []);
+  }, [readingCardRemovalUndo]);
 
   const openReadingCardSource = useCallback((card: ReadingCardRow) => {
     const current = workspaceRef.current;
@@ -1116,12 +1168,23 @@ export default function App() {
   const requestDeleteArchivedConversation = (conversationId: string) => {
     const conversation = workspaceRef.current.conversations.find((item) => item.id === conversationId);
     if (conversation?.archivedAt === undefined) return;
-    setHistoryDeletion({ kind: 'conversation', conversationId, title: conversation.title });
+    setHistoryDeletion({
+      kind: 'conversation',
+      conversationId,
+      title: conversation.title,
+      messageCount: conversation.messages.length,
+    });
   };
 
   const requestClearArchived = () => {
-    const count = workspaceRef.current.conversations.filter((conversation) => conversation.archivedAt !== undefined).length;
-    if (count) setHistoryDeletion({ kind: 'archived', count });
+    const archived = workspaceRef.current.conversations.filter((conversation) => conversation.archivedAt !== undefined);
+    if (archived.length) {
+      setHistoryDeletion({
+        kind: 'archived',
+        count: archived.length,
+        messageCount: archived.reduce((total, conversation) => total + conversation.messages.length, 0),
+      });
+    }
   };
 
   const branchFromMessage = (message: ChatMessage) => {
@@ -2039,24 +2102,28 @@ export default function App() {
     }
   };
 
+  const clearLocalHistory = () => {
+    if (!workspaceHydrated) return;
+    const current = workspaceRef.current;
+    stopAllRequests();
+    releaseConversationResources(current.conversations);
+    attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    attachmentPreviewUrlsRef.current.clear();
+    attachmentFilesRef.current.clear();
+    attachmentUploadsRef.current.clear();
+    const conversation = createConversation(currentPage);
+    const tab = createOpenTab(conversation.id);
+    const next = { conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id };
+    workspaceRef.current = next;
+    setWorkspace(next);
+    setSettingsOpen(false);
+    setHistoryOpen(false);
+  };
+
   const confirmHistoryDeletion = () => {
     if (!workspaceHydrated || !historyDeletion) return;
     const current = workspaceRef.current;
-    if (historyDeletion.kind === 'all') {
-      stopAllRequests();
-      releaseConversationResources(current.conversations);
-      attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      attachmentPreviewUrlsRef.current.clear();
-      attachmentFilesRef.current.clear();
-      attachmentUploadsRef.current.clear();
-      const conversation = createConversation(currentPage);
-      const tab = createOpenTab(conversation.id);
-      const next = { conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id };
-      workspaceRef.current = next;
-      setWorkspace(next);
-      setSettingsOpen(false);
-      setHistoryOpen(false);
-    } else if (historyDeletion.kind === 'archived') {
+    if (historyDeletion.kind === 'archived') {
       const next = clearArchivedConversations(current);
       const preservedIds = new Set(next.conversations.map((conversation) => conversation.id));
       const removed = current.conversations.filter((conversation) => !preservedIds.has(conversation.id));
@@ -2271,8 +2338,10 @@ export default function App() {
             conversations={workspace.conversations}
             selectedCardId={readingCardSelectionId}
             issue={readingCardsIssue}
+            removalUndo={readingCardRemovalUndo}
             onClose={closeReadingCards}
-            onRemove={setReadingCardDeletion}
+            onRemove={(card) => void removeSavedReadingCard(card)}
+            onUndoRemove={() => void undoRemovedReadingCard()}
             onOpenSource={openReadingCardSource}
             onExportCard={exportCardMarkdown}
             onExportAll={exportAllCardsMarkdown}
@@ -2297,35 +2366,34 @@ export default function App() {
         onInspectBackup={inspectBackup}
         onImportBackup={importBackup}
         onClose={() => setSettingsOpen(false)}
-        onClearHistory={() => setHistoryDeletion({ kind: 'all' })}
+        onClearHistory={clearLocalHistory}
       />
-      <ConfirmDialog
-        open={historyDeletion !== null}
-        title={historyDeletion?.kind === 'conversation'
-          ? `删除“${historyDeletion.title}”？`
-          : historyDeletion?.kind === 'archived'
-            ? `清空 ${historyDeletion.count} 条已归档历史？`
-            : '清空本地历史？'}
-        description={historyDeletion?.kind === 'conversation'
-          ? '该会话及消息将从页脉本机永久删除，但 WorkOS 后台会话与已上传文件仍然保留。'
-          : historyDeletion?.kind === 'archived'
-            ? '所有已归档会话及消息将从页脉本机永久删除，但不会影响仍在使用的会话或 WorkOS 后台数据。'
-            : '插件中的会话、工作页和消息会被移除；阅读卡片、WorkOS 后台会话与已上传文件仍然保留。'}
-        confirmLabel={historyDeletion?.kind === 'archived' ? '清空已归档' : historyDeletion?.kind === 'conversation' ? '删除本地记录' : '清空本地记录'}
-        onCancel={() => setHistoryDeletion(null)}
-        onConfirm={confirmHistoryDeletion}
-      />
-      <ConfirmDialog
-        open={readingCardDeletion !== null}
-        title={readingCardDeletion ? `取消收藏“${readingCardDeletion.title}”？` : '取消收藏？'}
-        description="这张阅读卡片会从本机删除；如果原对话仍然存在，回答内容不会受到影响。"
-        confirmLabel="取消收藏"
-        onCancel={() => setReadingCardDeletion(null)}
-        onConfirm={() => {
-          if (readingCardDeletion) void removeSavedReadingCard(readingCardDeletion);
-          setReadingCardDeletion(null);
-        }}
-      />
+      {historyDeletion && (() => {
+        const presentation = historyDeletionPresentation(historyDeletion.kind === 'conversation'
+          ? {
+            kind: 'conversation',
+            title: historyDeletion.title,
+            messageCount: historyDeletion.messageCount,
+          }
+          : {
+            kind: 'archived',
+            conversationCount: historyDeletion.count,
+            messageCount: historyDeletion.messageCount,
+          });
+        return (
+          <ConfirmDialog
+            open
+            icon={presentation.icon}
+            title={presentation.title}
+            description={presentation.description}
+            affected={presentation.affected}
+            preserved={presentation.preserved}
+            confirmLabel={presentation.confirmLabel}
+            onCancel={() => setHistoryDeletion(null)}
+            onConfirm={confirmHistoryDeletion}
+          />
+        );
+      })()}
     </div>
   );
 }
