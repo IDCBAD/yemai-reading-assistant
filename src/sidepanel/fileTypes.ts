@@ -81,6 +81,25 @@ const INTERNAL_WEB_UPLOAD_EXTENSIONS = Object.freeze([
 
 export type FileUploadChannel = 'public-v1' | 'internal-v2';
 
+export interface UploadChannelCapability {
+  id: 'html' | 'pdf' | 'word' | 'excel' | 'csv' | 'markdown' | 'text' | 'json' | 'image';
+  label: string;
+  filename: string;
+  mime?: string;
+}
+
+const UPLOAD_CHANNEL_CAPABILITIES: readonly UploadChannelCapability[] = Object.freeze([
+  { id: 'html', label: 'HTML', filename: 'page.html', mime: 'text/html' },
+  { id: 'pdf', label: 'PDF', filename: 'document.pdf', mime: 'application/pdf' },
+  { id: 'word', label: 'Word', filename: 'document.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  { id: 'excel', label: 'Excel', filename: 'sheet.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { id: 'csv', label: 'CSV', filename: 'table.csv', mime: 'text/csv' },
+  { id: 'markdown', label: 'Markdown', filename: 'note.md', mime: 'text/markdown' },
+  { id: 'text', label: 'TXT', filename: 'note.txt', mime: 'text/plain' },
+  { id: 'json', label: 'JSON', filename: 'data.json', mime: 'application/json' },
+  { id: 'image', label: '图片', filename: 'image.png', mime: 'image/png' },
+]);
+
 export function getFileExtension(filename: string) {
   return filename.trim().match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '';
 }
@@ -149,6 +168,6 @@ export function uploadChannelLabel(channel?: FileUploadChannel) {
 
 export function uploadChannelCapabilities(channel: FileUploadChannel) {
   return channel === 'internal-v2'
-    ? ['HTML', 'PDF / Word / Excel', 'Markdown / TXT / JSON', '图片']
-    : ['PDF / Word / Excel', 'Markdown / TXT / JSON', '图片'];
+    ? UPLOAD_CHANNEL_CAPABILITIES
+    : UPLOAD_CHANNEL_CAPABILITIES.filter((capability) => capability.id !== 'html');
 }

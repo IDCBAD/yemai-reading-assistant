@@ -1,17 +1,42 @@
-export const DEFAULT_LOCAL_STORAGE_QUOTA_BYTES = 10 * 1024 * 1024;
+export type KnowledgeUsageSource = 'browser-indexeddb' | 'browser-origin' | 'content-estimate';
+
+export interface BrowserStorageEstimateLike {
+  usage?: number;
+  quota?: number;
+  usageDetails?: Record<string, number>;
+}
 
 export interface LocalStorageUsage {
   historyBytes: number;
+  knowledgeBytes: number;
+  knowledgeUsageSource: KnowledgeUsageSource;
   settingsBytes: number;
   legacyBackupBytes: number;
   totalBytes: number;
-  quotaBytes: number;
+  quotaBytes?: number;
   quotaEstimated: boolean;
 }
 
-export function storageUsagePercent(usage: LocalStorageUsage) {
-  if (!Number.isFinite(usage.totalBytes) || !Number.isFinite(usage.quotaBytes) || usage.quotaBytes <= 0) return 0;
-  return Math.max(0, Math.min(100, usage.totalBytes / usage.quotaBytes * 100));
+function finiteBytes(value: number | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function resolveKnowledgeStorageUsage(
+  contentEstimateBytes: number,
+  browserEstimate?: BrowserStorageEstimateLike,
+) {
+  const indexedDbBytes = finiteBytes(browserEstimate?.usageDetails?.indexedDB);
+  const originBytes = finiteBytes(browserEstimate?.usage);
+  const fallbackBytes = finiteBytes(contentEstimateBytes) ?? 0;
+  const quotaBytes = finiteBytes(browserEstimate?.quota);
+
+  if (indexedDbBytes !== undefined) {
+    return { knowledgeBytes: indexedDbBytes, knowledgeUsageSource: 'browser-indexeddb' as const, quotaBytes };
+  }
+  if (originBytes !== undefined) {
+    return { knowledgeBytes: originBytes, knowledgeUsageSource: 'browser-origin' as const, quotaBytes };
+  }
+  return { knowledgeBytes: fallbackBytes, knowledgeUsageSource: 'content-estimate' as const, quotaBytes };
 }
 
 export function formatStorageBytes(bytes: number) {
@@ -23,10 +48,4 @@ export function formatStorageBytes(bytes: number) {
   }
   const megabytes = safeBytes / (1024 * 1024);
   return `${megabytes < 10 ? megabytes.toFixed(2) : megabytes.toFixed(1)} MB`;
-}
-
-export function formatStoragePercent(percent: number) {
-  const safePercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
-  if (safePercent > 0 && safePercent < 0.1) return '< 0.1%';
-  return `${safePercent < 10 ? safePercent.toFixed(1) : Math.round(safePercent)}%`;
 }

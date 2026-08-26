@@ -2,6 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ReadingCardRow } from '../../data/database';
+import {
+  actionPresentation,
+  type ActionFeedbackState,
+  type ReadingCardRemovalUndo,
+  type SemanticAction,
+} from '../actionSemantics';
 import { readingCardSourceAvailable } from '../readingCards';
 import type { Conversation } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
@@ -15,8 +21,10 @@ interface ReadingCardsPanelProps {
   conversations: Conversation[];
   selectedCardId?: string;
   issue?: string;
+  removalUndo: ReadingCardRemovalUndo | null;
   onClose: () => void;
   onRemove: (card: ReadingCardRow) => void;
+  onUndoRemove: () => void;
   onOpenSource: (card: ReadingCardRow) => void;
   onExportCard: (card: ReadingCardRow) => Promise<void>;
   onExportAll: (cards: ReadingCardRow[]) => Promise<void>;
@@ -38,8 +46,10 @@ export function ReadingCardsPanel({
   conversations,
   selectedCardId,
   issue,
+  removalUndo,
   onClose,
   onRemove,
+  onUndoRemove,
   onOpenSource,
   onExportCard,
   onExportAll,
@@ -47,15 +57,32 @@ export function ReadingCardsPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
-  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<{
+    key: string;
+    state: Exclude<ActionFeedbackState, 'idle'>;
+  } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
   selectedIdRef.current = selectedId;
 
-  const showExportFeedback = (key: string) => {
-    setExportFeedback(key);
-    window.setTimeout(() => setExportFeedback((current) => current === key ? null : current), 1_500);
+  const exportPresentation = (key: string, action: SemanticAction) => actionPresentation(
+    action,
+    exportFeedback?.key === key ? exportFeedback.state : 'idle',
+  );
+
+  const runExport = (key: string, action: SemanticAction, callback: () => Promise<void>) => {
+    if (exportFeedback?.key === key && exportFeedback.state === 'working') return;
+    setExportFeedback({ key, state: 'working' });
+    void callback()
+      .then(() => {
+        setExportFeedback({ key, state: 'success' });
+        window.setTimeout(() => setExportFeedback((current) => current?.key === key ? null : current), 800);
+      })
+      .catch(() => {
+        setExportFeedback({ key, state: 'error' });
+        window.setTimeout(() => setExportFeedback((current) => current?.key === key ? null : current), 1_200);
+      });
   };
 
   useEffect(() => {
@@ -78,6 +105,10 @@ export function ReadingCardsPanel({
     if (!open) return;
     setSelectedId(selectedCardId ?? null);
   }, [open, selectedCardId]);
+
+  useEffect(() => {
+    if (selectedId && !cards.some((card) => card.id === selectedId)) setSelectedId(null);
+  }, [cards, selectedId]);
 
   useEffect(() => {
     if (!open) return;
@@ -105,6 +136,10 @@ export function ReadingCardsPanel({
   }, [open, selected]);
 
   if (!rendered) return null;
+  const exportAllPresentation = exportPresentation('all', 'export-all-cards');
+  const selectedExportPresentation = selected
+    ? exportPresentation(selected.id, 'export-card-markdown')
+    : null;
 
   return (
     <div className={`reading-cards-layer${visible ? ' is-open' : ''}`} aria-hidden={!open}>
@@ -148,15 +183,16 @@ export function ReadingCardsPanel({
               <button
                 className="reading-cards-export-all pressable"
                 type="button"
-                onClick={() => {
-                  void onExportAll(cards)
-                    .then(() => showExportFeedback('all'))
-                    .catch(() => undefined);
-                }}
+                disabled={exportAllPresentation.spinning}
+                onClick={() => runExport('all', 'export-all-cards', () => onExportAll(cards))}
                 aria-live="polite"
               >
-                <KoboyoIcon name={exportFeedback === 'all' ? 'solid-checkmark' : 'file'} size={12} />
-                {exportFeedback === 'all' ? '已下载' : '导出全部'}
+                <KoboyoIcon
+                  name={exportAllPresentation.icon}
+                  size={14}
+                  className={exportAllPresentation.spinning ? 'is-spinning' : ''}
+                />
+                {exportAllPresentation.label}
               </button>
             )}
             {!selected && <span className="reading-cards-count">{cards.length} 项</span>}
@@ -256,18 +292,23 @@ export function ReadingCardsPanel({
               <button
                 className="reading-card-export-button pressable"
                 type="button"
-                onClick={() => {
-                  void onExportCard(selected)
-                    .then(() => showExportFeedback(selected.id))
-                    .catch(() => undefined);
-                }}
+                disabled={selectedExportPresentation?.spinning}
+                onClick={() => runExport(
+                  selected.id,
+                  'export-card-markdown',
+                  () => onExportCard(selected),
+                )}
                 aria-live="polite"
               >
-                <KoboyoIcon name={exportFeedback === selected.id ? 'solid-checkmark' : 'file'} size={12} />
-                {exportFeedback === selected.id ? '已下载' : '导出 Markdown'}
+                <KoboyoIcon
+                  name={selectedExportPresentation?.icon ?? 'document-download'}
+                  size={14}
+                  className={selectedExportPresentation?.spinning ? 'is-spinning' : ''}
+                />
+                {selectedExportPresentation?.label ?? '导出 Markdown'}
               </button>
               <button className="reading-card-remove-button pressable" type="button" onClick={() => onRemove(selected)}>
-                <KoboyoIcon name="trash" size={12} />
+                <KoboyoIcon name="bookmark-minus" size={14} />
                 取消收藏
               </button>
             </footer>
@@ -309,10 +350,18 @@ export function ReadingCardsPanel({
                   aria-label={`取消收藏：${card.title}`}
                   tooltip="取消收藏"
                 >
-                  <KoboyoIcon name="cross" size={10} />
+                  <KoboyoIcon name="bookmark-minus" size={13} />
                 </IconTooltipButton>
               </article>
             ))}
+          </div>
+        )}
+        {removalUndo && (
+          <div className="reading-card-undo is-visible" role="status" aria-live="polite">
+            <KoboyoIcon name="bookmark-minus" size={16} />
+            <span>已移出收藏</span>
+            <span className="reading-card-undo-timer" aria-hidden="true"><i key={removalUndo.expiresAt} /></span>
+            <button className="pressable" type="button" onClick={onUndoRemove}>撤销</button>
           </div>
         )}
       </aside>

@@ -5,7 +5,7 @@ import { migrateLegacyWorkspace, LEGACY_UI_BACKUP_META_KEY } from '../data/legac
 import { WorkspaceRepository } from '../data/workspaceRepository';
 import { estimateReadingCardBytes } from './readingCardStorage';
 import {
-  DEFAULT_LOCAL_STORAGE_QUOTA_BYTES,
+  resolveKnowledgeStorageUsage,
   type LocalStorageUsage,
 } from './storageUsage';
 
@@ -151,13 +151,25 @@ export async function loadLocalStorageUsage(): Promise<LocalStorageUsage> {
   ]);
   const settingsBytes = Math.max(0, localBytes - legacyBackupBytes);
   const historyBytes = workspaceBytes + readingCardBytes;
-  const totalBytes = historyBytes + localBytes;
+  const knowledgeUsage = resolveKnowledgeStorageUsage(
+    historyBytes,
+    estimate
+      ? {
+          usage: estimate.usage,
+          quota: estimate.quota,
+          usageDetails: (estimate as StorageEstimate & { usageDetails?: Record<string, number> }).usageDetails,
+        }
+      : undefined,
+  );
+  const totalBytes = knowledgeUsage.knowledgeBytes + localBytes;
   return {
     historyBytes,
+    knowledgeBytes: knowledgeUsage.knowledgeBytes,
+    knowledgeUsageSource: knowledgeUsage.knowledgeUsageSource,
     settingsBytes,
     legacyBackupBytes,
     totalBytes,
-    quotaBytes: estimate?.quota ?? browser.storage.local.QUOTA_BYTES ?? DEFAULT_LOCAL_STORAGE_QUOTA_BYTES,
-    quotaEstimated: estimate?.quota !== undefined,
+    quotaBytes: knowledgeUsage.quotaBytes,
+    quotaEstimated: knowledgeUsage.quotaBytes !== undefined,
   };
 }
