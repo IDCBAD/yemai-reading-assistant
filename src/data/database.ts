@@ -9,9 +9,10 @@ import type {
   PageContext,
 } from '../sidepanel/types';
 import type { WorkosTransportKind } from '../services/workosTransport';
+import type { CognitionProjectionRow } from '../cognition/cognitionLoop';
 
 export const YEMAI_DATABASE_NAME = 'yemai-reading-assistant';
-export const YEMAI_DATABASE_VERSION = 2;
+export const YEMAI_DATABASE_VERSION = 3;
 
 export interface ConversationRow {
   id: string;
@@ -92,6 +93,7 @@ export class YemaiDatabase extends Dexie {
   conversationSources!: Table<ConversationSourceRow, string>;
   artifacts!: Table<ArtifactRow, string>;
   readingCards!: Table<ReadingCardRow, string>;
+  cognitionProjection!: Table<CognitionProjectionRow, string>;
   meta!: Table<MetaRow, string>;
 
   constructor(name = YEMAI_DATABASE_NAME) {
@@ -104,9 +106,14 @@ export class YemaiDatabase extends Dexie {
       meta: '&key',
     };
     this.version(1).stores(workspaceStores);
+    this.version(2).stores({
+      ...workspaceStores,
+      readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
+    });
     this.version(YEMAI_DATABASE_VERSION).stores({
       ...workspaceStores,
       readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
+      cognitionProjection: '&id,filename,type,status,updatedAt',
     });
   }
 }

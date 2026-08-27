@@ -164,6 +164,13 @@ export interface AgentDecision extends WorkosA2uiInterrupt {
   submittedAction?: 'reply' | 'reject';
   answers?: Record<string, string | string[]>;
   errorMessage?: string;
+  cognitionReceipt?: {
+    id: string;
+    filename: string;
+    savedAt: number;
+    remotePending?: boolean;
+    available?: boolean;
+  };
 }
 
 export type AgentDecisionField = WorkosA2uiField;

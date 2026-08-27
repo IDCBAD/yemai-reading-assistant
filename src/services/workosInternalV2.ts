@@ -1,4 +1,4 @@
-import { JSEncrypt } from 'jsencrypt/lib/index.js';
+import { JSEncrypt } from 'jsencrypt';
 import type { InternalV2Credentials } from './workosConnection';
 import { WorkosSseParser, type WorkosSseCallbacks } from './workosSse';
 import {

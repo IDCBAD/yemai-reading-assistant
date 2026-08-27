@@ -7,6 +7,9 @@ describe('recommended Agent.md template', () => {
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('[END_YEMAI_CONTEXT]');
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('信任边界');
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('来源 URL');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('cognition-candidate');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('judgment-principle');
+    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('一条回答最多提出一个');
   });
 
   it('is a complete markdown file ready for direct copying', () => {

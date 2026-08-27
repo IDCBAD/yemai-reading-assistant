@@ -314,7 +314,7 @@ function AssistantMessage({
           <AgentDecisionCard
             key={activeInteraction.id}
             decision={activeInteraction}
-            active={message.status === 'running' || message.status === 'streaming'}
+            active={message.status === 'running' || message.status === 'streaming' || Boolean(activeInteraction.cognitionCandidate)}
             onReply={(answers) => onResolveDecision(activeInteraction.id, 'reply', answers)}
             onReject={() => onResolveDecision(activeInteraction.id, 'reject')}
           />

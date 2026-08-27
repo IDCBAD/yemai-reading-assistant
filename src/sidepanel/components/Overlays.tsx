@@ -28,6 +28,7 @@ import { uploadChannelCapabilities } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon, type KoboyoIconName } from './KoboyoIcon';
+import type { CognitionDirectoryState } from '../../cognition/cognitionLoop';
 
 interface HistoryPopoverProps {
   open: boolean;
@@ -215,6 +216,7 @@ interface SettingsDrawerProps {
   storageUsageIssue: string | null;
   backupStatus: LocalBackupStatus | null;
   backupStatusIssue: string | null;
+  cognitionDirectoryState: CognitionDirectoryState;
   onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
@@ -225,6 +227,9 @@ interface SettingsDrawerProps {
   onImportBackup: (file: File, mode: LocalBackupImportMode) => Promise<LocalBackupImportReceipt>;
   onClose: () => void;
   onClearHistory: () => void;
+  onConnectCognitionDirectory: () => Promise<void>;
+  onReconnectCognitionDirectory: () => Promise<void>;
+  onDisconnectCognitionDirectory: () => Promise<void>;
 }
 
 export function SettingsDrawer({
@@ -236,6 +241,7 @@ export function SettingsDrawer({
   storageUsageIssue,
   backupStatus,
   backupStatusIssue,
+  cognitionDirectoryState,
   onSaveConnection,
   onTestConnection,
   onImportWorkosCredentials,
@@ -246,6 +252,9 @@ export function SettingsDrawer({
   onImportBackup,
   onClose,
   onClearHistory,
+  onConnectCognitionDirectory,
+  onReconnectCognitionDirectory,
+  onDisconnectCognitionDirectory,
 }: SettingsDrawerProps) {
   const [showToken, setShowToken] = useState(false);
   const [draft, setDraft] = useState(settings);
@@ -263,6 +272,7 @@ export function SettingsDrawer({
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [cognitionDirectoryBusy, setCognitionDirectoryBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -281,6 +291,7 @@ export function SettingsDrawer({
     setReplaceBackupConfirmOpen(false);
     setClearHistoryConfirmOpen(false);
     setLocalError(null);
+    setCognitionDirectoryBusy(false);
   }, [open, settings]);
 
   const patchDraft = (patch: Partial<WorkosConnectionSettings>) => {
@@ -700,6 +711,61 @@ export function SettingsDrawer({
             </details>
           </section>
 
+          <section className="settings-section cognition-directory-section">
+            <div className="cognition-directory-heading">
+              <div>
+                <strong>个人认知目录</strong>
+                <p>确认后的认知写入你选择的独立 Markdown 目录。</p>
+              </div>
+              <span className={`cognition-directory-state is-${cognitionDirectoryState.kind}`}>
+                {cognitionDirectoryState.kind === 'ready'
+                  ? '可用'
+                  : cognitionDirectoryState.kind === 'needs-permission'
+                    ? '需要授权'
+                    : cognitionDirectoryState.kind === 'unsupported'
+                      ? '不可用'
+                      : cognitionDirectoryState.kind === 'error'
+                        ? '访问失败'
+                        : '未连接'}
+              </span>
+            </div>
+            {'name' in cognitionDirectoryState && cognitionDirectoryState.name && (
+              <div className="cognition-directory-name"><KoboyoIcon name="file" size={14} /><span>{cognitionDirectoryState.name}</span></div>
+            )}
+            {cognitionDirectoryState.kind === 'unsupported' && <p role="status">当前浏览器不支持持续访问本地目录。请使用最新版 Chrome；页脉不会降级成一次性下载。</p>}
+            {cognitionDirectoryState.kind === 'error' && <p className="token-error" role="alert">{cognitionDirectoryState.message}</p>}
+            <div className="cognition-directory-actions">
+              {(cognitionDirectoryState.kind === 'unconfigured' || cognitionDirectoryState.kind === 'error') && (
+                <button
+                  type="button"
+                  className="secondary-button pressable"
+                  disabled={cognitionDirectoryBusy}
+                  onClick={() => {
+                    setCognitionDirectoryBusy(true);
+                    void onConnectCognitionDirectory().finally(() => setCognitionDirectoryBusy(false));
+                  }}
+                >{cognitionDirectoryBusy ? '正在连接…' : '选择独立目录'}</button>
+              )}
+              {cognitionDirectoryState.kind === 'needs-permission' && (
+                <button
+                  type="button"
+                  className="secondary-button pressable"
+                  disabled={cognitionDirectoryBusy}
+                  onClick={() => {
+                    setCognitionDirectoryBusy(true);
+                    void onReconnectCognitionDirectory().finally(() => setCognitionDirectoryBusy(false));
+                  }}
+                >{cognitionDirectoryBusy ? '正在授权…' : '重新授权'}</button>
+              )}
+              {(cognitionDirectoryState.kind === 'ready' || cognitionDirectoryState.kind === 'needs-permission') && (
+                <button type="button" className="remove-token-button pressable" disabled={cognitionDirectoryBusy} onClick={() => void onDisconnectCognitionDirectory()}>
+                  断开连接（保留所有文件）
+                </button>
+              )}
+            </div>
+            <p className="field-help">页脉只管理带有效 <code>yemai_id</code> 的文件；清空会话、阅读卡片或索引都不会删除这些 Markdown。</p>
+          </section>
+
           <section className="settings-section settings-section--row">
             <div>
               <strong>划词悬浮入口</strong>
@@ -736,7 +802,7 @@ export function SettingsDrawer({
             <div className="local-backup-heading">
               <div>
                 <strong>本地数据备份</strong>
-                <p>把会话和阅读卡片保存到本地。</p>
+                <p>这里只备份会话和阅读卡片。独立认知目录不包含在备份中，请在文件系统或 Obsidian 中单独备份。</p>
               </div>
             </div>
             {backupStatus ? (

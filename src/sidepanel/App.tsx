@@ -49,6 +49,20 @@ import type {
 } from '../services/localBackup';
 import type { LocalStorageUsage } from '../services/storageUsage';
 import type { ReadingCardRow } from '../data/database';
+import {
+  CognitionLoopService,
+  type CognitionComparisonResult,
+  type CognitionDirectoryState,
+  type CognitionProjectionRow,
+} from '../cognition/cognitionLoop';
+import {
+  DexieCognitionDirectoryRegistry,
+  DexieCognitionProjection,
+  pickCognitionDirectory,
+  supportsCognitionDirectory,
+} from '../cognition/browserAdapters';
+import { cognitionCandidateFromDecision } from '../cognition/candidate';
+import { WorkosCognitionComparisonGateway } from '../cognition/workosComparison';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -72,6 +86,7 @@ import { Composer } from './components/Composer';
 import { MessageList, type ReadingCardFeedbackOrigin } from './components/MessageList';
 import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
 import { TopBar } from './components/TopBar';
+import { CognitionLocalView, CognitionReencounterNotice, CognitionWorkbench, type CognitionDetails } from './components/CognitionWorkbench';
 import {
   attachmentContextItem,
   cloneContextItems,
@@ -318,6 +333,28 @@ export default function App() {
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
+  const [cognitionDirectoryState, setCognitionDirectoryState] = useState<CognitionDirectoryState>({ kind: 'unconfigured' });
+  const [cognitionIndexIssues, setCognitionIndexIssues] = useState<Array<{ filename: string; message: string }>>([]);
+  const [cognitionAvailableIds, setCognitionAvailableIds] = useState<string[] | null>(null);
+  const [cognitionReencounters, setCognitionReencounters] = useState<Array<CognitionProjectionRow & {
+    score: number;
+    level: 'weak' | 'strong' | 'conflict';
+    matchedTerms: string[];
+    matchedFields: string[];
+    reason: string;
+  }>>([]);
+  const [cognitionWorkbench, setCognitionWorkbench] = useState<{
+    cognition: CognitionProjectionRow;
+    state: 'comparing' | 'ready' | 'saving' | 'saved' | 'error';
+    result?: CognitionComparisonResult;
+    issue?: string;
+    details?: CognitionDetails;
+  } | null>(null);
+  const [cognitionPreview, setCognitionPreview] = useState<{
+    cognition: CognitionProjectionRow;
+    details?: CognitionDetails;
+    issue?: string;
+  } | null>(null);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
   const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
@@ -334,6 +371,7 @@ export default function App() {
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
   const pendingDecisionRequestsRef = useRef(new Set<string>());
+  const cognitionComparisonAbortRef = useRef<AbortController | null>(null);
   const attachmentPreviewUrlsRef = useRef(new Set<string>());
   const attachmentFilesRef = useRef(new Map<string, File>());
   const attachmentUploadsRef = useRef(new Set<string>());
@@ -341,10 +379,19 @@ export default function App() {
     async () => undefined,
   );
   const requestCoordinatorRef = useRef<ConversationRequestCoordinator<QueuedAgentRequest> | null>(null);
+  const cognitionRegistryRef = useRef(new DexieCognitionDirectoryRegistry());
+  const cognitionProjectionRef = useRef(new DexieCognitionProjection());
   if (!requestCoordinatorRef.current) {
     requestCoordinatorRef.current = new ConversationRequestCoordinator((request, signal) =>
       requestRunnerRef.current(request, signal));
   }
+  const cognitionLoop = useMemo(() => new CognitionLoopService({
+    registry: cognitionRegistryRef.current,
+    projection: cognitionProjectionRef.current,
+    ...(workosConnection && isActiveWorkosConnectionConfigured(workosConnection)
+      ? { comparison: new WorkosCognitionComparisonGateway(workosConnection) }
+      : {}),
+  }), [workosConnection]);
 
   const activeOpenTab = useMemo(
     () => workspace.openTabs.find((tab) => tab.id === workspace.activeOpenTabId) ?? workspace.openTabs[0]!,
@@ -386,10 +433,44 @@ export default function App() {
     [draftContextItems],
   );
   const pageReferenceIncluded = Boolean(currentPageItem?.included && currentPage.url);
+  const currentPageSelection = useMemo(() => draftContextItems
+    .filter((item) => item.kind === 'selection' && item.selection.pageUrl === currentPage.url)
+    .map((item) => item.kind === 'selection' ? item.selection.text : '')
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 4_000), [currentPage.url, draftContextItems]);
   const activeConnectionConfigured = workosConnection
     ? isActiveWorkosConnectionConfigured(workosConnection)
     : false;
   currentPageRef.current = currentPage;
+
+  const applyCognitionScan = useCallback((scan: { issues: Array<{ filename: string; message: string }>; availableIds: string[] }) => {
+    setCognitionIndexIssues(scan.issues);
+    setCognitionAvailableIds(scan.availableIds);
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated || cognitionAvailableIds === null) return;
+    const availableIds = new Set(cognitionAvailableIds);
+    setWorkspace((current) => ({
+      ...current,
+      conversations: current.conversations.map((conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) => ({
+          ...message,
+          interactions: message.interactions?.map((interaction) => interaction.cognitionReceipt
+            ? {
+                ...interaction,
+                cognitionReceipt: {
+                  ...interaction.cognitionReceipt,
+                  available: availableIds.has(interaction.cognitionReceipt.id),
+                },
+              }
+            : interaction),
+        })),
+      })),
+    }));
+  }, [cognitionAvailableIds, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !currentPage.url) return;
@@ -449,6 +530,53 @@ export default function App() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!supportsCognitionDirectory()) {
+      setCognitionDirectoryState({ kind: 'unsupported' });
+      setCognitionReencounters([]);
+      return () => { mounted = false; };
+    }
+    void cognitionLoop.getDirectoryState().then(async (state) => {
+      if (!mounted) return;
+      if (state.kind !== 'ready') {
+        setCognitionDirectoryState(state);
+        setCognitionReencounters([]);
+        return;
+      }
+      const scan = await cognitionLoop.rebuildProjection();
+      applyCognitionScan(scan);
+      if (mounted) setCognitionDirectoryState(state);
+    }).catch((error: unknown) => {
+      if (mounted) setCognitionDirectoryState({
+        kind: 'error',
+        message: error instanceof Error ? error.message : '无法读取认知目录。',
+      });
+    });
+    return () => { mounted = false; };
+  }, [applyCognitionScan, cognitionLoop]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (cognitionDirectoryState.kind !== 'ready' || !currentPage.url) {
+      setCognitionReencounters([]);
+      return () => { mounted = false; };
+    }
+    void cognitionLoop.findReencounters({
+      title: currentPage.title,
+      url: currentPage.url,
+      site: currentPage.site,
+      description: currentPage.manifest?.description ?? currentPage.manifest?.leading_excerpt,
+      headings: currentPage.manifest?.outline.map((heading) => heading.text),
+      selection: currentPageSelection || undefined,
+    }).then((matches) => {
+      if (mounted) setCognitionReencounters(matches);
+    }).catch(() => {
+      if (mounted) setCognitionReencounters([]);
+    });
+    return () => { mounted = false; };
+  }, [cognitionDirectoryState.kind, cognitionLoop, currentPage.manifest?.description, currentPage.manifest?.leading_excerpt, currentPage.manifest?.outline, currentPage.site, currentPage.title, currentPage.url, currentPageSelection]);
 
   useEffect(() => {
     let mounted = true;
@@ -611,12 +739,17 @@ export default function App() {
         ...conversation,
         messages: conversation.messages.map((message) => {
           if (message.id !== messageId) return message;
+          const currentInteractions = messageDecisionInteractions(message);
+          if (interrupt.cognitionCandidate && (
+            !message.content.trim()
+            || currentInteractions.some((interaction) => Boolean(interaction.cognitionCandidate))
+          )) return message;
           return {
             ...message,
             status: 'streaming',
             stage: 'waiting-user-input',
             respondedAt: message.respondedAt ?? Date.now(),
-            interactions: upsertAgentInteraction(messageDecisionInteractions(message), interrupt),
+            interactions: upsertAgentInteraction(currentInteractions, interrupt),
             decision: undefined,
           };
         }),
@@ -1557,13 +1690,14 @@ export default function App() {
     const message = conversation?.messages.find((item) => item.id === messageId);
     const decision = messageDecisionInteractions(message ?? {}).find((interaction) => interaction.id === decisionId);
     if (!conversation?.remoteUuid || !message || !decision) return;
-    if (message.status !== 'running' && message.status !== 'streaming') return;
+    if (message.status !== 'running' && message.status !== 'streaming' && !decision.cognitionCandidate) return;
     if (decision.status !== 'pending' && decision.status !== 'failed') return;
     const pendingKey = `${conversationId}:${decision.id}`;
     if (pendingDecisionRequestsRef.current.has(pendingKey)) return;
     pendingDecisionRequestsRef.current.add(pendingKey);
 
     const answers = normalizeAgentDecisionAnswers(decision.fields, candidateAnswers);
+    let cognitionSavedLocally = Boolean(decision.cognitionReceipt);
     updateConversation(conversationId, (current) => ({
       ...current,
       messages: current.messages.map((item) => {
@@ -1588,6 +1722,41 @@ export default function App() {
     }));
 
     try {
+      if (action === 'reply' && decision.cognitionCandidate && !decision.cognitionReceipt) {
+        const primaryField = decision.fields[0];
+        const primaryAnswer = primaryField && typeof answers[primaryField.label] === 'string'
+          ? answers[primaryField.label] as string
+          : '';
+        const sourcePage = message.pageContext ?? conversation.page;
+        const candidate = cognitionCandidateFromDecision(decision, {
+          conversationId,
+          messageId,
+          pageTitle: sourcePage.title,
+          pageUrl: sourcePage.url,
+        }, primaryAnswer);
+        const receipt = await cognitionLoop.confirmCandidate(candidate);
+        cognitionSavedLocally = true;
+        updateConversation(conversationId, (current) => ({
+          ...current,
+          messages: current.messages.map((item) => item.id !== messageId
+            ? item
+            : {
+                ...item,
+                interactions: messageDecisionInteractions(item).map((interaction) => interaction.id === decision.id
+                  ? {
+                      ...interaction,
+                      answers,
+                      cognitionReceipt: {
+                        id: receipt.id,
+                        filename: receipt.filename,
+                        savedAt: Date.now(),
+                        available: true,
+                      },
+                    }
+                  : interaction),
+              }),
+        }));
+      }
       const transport = createWorkosTransport(connection);
       if (action === 'reply') {
         if (!transport.replyInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
@@ -1606,14 +1775,23 @@ export default function App() {
           return {
             ...item,
             interactions: interactions.map((interaction) => interaction.id === decision.id
-              ? { ...interaction, status: 'submitted' as const }
+              ? {
+                  ...interaction,
+                  status: 'submitted' as const,
+                  ...(interaction.cognitionReceipt
+                    ? { cognitionReceipt: { ...interaction.cognitionReceipt, remotePending: false } }
+                    : {}),
+                }
               : interaction),
             decision: undefined,
           };
         }),
       }));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '无法提交当前选择，请重试。';
+      const detail = error instanceof Error ? error.message : '无法提交当前选择，请重试。';
+      const errorMessage = cognitionSavedLocally
+        ? `已保存到本地，Agent 尚未恢复：${detail}`
+        : detail;
       updateConversation(conversationId, (current) => ({
         ...current,
         messages: current.messages.map((item) => {
@@ -1624,18 +1802,26 @@ export default function App() {
             ...item,
             stage: 'waiting-user-input',
             interactions: interactions.map((interaction) => interaction.id === decision.id
-              ? { ...interaction, status: 'failed' as const, errorMessage }
+              ? {
+                  ...interaction,
+                  status: 'failed' as const,
+                  errorMessage,
+                  ...(cognitionSavedLocally && interaction.cognitionReceipt
+                    ? { cognitionReceipt: { ...interaction.cognitionReceipt, remotePending: true } }
+                    : {}),
+                }
               : interaction),
             decision: undefined,
           };
         }),
       }));
       setConnectionIssue(errorMessage);
+      if (decision.cognitionCandidate && !cognitionSavedLocally) setSettingsOpen(true);
       if (error instanceof WorkosApiError && (error.status === 401 || error.status === 403)) setSettingsOpen(true);
     } finally {
       pendingDecisionRequestsRef.current.delete(pendingKey);
     }
-  }, [updateConversation, workosConnection]);
+  }, [cognitionLoop, updateConversation, workosConnection]);
 
   const sendMessage = () => {
     if (!workspaceHydrated || workosConnection === null) return;
@@ -2042,6 +2228,109 @@ export default function App() {
     });
   };
 
+  const connectCognitionDirectory = async () => {
+    try {
+      const directory = await pickCognitionDirectory();
+      let state = await cognitionLoop.connectDirectory(directory);
+      if (state.kind === 'error' && state.message.startsWith('这个目录已有内容')) {
+        const accepted = window.confirm(`${state.message}\n\n是否继续连接？`);
+        if (accepted) state = await cognitionLoop.connectDirectory(directory, { acceptNonEmpty: true });
+      }
+      setCognitionDirectoryState(state);
+      if (state.kind === 'ready') applyCognitionScan(await cognitionLoop.rebuildProjection());
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setCognitionDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法连接认知目录。' });
+    }
+  };
+
+  const reconnectCognitionDirectory = async () => {
+    try {
+      const state = await cognitionLoop.reconnectDirectory();
+      setCognitionDirectoryState(state);
+      if (state.kind === 'ready') applyCognitionScan(await cognitionLoop.rebuildProjection());
+    } catch (error) {
+      setCognitionDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法重新连接认知目录。' });
+    }
+  };
+
+  const disconnectCognitionDirectory = async () => {
+    await cognitionLoop.disconnectDirectory();
+    setCognitionDirectoryState({ kind: 'unconfigured' });
+    setCognitionReencounters([]);
+    setCognitionIndexIssues([]);
+    setCognitionAvailableIds([]);
+  };
+
+  const startCognitionComparison = async (cognition: CognitionProjectionRow) => {
+    setCognitionPreview(null);
+    cognitionComparisonAbortRef.current?.abort();
+    const controller = new AbortController();
+    cognitionComparisonAbortRef.current = controller;
+    setCognitionWorkbench({ cognition, state: 'comparing' });
+    try {
+      const result = await cognitionLoop.compareWithPage(cognition.id, {
+        title: currentPage.title,
+        url: currentPage.url,
+        site: currentPage.site,
+        description: currentPage.manifest?.description ?? currentPage.manifest?.leading_excerpt,
+        headings: currentPage.manifest?.outline.map((heading) => heading.text),
+        selection: currentPageSelection || undefined,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      setCognitionWorkbench({ cognition, state: 'ready', result });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setCognitionWorkbench({ cognition, state: 'error', issue: error instanceof Error ? error.message : '认知对照失败。' });
+    } finally {
+      if (cognitionComparisonAbortRef.current === controller) cognitionComparisonAbortRef.current = null;
+    }
+  };
+
+  const openCognitionPreview = async (cognition: CognitionProjectionRow) => {
+    setCognitionPreview({ cognition });
+    try {
+      const details = await cognitionLoop.getCognitionDetails(cognition.id);
+      setCognitionPreview((current) => current?.cognition.id === cognition.id ? { cognition, details } : current);
+    } catch (error) {
+      setCognitionPreview((current) => current?.cognition.id === cognition.id
+        ? { cognition, issue: error instanceof Error ? error.message : '无法读取本地认知。' }
+        : current);
+    }
+  };
+
+  const resolveCognitionComparison = async (
+    outcome: CognitionComparisonResult['outcome'],
+    revisedUnderstanding?: string,
+    revisedBoundary?: string,
+    userReason = '',
+  ) => {
+    const workbench = cognitionWorkbench;
+    if (!workbench?.result) return;
+    setCognitionWorkbench({ ...workbench, state: 'saving', issue: undefined });
+    try {
+      await cognitionLoop.recordComparisonOutcome(workbench.cognition.id, {
+        ...workbench.result,
+        outcome,
+        userReason,
+        ...(outcome === 'revise' ? { revisedUnderstanding: revisedUnderstanding?.trim() } : { revisedUnderstanding: undefined }),
+        ...(outcome === 'revise' ? { revisedBoundary: revisedBoundary?.trim() } : { revisedBoundary: undefined }),
+      });
+      const details = await cognitionLoop.getCognitionDetails(workbench.cognition.id);
+      setCognitionWorkbench({ ...workbench, state: 'saved', details });
+      applyCognitionScan(await cognitionLoop.rebuildProjection());
+      setCognitionReencounters((matches) => matches.filter((match) => match.id !== workbench.cognition.id));
+    } catch (error) {
+      setCognitionWorkbench({ ...workbench, state: 'error', issue: error instanceof Error ? error.message : '认知更新失败。' });
+    }
+  };
+  const closeCognitionWorkbench = useCallback(() => {
+    cognitionComparisonAbortRef.current?.abort();
+    cognitionComparisonAbortRef.current = null;
+    setCognitionWorkbench(null);
+  }, []);
+  const closeCognitionPreview = useCallback(() => setCognitionPreview(null), []);
+
   const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
     await saveWorkspaceState(workspaceRef.current);
     const { exportLocalBackup } = await import('../services/localBackup');
@@ -2180,6 +2469,11 @@ export default function App() {
         onOpenReadingCards={readingCardsOpen ? closeReadingCards : openReadingCards}
         readingCardsOpen={readingCardsOpen}
         readingCardFeedbackCount={readingCardFeedback?.count ?? 0}
+        cognitionSignalCount={cognitionReencounters.length}
+        onOpenCognitionSignal={() => {
+          const cognition = cognitionReencounters[0];
+          if (cognition) void openCognitionPreview(cognition);
+        }}
         onOpenSettings={() => {
           setSettingsOpen(true);
           setReadingCardsOpen(false);
@@ -2203,6 +2497,17 @@ export default function App() {
         >
           <span className="reading-card-flight-token"><span /></span>
         </span>
+      )}
+      <CognitionReencounterNotice
+        matches={cognitionReencounters.filter((match) => match.level !== 'weak')}
+        onCompare={(cognition) => void startCognitionComparison(cognition)}
+        onDismiss={() => setCognitionReencounters([])}
+      />
+      {cognitionIndexIssues.length > 0 && (
+        <aside className="cognition-index-issue" role="status">
+          <span>认知目录有 {cognitionIndexIssues.length} 个文件暂时只读：{cognitionIndexIssues[0]?.filename}</span>
+          <button type="button" className="pressable" onClick={() => void cognitionLoop.rebuildProjection().then(applyCognitionScan)}>重新扫描</button>
+        </aside>
       )}
       <MessageList
         key={activeConversation.id}
@@ -2357,6 +2662,7 @@ export default function App() {
         storageUsageIssue={localStorageUsageIssue}
         backupStatus={localBackupStatus}
         backupStatusIssue={localBackupStatusIssue}
+        cognitionDirectoryState={cognitionDirectoryState}
         onSaveConnection={saveConnection}
         onTestConnection={testConnection}
         onImportWorkosCredentials={importWorkosLoginCredentials}
@@ -2367,7 +2673,30 @@ export default function App() {
         onImportBackup={importBackup}
         onClose={() => setSettingsOpen(false)}
         onClearHistory={clearLocalHistory}
+        onConnectCognitionDirectory={connectCognitionDirectory}
+        onReconnectCognitionDirectory={reconnectCognitionDirectory}
+        onDisconnectCognitionDirectory={disconnectCognitionDirectory}
       />
+      {cognitionWorkbench && (
+        <CognitionWorkbench
+          cognition={cognitionWorkbench.cognition}
+          state={cognitionWorkbench.state}
+          result={cognitionWorkbench.result}
+          issue={cognitionWorkbench.issue}
+          details={cognitionWorkbench.details}
+          onResolve={(outcome, revision, boundary, reason) => void resolveCognitionComparison(outcome, revision, boundary, reason)}
+          onClose={closeCognitionWorkbench}
+        />
+      )}
+      {cognitionPreview && (
+        <CognitionLocalView
+          cognition={cognitionPreview.cognition}
+          details={cognitionPreview.details}
+          issue={cognitionPreview.issue}
+          onCompare={() => void startCognitionComparison(cognitionPreview.cognition)}
+          onClose={closeCognitionPreview}
+        />
+      )}
       {historyDeletion && (() => {
         const presentation = historyDeletionPresentation(historyDeletion.kind === 'conversation'
           ? {

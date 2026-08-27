@@ -486,6 +486,53 @@ describe('WorkosSseParser', () => {
     expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('未知字段');
   });
 
+  it('recognizes only the fixed versioned cognition candidate purpose', () => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+    const candidate = {
+      type: 'judgment-principle',
+      title: '先验证关键约束',
+      currentUnderstanding: '先验证会决定可行性的约束。',
+      changedFrom: '过去会先构建完整流程。',
+      rationale: '避免在错误基础上扩建。',
+      boundary: '只适用于关键约束。',
+      unresolved: '不同环境仍需验证。',
+      question: '它在什么情况下不适用？',
+    };
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_cognition1', sessionID: 'ses_session1', type: 'a2ui',
+        payload: {
+          title: '可能形成了新的理解',
+          purpose: 'cognition-candidate',
+          purposeVersion: 1,
+          cognition: candidate,
+          fields: [{ type: 'text', label: '适用边界', default: '只适用于关键约束。' }],
+        },
+      },
+    }));
+    expect(onInterrupt).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: 'cognition-candidate',
+      purposeVersion: 1,
+      cognitionCandidate: candidate,
+    }));
+
+    onInterrupt.mockClear();
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_cognition2', sessionID: 'ses_session1', type: 'a2ui',
+        payload: {
+          title: '普通问题', purpose: 'cognition-candidate', purposeVersion: 2,
+          cognition: candidate,
+          fields: [{ type: 'text', label: '补充说明', default: '' }],
+        },
+      },
+    }));
+    expect(onInterrupt).toHaveBeenCalledWith(expect.not.objectContaining({ cognitionCandidate: expect.anything() }));
+  });
+
   it('emits replied and rejected interrupt resolutions with safe answer values', () => {
     const onInterruptResolution = vi.fn();
     const parser = new WorkosSseParser({ onText: vi.fn(), onInterruptResolution });
