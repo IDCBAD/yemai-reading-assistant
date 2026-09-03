@@ -61,7 +61,6 @@ import {
   pickCognitionDirectory,
   supportsCognitionDirectory,
 } from '../cognition/browserAdapters';
-import { cognitionCandidateFromDecision } from '../cognition/candidate';
 import { WorkosCognitionComparisonGateway } from '../cognition/workosComparison';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
@@ -130,8 +129,17 @@ import {
   type BrowserTabChange,
 } from './pageMetadataSync';
 import { shouldPreparePageReference } from './pageReference';
-import { createReadingCard, openReadingCardSourceInWorkspace, readingCardId } from './readingCards';
 import {
+  createReadingCard,
+  createReadingCardExcerpt,
+  openReadingCardSourceInWorkspace,
+  readingCardId,
+  readingCardKind,
+} from './readingCards';
+import {
+  shouldCloseSearchOnEscape,
+  shouldPauseReadingCardsForSearch,
+  workspaceSearchScopeForSurface,
   WorkspaceSearchSessionController,
   type WorkspaceSearchSession,
 } from './searchSession';
@@ -288,6 +296,7 @@ interface PagePreparationResult {
 interface ReadingCardFeedback {
   id: number;
   count: number;
+  label: string;
   origin?: ReadingCardFeedbackOrigin;
   destination?: ReadingCardFeedbackOrigin;
 }
@@ -313,6 +322,7 @@ export default function App() {
   const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
   const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
   const [searchSession, setSearchSession] = useState<WorkspaceSearchSession | null>(null);
+  const [searchSuspended, setSearchSuspended] = useState(false);
   const [searchNavigationTarget, setSearchNavigationTarget] = useState<{
     conversationId: string;
     messageId: string;
@@ -358,6 +368,7 @@ export default function App() {
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
   const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
+  const searchSuspendedRef = useRef(false);
   const readingCardWritesRef = useRef(new Set<string>());
   const readingCardFeedbackSequenceRef = useRef(0);
   const readingCardFeedbackTimerRef = useRef<number | null>(null);
@@ -381,6 +392,7 @@ export default function App() {
   const requestCoordinatorRef = useRef<ConversationRequestCoordinator<QueuedAgentRequest> | null>(null);
   const cognitionRegistryRef = useRef(new DexieCognitionDirectoryRegistry());
   const cognitionProjectionRef = useRef(new DexieCognitionProjection());
+  searchSuspendedRef.current = searchSuspended;
   if (!requestCoordinatorRef.current) {
     requestCoordinatorRef.current = new ConversationRequestCoordinator((request, signal) =>
       requestRunnerRef.current(request, signal));
@@ -407,7 +419,7 @@ export default function App() {
     [workspace.conversations],
   );
   const savedMessageIds = useMemo(() => new Set(readingCards
-    .filter((card) => card.sourceConversationId === activeConversation.id)
+    .filter((card) => card.sourceConversationId === activeConversation.id && readingCardKind(card) === 'answer')
     .map((card) => card.sourceMessageId)), [activeConversation.id, readingCards]);
   const runSummary = useMemo(
     () => deriveAgentRunSummary(activeConversation.messages),
@@ -1001,20 +1013,23 @@ export default function App() {
     setSearchSession(searchSessionControllerRef.current.open(
       workspaceRef.current,
       readingCardsRef.current,
+      workspaceSearchScopeForSurface(readingCardsOpen),
     ));
+    setSearchSuspended(false);
     setHistoryOpen(false);
-    setReadingCardsOpen(false);
     setSettingsOpen(false);
-  }, []);
+  }, [readingCardsOpen]);
 
   const closeCommandPalette = useCallback(() => {
     searchSessionControllerRef.current.close();
     setSearchSession(null);
+    setSearchSuspended(false);
   }, []);
 
   const closeReadingCards = useCallback(() => {
     setReadingCardsOpen(false);
     setReadingCardSelectionId(undefined);
+    setSearchSuspended(false);
   }, []);
 
   const openReadingCards = useCallback(() => {
@@ -1026,7 +1041,7 @@ export default function App() {
     setSettingsOpen(false);
   }, [closeCommandPalette]);
 
-  const showReadingCardFeedback = useCallback((origin?: ReadingCardFeedbackOrigin) => {
+  const showReadingCardFeedback = useCallback((origin?: ReadingCardFeedbackOrigin, label = '已加入收藏') => {
     const trigger = document.querySelector<HTMLElement>('[data-reading-cards-trigger="true"]');
     const bounds = trigger?.getBoundingClientRect();
     const destination = bounds
@@ -1036,6 +1051,7 @@ export default function App() {
     setReadingCardFeedback({
       id: readingCardFeedbackSequenceRef.current,
       count: 1,
+      label,
       origin,
       destination,
     });
@@ -1045,7 +1061,7 @@ export default function App() {
     readingCardFeedbackTimerRef.current = window.setTimeout(() => {
       setReadingCardFeedback(null);
       readingCardFeedbackTimerRef.current = null;
-    }, 460);
+    }, 320);
   }, []);
 
   useEffect(() => () => {
@@ -1078,7 +1094,7 @@ export default function App() {
     readingCardsRef.current = next;
     setReadingCards(next);
     setReadingCardsIssue(undefined);
-    if (!existing) showReadingCardFeedback(origin);
+    if (!existing) showReadingCardFeedback(origin, '已收藏完整回答');
     try {
       if (existing) await removeReadingCard(id);
       else await saveReadingCard(next[0]!);
@@ -1090,6 +1106,40 @@ export default function App() {
         : '收藏失败，请检查扩展本地存储。');
     } finally {
       readingCardWritesRef.current.delete(id);
+    }
+  }, [showReadingCardFeedback]);
+
+  const collectReadingCardExcerpt = useCallback(async (
+    message: ChatMessage,
+    text: string,
+    contextSources: AnswerContextSource[],
+    origin?: ReadingCardFeedbackOrigin,
+  ) => {
+    const currentWorkspace = workspaceRef.current;
+    const currentTab = currentWorkspace.openTabs.find((tab) => tab.id === currentWorkspace.activeOpenTabId)
+      ?? currentWorkspace.openTabs[0];
+    const conversation = currentWorkspace.conversations.find((item) => item.id === currentTab?.conversationId);
+    if (!conversation || !text.trim()) return;
+    const card = createReadingCardExcerpt(conversation, message, text, contextSources);
+    if (readingCardWritesRef.current.has(card.id)) return;
+    const previous = readingCardsRef.current;
+    const existing = previous.some((item) => item.id === card.id);
+    setReadingCardsIssue(undefined);
+    showReadingCardFeedback(origin, existing ? '这个片段已在收藏中' : '已收藏回答片段');
+    if (existing) return;
+
+    readingCardWritesRef.current.add(card.id);
+    const next = [card, ...previous];
+    readingCardsRef.current = next;
+    setReadingCards(next);
+    try {
+      await saveReadingCard(card);
+    } catch {
+      readingCardsRef.current = previous;
+      setReadingCards(previous);
+      setReadingCardsIssue('收藏片段失败，请检查扩展本地存储。');
+    } finally {
+      readingCardWritesRef.current.delete(card.id);
     }
   }, [showReadingCardFeedback]);
 
@@ -1150,7 +1200,7 @@ export default function App() {
       const next = readingCardsRef.current.filter((item) => item.id !== undo.card.id);
       readingCardsRef.current = next;
       setReadingCards(next);
-      setReadingCardsIssue('撤销未能保存，请重新收藏这条回答。');
+      setReadingCardsIssue('撤销未能保存，请重新收藏这张卡片。');
     }
   }, [readingCardRemovalUndo]);
 
@@ -1171,6 +1221,7 @@ export default function App() {
     workspaceRef.current = next;
     setWorkspace(next);
     setReadingCardsOpen(false);
+    closeCommandPalette();
     searchNavigationRequestRef.current += 1;
     setSearchNavigationTarget({
       conversationId: target.id,
@@ -1179,7 +1230,7 @@ export default function App() {
       matchedTerms: [],
       requestId: searchNavigationRequestRef.current,
     });
-  }, []);
+  }, [closeCommandPalette]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1189,7 +1240,7 @@ export default function App() {
         return;
       }
       if (event.key === 'Escape') {
-        closeCommandPalette();
+        if (shouldCloseSearchOnEscape(searchSuspendedRef.current)) closeCommandPalette();
         setHistoryOpen(false);
         setSettingsOpen(false);
       }
@@ -1232,7 +1283,7 @@ export default function App() {
 
   const selectSearchResult = useCallback((result: WorkspaceSearchResult, query: string) => {
     if (result.kind === 'reading-card' && result.readingCardId) {
-      closeCommandPalette();
+      setSearchSuspended(true);
       setReadingCardSelectionId(result.readingCardId);
       setReadingCardsLoaded(true);
       setReadingCardsOpen(true);
@@ -1243,6 +1294,8 @@ export default function App() {
     if (next === current) return;
     workspaceRef.current = next;
     setWorkspace(next);
+    setReadingCardsOpen(false);
+    setReadingCardSelectionId(undefined);
     closeCommandPalette();
     if (result.messageId) {
       searchNavigationRequestRef.current += 1;
@@ -1697,7 +1750,7 @@ export default function App() {
     pendingDecisionRequestsRef.current.add(pendingKey);
 
     const answers = normalizeAgentDecisionAnswers(decision.fields, candidateAnswers);
-    let cognitionSavedLocally = Boolean(decision.cognitionReceipt);
+    const cognitionSavedLocally = Boolean(decision.cognitionReceipt);
     updateConversation(conversationId, (current) => ({
       ...current,
       messages: current.messages.map((item) => {
@@ -1722,41 +1775,6 @@ export default function App() {
     }));
 
     try {
-      if (action === 'reply' && decision.cognitionCandidate && !decision.cognitionReceipt) {
-        const primaryField = decision.fields[0];
-        const primaryAnswer = primaryField && typeof answers[primaryField.label] === 'string'
-          ? answers[primaryField.label] as string
-          : '';
-        const sourcePage = message.pageContext ?? conversation.page;
-        const candidate = cognitionCandidateFromDecision(decision, {
-          conversationId,
-          messageId,
-          pageTitle: sourcePage.title,
-          pageUrl: sourcePage.url,
-        }, primaryAnswer);
-        const receipt = await cognitionLoop.confirmCandidate(candidate);
-        cognitionSavedLocally = true;
-        updateConversation(conversationId, (current) => ({
-          ...current,
-          messages: current.messages.map((item) => item.id !== messageId
-            ? item
-            : {
-                ...item,
-                interactions: messageDecisionInteractions(item).map((interaction) => interaction.id === decision.id
-                  ? {
-                      ...interaction,
-                      answers,
-                      cognitionReceipt: {
-                        id: receipt.id,
-                        filename: receipt.filename,
-                        savedAt: Date.now(),
-                        available: true,
-                      },
-                    }
-                  : interaction),
-              }),
-        }));
-      }
       const transport = createWorkosTransport(connection);
       if (action === 'reply') {
         if (!transport.replyInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
@@ -1816,38 +1834,38 @@ export default function App() {
         }),
       }));
       setConnectionIssue(errorMessage);
-      if (decision.cognitionCandidate && !cognitionSavedLocally) setSettingsOpen(true);
       if (error instanceof WorkosApiError && (error.status === 401 || error.status === 403)) setSettingsOpen(true);
     } finally {
       pendingDecisionRequestsRef.current.delete(pendingKey);
     }
-  }, [cognitionLoop, updateConversation, workosConnection]);
+  }, [updateConversation, workosConnection]);
 
-  const sendMessage = () => {
-    if (!workspaceHydrated || workosConnection === null) return;
+  const sendMessage = (draftInput: string) => {
+    if (!workspaceHydrated || workosConnection === null) return false;
     if (!activeConnectionConfigured) {
       setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送消息。');
       setSettingsOpen(true);
-      return;
+      return false;
     }
     if (draftContextItems.some((item) => item.included
       && (item.kind === 'file' || item.kind === 'image')
       && item.status === 'preparing')) {
       setConnectionIssue('附件仍在上传，请等待完成后再发送。');
-      return;
+      return false;
     }
+    const question = draftInput.trim();
     const readyAttachments = contextAttachments(draftContextItems).filter((attachment) => attachment.url);
     const readySelections = contextSelections(draftContextItems);
-    const hasContent = activeConversation.draftInput.trim()
+    const hasContent = question
       || readySelections.length > 0
       || readyAttachments.length > 0;
-    if (!hasContent) return;
+    if (!hasContent) return false;
 
     const now = Date.now();
     const conversationAtSend = activeConversation;
     const pageAtSend = contextPage(draftContextItems)?.page ?? displayedPage;
     const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
-    const presentation = activeConversation.draftInput.trim() === PAGE_OVERVIEW_PROMPT
+    const presentation = question === PAGE_OVERVIEW_PROMPT
       ? 'page-overview' as const
       : undefined;
     const needsPageRead = includeCurrentPage && shouldDeliverFullCurrentPage({
@@ -1859,7 +1877,7 @@ export default function App() {
     const userMessage: ChatMessage = {
       id: makeId('message'),
       role: 'user',
-      content: activeConversation.draftInput.trim(),
+      content: question,
       createdAt: now,
       status: 'complete',
       presentation,
@@ -1886,8 +1904,8 @@ export default function App() {
 
     updateConversation(conversationAtSend.id, (conversation) => ({
       ...conversation,
-      title: conversation.isDraft && conversation.draftInput.trim()
-        ? conversation.draftInput.trim().slice(0, 18)
+      title: conversation.isDraft && question
+        ? question.slice(0, 18)
         : conversation.title,
       subtitle: recentSubtitle(conversation),
       isDraft: false,
@@ -1910,6 +1928,7 @@ export default function App() {
       needsPageRead,
       pageSnapshotPromise,
     });
+    return true;
   };
 
   const retryMessage = (message: ChatMessage) => {
@@ -2328,7 +2347,7 @@ export default function App() {
     cognitionComparisonAbortRef.current?.abort();
     cognitionComparisonAbortRef.current = null;
     setCognitionWorkbench(null);
-  }, []);
+  }, [closeCommandPalette]);
   const closeCognitionPreview = useCallback(() => setCognitionPreview(null), []);
 
   const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
@@ -2481,6 +2500,9 @@ export default function App() {
           setHistoryOpen(false);
         }}
       />
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {readingCardsIssue ?? readingCardFeedback?.label ?? ''}
+      </span>
       {readingCardFeedback?.origin && readingCardFeedback.destination && (
         <span
           className="reading-card-flight"
@@ -2534,6 +2556,9 @@ export default function App() {
         onBranch={branchFromMessage}
         onToggleReadingCard={(message, contextSources, origin) => {
           void toggleReadingCard(message, contextSources, origin);
+        }}
+        onCollectAssistantExcerpt={(message, text, contextSources, origin) => {
+          void collectReadingCardExcerpt(message, text, contextSources, origin);
         }}
         onOpenBranchOrigin={() => {
           if (branchParent) selectHistory(branchParent.id);
@@ -2630,6 +2655,7 @@ export default function App() {
           <CommandPalette
             session={searchSession}
             maxTabs={MAX_OPEN_TABS}
+            suspended={searchSuspended}
             onClose={closeCommandPalette}
             onSelect={selectSearchResult}
           />
@@ -2642,9 +2668,14 @@ export default function App() {
             cards={readingCards}
             conversations={workspace.conversations}
             selectedCardId={readingCardSelectionId}
+            paused={shouldPauseReadingCardsForSearch(Boolean(searchSession), searchSuspended)}
             issue={readingCardsIssue}
             removalUndo={readingCardRemovalUndo}
             onClose={closeReadingCards}
+            onReaderClose={() => {
+              setReadingCardSelectionId(undefined);
+              setSearchSuspended(false);
+            }}
             onRemove={(card) => void removeSavedReadingCard(card)}
             onUndoRemove={() => void undoRemovedReadingCard()}
             onOpenSource={openReadingCardSource}

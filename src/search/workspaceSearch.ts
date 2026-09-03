@@ -10,6 +10,7 @@ import {
 } from './searchTextMatches';
 
 export type WorkspaceSearchResultKind = 'conversation' | 'message' | 'reading-card';
+export type WorkspaceSearchScope = 'all' | 'reading-cards';
 
 export interface WorkspaceSearchResult {
   id: string;
@@ -124,6 +125,15 @@ function conversationDocument(conversation: Conversation): WorkspaceSearchDocume
   };
 }
 
+function sourceHostname(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.hostname : '';
+  } catch {
+    return '';
+  }
+}
+
 function readingCardDocument(card: ReadingCardRow): WorkspaceSearchDocument {
   return {
     id: card.id,
@@ -133,11 +143,15 @@ function readingCardDocument(card: ReadingCardRow): WorkspaceSearchDocument {
     readingCardId: card.id,
     role: 'assistant',
     conversationTitle: card.title,
-    subtitle: '阅读卡片',
+    subtitle: card.kind === 'excerpt' ? '收藏 · 回答片段' : '收藏 · 完整回答',
     searchTitle: card.title,
     userContent: '',
     assistantContent: card.bodyMarkdown,
-    pageText: unique(card.sources.flatMap((source) => [source.title, source.site ?? '', source.url])).join(' '),
+    pageText: unique(card.sources.flatMap((source) => [
+      source.title,
+      source.site ?? '',
+      sourceHostname(source.url),
+    ])).join(' '),
     artifactText: unique(card.artifacts.map((artifact) => artifact.filename)).join(' '),
     updatedAt: card.updatedAt,
     archived: false,
@@ -262,8 +276,8 @@ function toWorkspaceResult(
 }
 
 export interface WorkspaceSearchIndex {
-  search: (query: string, limit?: number) => WorkspaceSearchResult[];
-  recent: (limit?: number) => WorkspaceSearchResult[];
+  search: (query: string, limit?: number, scope?: WorkspaceSearchScope) => WorkspaceSearchResult[];
+  recent: (limit?: number, scope?: WorkspaceSearchScope) => WorkspaceSearchResult[];
   documentCount: number;
 }
 
@@ -293,14 +307,18 @@ export function createWorkspaceSearchIndex(workspace: WorkspaceState, readingCar
 
   return {
     documentCount: documents.length,
-    search(query, limit = 30) {
+    search(query, limit = 30, scope = 'all') {
       const normalizedQuery = normalizeSearchText(query);
       if (!normalizedQuery) return [];
       const exactStructured = requiresExactStructuredMatch(normalizedQuery);
       const results = search.search(normalizedQuery)
         .flatMap((hit) => {
           const document = documentsById.get(String(hit.id));
-          if (!document || (exactStructured && !hasExactStructuredMatch(document, normalizedQuery))) return [];
+          if (
+            !document
+            || (scope === 'reading-cards' && document.kind !== 'reading-card')
+            || (exactStructured && !hasExactStructuredMatch(document, normalizedQuery))
+          ) return [];
           return [toWorkspaceResult(hit, document, query)];
         });
       const cardSources = new Set(results
@@ -311,18 +329,21 @@ export function createWorkspaceSearchIndex(workspace: WorkspaceState, readingCar
           || !cardSources.has(`${result.conversationId}\n${result.messageId ?? ''}`))
         .slice(0, limit);
     },
-    recent(limit = 8) {
+    recent(limit = 8, scope = 'all') {
       return documents
-        .filter((document) => document.kind === 'conversation')
+        .filter((document) => document.kind === (scope === 'reading-cards' ? 'reading-card' : 'conversation'))
         .sort((left, right) => right.updatedAt - left.updatedAt)
         .slice(0, limit)
         .map((document) => ({
           id: document.id,
           kind: document.kind,
           conversationId: document.conversationId,
+          ...(document.messageId ? { messageId: document.messageId } : {}),
+          ...(document.readingCardId ? { readingCardId: document.readingCardId } : {}),
+          ...(document.role ? { role: document.role } : {}),
           title: document.conversationTitle,
           subtitle: document.subtitle,
-          snippet: plainSnippet(document.pageText),
+          snippet: plainSnippet(document.kind === 'reading-card' ? document.assistantContent : document.pageText),
           updatedAt: document.updatedAt,
           archived: document.archived,
           score: 0,

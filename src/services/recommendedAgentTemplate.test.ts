@@ -7,13 +7,18 @@ describe('recommended Agent.md template', () => {
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('[END_YEMAI_CONTEXT]');
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('信任边界');
     expect(YEMAI_AGENT_MD_TEMPLATE).toContain('来源 URL');
-    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('cognition-candidate');
-    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('judgment-principle');
-    expect(YEMAI_AGENT_MD_TEMPLATE).toContain('一条回答最多提出一个');
+    expect(YEMAI_AGENT_MD_TEMPLATE).not.toContain('cognition-candidate');
+    expect(YEMAI_AGENT_MD_TEMPLATE).not.toContain('认知候选');
   });
 
   it('is a complete markdown file ready for direct copying', () => {
     expect(YEMAI_AGENT_MD_TEMPLATE.startsWith('# 页脉阅读助手')).toBe(true);
     expect(YEMAI_AGENT_MD_TEMPLATE.endsWith('\n')).toBe(true);
+  });
+
+  it('does not ask the Agent to decide when personal cognition should be formed', () => {
+    expect(YEMAI_AGENT_MD_TEMPLATE).not.toContain('question` 工具');
+    expect(YEMAI_AGENT_MD_TEMPLATE).not.toContain('@media interrupt');
+    expect(YEMAI_AGENT_MD_TEMPLATE).not.toContain('微型确认');
   });
 });

@@ -8,21 +8,23 @@ import {
   type ReadingCardRemovalUndo,
   type SemanticAction,
 } from '../actionSemantics';
-import { readingCardSourceAvailable } from '../readingCards';
+import { readingCardKind, readingCardSourceAvailable } from '../readingCards';
 import type { Conversation } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
-import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
+import { ReadingCardRiver, type ReadingCardOpenModality } from './ReadingCardRiver';
 
 interface ReadingCardsPanelProps {
   open: boolean;
   cards: ReadingCardRow[];
   conversations: Conversation[];
   selectedCardId?: string;
+  paused?: boolean;
   issue?: string;
   removalUndo: ReadingCardRemovalUndo | null;
   onClose: () => void;
+  onReaderClose?: () => void;
   onRemove: (card: ReadingCardRow) => void;
   onUndoRemove: () => void;
   onOpenSource: (card: ReadingCardRow) => void;
@@ -40,14 +42,20 @@ function safeArtifactUrl(value?: string) {
   }
 }
 
+function readingCardKindLabel(card: ReadingCardRow) {
+  return readingCardKind(card) === 'excerpt' ? '回答片段' : '完整回答';
+}
+
 export function ReadingCardsPanel({
   open,
   cards,
   conversations,
   selectedCardId,
+  paused = false,
   issue,
   removalUndo,
   onClose,
+  onReaderClose,
   onRemove,
   onUndoRemove,
   onOpenSource,
@@ -57,11 +65,13 @@ export function ReadingCardsPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
+  const [readerModality, setReaderModality] = useState<ReadingCardOpenModality>('programmatic');
   const [exportFeedback, setExportFeedback] = useState<{
     key: string;
     state: Exclude<ActionFeedbackState, 'idle'>;
   } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const returnFocusIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
   selectedIdRef.current = selectedId;
@@ -103,20 +113,30 @@ export function ReadingCardsPanel({
 
   useEffect(() => {
     if (!open) return;
-    setSelectedId(selectedCardId ?? null);
+    const nextSelectedId = selectedCardId ?? null;
+    setReaderModality('programmatic');
+    setSelectedId(nextSelectedId);
+    returnFocusIdRef.current = nextSelectedId;
   }, [open, selectedCardId]);
 
   useEffect(() => {
-    if (selectedId && !cards.some((card) => card.id === selectedId)) setSelectedId(null);
-  }, [cards, selectedId]);
+    if (selectedId && !cards.some((card) => card.id === selectedId)) {
+      setSelectedId(null);
+      onReaderClose?.();
+    }
+  }, [cards, onReaderClose, selectedId]);
 
   useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (paused) return;
       event.preventDefault();
-      if (selectedIdRef.current) setSelectedId(null);
+      if (selectedIdRef.current) {
+        setSelectedId(null);
+        onReaderClose?.();
+      }
       else onClose();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -124,16 +144,43 @@ export function ReadingCardsPanel({
       window.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus();
     };
-  }, [open, onClose]);
+  }, [onClose, onReaderClose, open, paused]);
 
   useEffect(() => {
     if (!open) return;
     const frame = window.requestAnimationFrame(() => {
-      const selector = selected ? '.reading-cards-back' : '.reading-card-open, .reading-cards-close';
-      panelRef.current?.querySelector<HTMLElement>(selector)?.focus();
+      if (selected) {
+        panelRef.current?.querySelector<HTMLElement>('.reading-card-reader-back')?.focus();
+        return;
+      }
+      const returnTarget = returnFocusIdRef.current
+        ? [...(panelRef.current?.querySelectorAll<HTMLElement>('[data-reading-card-id]') ?? [])]
+            .find((node) => node.dataset.readingCardId === returnFocusIdRef.current)
+            ?.querySelector<HTMLElement>('button')
+        : null;
+      if (returnTarget) {
+        returnTarget.dataset.riverFocusReturn = 'true';
+        returnTarget.focus({ preventScroll: true });
+        delete returnTarget.dataset.riverFocusReturn;
+        return;
+      }
+      panelRef.current
+        ?.querySelector<HTMLElement>('.reading-card-river__open, .reading-cards-close')
+        ?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [open, selected]);
+
+  const openCard = (cardId: string, modality: ReadingCardOpenModality) => {
+    returnFocusIdRef.current = cardId;
+    setReaderModality(modality);
+    setSelectedId(cardId);
+  };
+
+  const closeReader = () => {
+    setSelectedId(null);
+    onReaderClose?.();
+  };
 
   if (!rendered) return null;
   const exportAllPresentation = exportPresentation('all', 'export-all-cards');
@@ -142,7 +189,11 @@ export function ReadingCardsPanel({
     : null;
 
   return (
-    <div className={`reading-cards-layer${visible ? ' is-open' : ''}`} aria-hidden={!open}>
+    <div
+      className={`reading-cards-layer${visible ? ' is-open' : ''}`}
+      aria-hidden={!open || paused}
+      inert={paused || undefined}
+    >
       <button
         className="reading-cards-scrim"
         type="button"
@@ -154,13 +205,13 @@ export function ReadingCardsPanel({
         className="reading-cards-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="阅读卡片"
+        aria-label="收藏卡片"
         ref={panelRef}
         onKeyDown={(event) => {
           if (event.key !== 'Tab') return;
           const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
             'button:not(:disabled), a[href]',
-          ) ?? []);
+          ) ?? []).filter((element) => element.tabIndex >= 0 && !element.closest('[inert]'));
           if (focusable.length === 0) return;
           const first = focusable[0]!;
           const last = focusable.at(-1)!;
@@ -175,11 +226,11 @@ export function ReadingCardsPanel({
       >
         <header className="reading-cards-header">
           <div>
-            <p className="eyebrow">Saved answers</p>
-            <h2>{selected ? selected.title : '阅读卡片'}</h2>
+            <p className="eyebrow">Collection</p>
+            <h2>收藏</h2>
           </div>
           <div className="reading-cards-header-actions">
-            {!selected && cards.length > 0 && (
+            {cards.length > 0 && (
               <button
                 className="reading-cards-export-all pressable"
                 type="button"
@@ -195,167 +246,164 @@ export function ReadingCardsPanel({
                 {exportAllPresentation.label}
               </button>
             )}
-            {!selected && <span className="reading-cards-count">{cards.length} 项</span>}
-            {selected && (
-              <button className="reading-cards-back pressable" type="button" onClick={() => setSelectedId(null)}>
-                返回列表
-              </button>
-            )}
+            <span className="reading-cards-count">{cards.length}</span>
             <button
               className="reading-cards-close pressable"
               type="button"
               onClick={onClose}
-              aria-label="关闭阅读卡片"
+              aria-label="关闭收藏"
             >
               <KoboyoIcon name="cross" size={13} />
             </button>
           </div>
         </header>
 
-        {issue && <p className="reading-cards-issue" role="status">{issue}</p>}
-
-        {selected ? (
-          <article className="reading-card-detail">
-            <div className="reading-card-detail-meta">
-              <span>收藏于 {formatMessageTimestamp(selected.createdAt).fullLabel}</span>
-              <span>{selected.sources.length} 个来源</span>
+        <div className="reading-cards-notice">
+          {issue && <p className="reading-cards-issue" role="status">{issue}</p>}
+        </div>
+        <div className={`reading-cards-stage${selected ? ' has-reader' : ''}${readerModality === 'keyboard' ? ' is-keyboard-open' : ''}`}>
+          {cards.length === 0 ? (
+            <div className="reading-cards-empty">
+              <span><KoboyoIcon name="bookmark" size={19} /></span>
+              <strong>还没有收藏</strong>
+              <p>收藏完整回答，或划选其中的结论保存为片段。</p>
             </div>
-            {selected.bodyMarkdown ? (
-              <div className="reading-card-markdown markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.bodyMarkdown}</ReactMarkdown>
-              </div>
-            ) : (
-              <p className="reading-card-artifact-only">这张卡片保存了一组 Agent 产物。</p>
-            )}
+          ) : (
+            <ReadingCardRiver
+              cards={cards}
+              selectedCardId={selectedId}
+              paused={paused}
+              onOpenCard={openCard}
+            />
+          )}
 
-            {selected.artifacts.length > 0 && (
-              <section className="reading-card-section">
-                <h3>产物</h3>
-                <div className="reading-card-artifacts">
-                  {selected.artifacts.map((artifact) => {
-                    const url = safeArtifactUrl(artifact.url);
-                    return url ? (
-                      <a href={url} target="_blank" rel="noreferrer" key={artifact.id}>
-                        <KoboyoIcon name="file" size={13} />
-                        <span>{artifact.filename}</span>
-                      </a>
-                    ) : (
-                      <span key={artifact.id}>
-                        <KoboyoIcon name="file" size={13} />
-                        <span>{artifact.filename}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {selected.sources.length > 0 && (
-              <section className="reading-card-section">
-                <h3>来源</h3>
-                <div className="reading-card-sources">
-                  {selected.sources.map((source) => {
-                    const url = safeArtifactUrl(source.url);
-                    const content = (
-                      <>
-                        <PageFavicon
-                          className="reading-card-source-favicon"
-                          url={source.url}
-                          title={source.title}
-                          site={source.site}
-                          size={16}
-                        />
-                        <span className="reading-card-source-copy">
-                          <strong>{source.title}</strong>
-                          <small>{source.site || source.url}</small>
-                        </span>
-                      </>
-                    );
-                    return url
-                      ? <a href={url} target="_blank" rel="noreferrer" key={source.url}>{content}</a>
-                      : <span key={source.url || source.title}>{content}</span>;
-                  })}
-                </div>
-              </section>
-            )}
-
-            <footer className="reading-card-detail-actions">
+          {selected && (
+            <>
               <button
-                className="reading-card-source-button pressable"
+                className="reading-card-reader-scrim"
                 type="button"
-                disabled={!readingCardSourceAvailable(selected, conversations)}
-                onClick={() => onOpenSource(selected)}
-              >
-                <KoboyoIcon name="quote" size={13} />
-                {readingCardSourceAvailable(selected, conversations) ? '回到原对话' : '原对话已删除'}
-              </button>
-              <button
-                className="reading-card-export-button pressable"
-                type="button"
-                disabled={selectedExportPresentation?.spinning}
-                onClick={() => runExport(
-                  selected.id,
-                  'export-card-markdown',
-                  () => onExportCard(selected),
-                )}
-                aria-live="polite"
-              >
-                <KoboyoIcon
-                  name={selectedExportPresentation?.icon ?? 'document-download'}
-                  size={14}
-                  className={selectedExportPresentation?.spinning ? 'is-spinning' : ''}
-                />
-                {selectedExportPresentation?.label ?? '导出 Markdown'}
-              </button>
-              <button className="reading-card-remove-button pressable" type="button" onClick={() => onRemove(selected)}>
-                <KoboyoIcon name="bookmark-minus" size={14} />
-                取消收藏
-              </button>
-            </footer>
-          </article>
-        ) : (
-          <div className="reading-cards-list" aria-label="收藏的回答">
-            {cards.length === 0 && (
-              <div className="reading-cards-empty">
-                <span><KoboyoIcon name="bookmark" size={19} /></span>
-                <strong>还没有阅读卡片</strong>
-                <p>在一条有价值的 Agent 回答下点击收藏，它会独立保存在这里。</p>
-              </div>
-            )}
-            {cards.map((card) => (
-              <article className="reading-card-row" key={card.id}>
-                <button className="reading-card-open" type="button" onClick={() => setSelectedId(card.id)}>
-                  <span className="reading-card-row-copy">
-                    <strong>{card.title}</strong>
-                    <span>{card.excerpt}</span>
-                    <small className="reading-card-row-meta">
-                      <PageFavicon
-                        className="reading-card-row-favicon"
-                        url={card.sources[0]?.url ?? ''}
-                        title={card.sources[0]?.title || '页脉回答'}
-                        site={card.sources[0]?.site}
-                        size={14}
-                      />
-                      <span>{card.sources[0]?.site || card.sources[0]?.title || '页脉回答'}</span>
-                      <time dateTime={new Date(card.createdAt).toISOString()}>
-                        {formatMessageTimestamp(card.createdAt).label}
-                      </time>
-                    </small>
-                  </span>
-                </button>
-                <IconTooltipButton
-                  className="reading-card-row-remove pressable"
-                  type="button"
-                  onClick={() => onRemove(card)}
-                  aria-label={`取消收藏：${card.title}`}
-                  tooltip="取消收藏"
-                >
-                  <KoboyoIcon name="bookmark-minus" size={13} />
-                </IconTooltipButton>
-              </article>
-            ))}
-          </div>
-        )}
+                tabIndex={-1}
+                aria-label="返回收藏河流"
+                onClick={closeReader}
+              />
+              <section className="reading-card-reader" aria-labelledby="reading-card-reader-title">
+                <header className="reading-card-reader-header">
+                  <button
+                    className="reading-card-reader-back pressable"
+                    type="button"
+                    onClick={closeReader}
+                    aria-label="返回收藏河流"
+                  >
+                    <span aria-hidden="true">←</span>
+                  </button>
+                  <div>
+                    <small>{readingCardKindLabel(selected)} · 收藏于 {formatMessageTimestamp(selected.createdAt).fullLabel}</small>
+                    <h2 id="reading-card-reader-title">{selected.title}</h2>
+                  </div>
+                </header>
+
+                <div className="reading-card-reader-body">
+                  <div className="reading-card-detail-meta">
+                    <span>{selected.sources.length} 个来源</span>
+                    <span>{selected.artifacts.length > 0 ? `${selected.artifacts.length} 个产物` : '正文快照'}</span>
+                  </div>
+                  {selected.bodyMarkdown ? (
+                    <div className="reading-card-markdown markdown-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.bodyMarkdown}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="reading-card-artifact-only">这张卡片保存了一组 Agent 产物。</p>
+                  )}
+
+                  {selected.artifacts.length > 0 && (
+                    <section className="reading-card-section">
+                      <h3>产物</h3>
+                      <div className="reading-card-artifacts">
+                        {selected.artifacts.map((artifact) => {
+                          const url = safeArtifactUrl(artifact.url);
+                          return url ? (
+                            <a href={url} target="_blank" rel="noreferrer" key={artifact.id}>
+                              <KoboyoIcon name="file" size={13} />
+                              <span>{artifact.filename}</span>
+                            </a>
+                          ) : (
+                            <span key={artifact.id}>
+                              <KoboyoIcon name="file" size={13} />
+                              <span>{artifact.filename}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  {selected.sources.length > 0 && (
+                    <section className="reading-card-section">
+                      <h3>来源</h3>
+                      <div className="reading-card-sources">
+                        {selected.sources.map((source) => {
+                          const url = safeArtifactUrl(source.url);
+                          const content = (
+                            <>
+                              <PageFavicon
+                                className="reading-card-source-favicon"
+                                url={source.url}
+                                title={source.title}
+                                site={source.site}
+                                size={16}
+                              />
+                              <span className="reading-card-source-copy">
+                                <strong>{source.title}</strong>
+                                <small>{source.site || source.url}</small>
+                              </span>
+                            </>
+                          );
+                          return url
+                            ? <a href={url} target="_blank" rel="noreferrer" key={source.url}>{content}</a>
+                            : <span key={source.url || source.title}>{content}</span>;
+                        })}
+                      </div>
+                    </section>
+                  )}
+                </div>
+
+                <footer className="reading-card-detail-actions">
+                  <button
+                    className="reading-card-source-button pressable"
+                    type="button"
+                    disabled={!readingCardSourceAvailable(selected, conversations)}
+                    onClick={() => onOpenSource(selected)}
+                  >
+                    <KoboyoIcon name="quote" size={13} />
+                    {readingCardSourceAvailable(selected, conversations) ? '回到原对话' : '原对话已删除'}
+                  </button>
+                  <button
+                    className="reading-card-export-button pressable"
+                    type="button"
+                    disabled={selectedExportPresentation?.spinning}
+                    onClick={() => runExport(
+                      selected.id,
+                      'export-card-markdown',
+                      () => onExportCard(selected),
+                    )}
+                    aria-live="polite"
+                  >
+                    <KoboyoIcon
+                      name={selectedExportPresentation?.icon ?? 'document-download'}
+                      size={14}
+                      className={selectedExportPresentation?.spinning ? 'is-spinning' : ''}
+                    />
+                    {selectedExportPresentation?.label ?? '导出 Markdown'}
+                  </button>
+                  <button className="reading-card-remove-button pressable" type="button" onClick={() => onRemove(selected)}>
+                    <KoboyoIcon name="bookmark-minus" size={14} />
+                    取消收藏
+                  </button>
+                </footer>
+              </section>
+            </>
+          )}
+        </div>
         {removalUndo && (
           <div className="reading-card-undo is-visible" role="status" aria-live="polite">
             <KoboyoIcon name="bookmark-minus" size={16} />

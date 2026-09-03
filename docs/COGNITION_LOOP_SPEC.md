@@ -1,6 +1,6 @@
 # A+ 个人认知循环实施规格
 
-> 状态：已发布规格
+> 状态：历史规格；自动候选形成路径已于 2026-08-31 被 [`COLLECTION_FIRST_DIRECTION.md`](./COLLECTION_FIRST_DIRECTION.md) 取代
 > 形成日期：2026-08-27
 > GitHub Issue：[#3 实现 A+ 个人认知循环：形成、重遇与修订](https://github.com/IDCBAD/yemai-reading-assistant/issues/3)
 > 产品决策来源：个人认知循环方向、独立 Markdown 认知目录 ADR、A+ 前端原型

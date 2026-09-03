@@ -26,8 +26,8 @@ POST /oapi/agent/v1/conversations/{conversationUuid}/execute/stream
 
 详细证据见：
 
-- [v1 流式问题报告](./workos-stream-issue-report.md)
-- [WorkOS 流式调查与重构参考](./WORKOS_STREAMING_REFACTOR_NOTES.md)
+- [v1 流式问题报告](./archive/investigations/workos/workos-stream-issue-report.md)
+- [WorkOS 流式调查与重构参考](./archive/investigations/workos/WORKOS_STREAMING_REFACTOR_NOTES.md)
 
 WorkOS 最新网页端已经迁移到 v2。逆向验证发现，v2 把消息提交与事件订阅分开，并通过 `runId` 绑定本轮执行：
 
@@ -38,7 +38,7 @@ POST /api/agent/v2/conversations/{conversationUuid}/queue/submit
 
 同一个 Conversation 连续三轮实测均可收到正确的增量文本和本轮完成事件。参考脚本：
 
-- [v2 连续多轮测试](./workos-v2-sequential-stream-test.py)
+- [v2 连续多轮测试](./archive/investigations/workos/workos-v2-sequential-stream-test.py)
 
 ## 3. 为什么不直接删除 v1
 

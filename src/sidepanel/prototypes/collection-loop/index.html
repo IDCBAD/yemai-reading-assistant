@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f4f6f7" />
+    <title>页脉 · 无限收藏河流原型</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/prototype.css" />
+  </head>
+  <body>
+    <!--
+      THROWAWAY UI PROTOTYPE
+      Three variants of an infinite collection-card loop, switchable via ?variant=A|B|C.
+      Question: can a finite, chronological collection feel continuous and organic without
+      sacrificing orientation, text clarity, or the existing overview-to-reader interaction?
+    -->
+    <main id="prototype-root"></main>
+
+    <nav class="prototype-switcher" aria-label="无限收藏河流原型方案切换">
+      <button type="button" data-switch="previous" aria-label="上一个方案">←</button>
+      <button class="prototype-switcher__label" type="button" data-reset aria-label="重置当前方案">
+        <strong id="variant-label">A · 柔性河流</strong>
+        <span id="variant-state">循环 · 1 / 10</span>
+      </button>
+      <button type="button" data-switch="next" aria-label="下一个方案">→</button>
+    </nav>
+
+    <div id="prototype-announcer" class="visually-hidden" aria-live="polite"></div>
+    <script type="module" src="/prototype.js"></script>
+  </body>
+</html>

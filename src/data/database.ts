@@ -62,8 +62,12 @@ export interface ReadingCardSource {
   site?: string;
 }
 
+export type ReadingCardKind = 'answer' | 'excerpt';
+
 export interface ReadingCardRow {
   id: string;
+  /** Missing on cards saved before excerpt collection existed; treat as `answer`. */
+  kind?: ReadingCardKind;
   sourceConversationId: string;
   sourceMessageId: string;
   title: string;

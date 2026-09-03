@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#eef1ef" />
+    <title>页脉 · 收藏河流交互原型</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/prototype.css" />
+  </head>
+  <body>
+    <!--
+      THROWAWAY PROTOTYPE
+      Five collection-river structures, switchable via ?variant=A|B|C|D|E.
+      Question: can wheel inertia, card extraction, and local avoidance make saved answers
+      delightful to revisit without sacrificing text readability or positional clarity?
+    -->
+    <main id="prototype-root"></main>
+
+    <nav class="prototype-switcher" aria-label="收藏河流原型方案切换">
+      <button type="button" data-switch-variant="previous" aria-label="上一个方案">←</button>
+      <button class="prototype-switcher__label" type="button" data-reset-prototype aria-label="重置当前方案">
+        <strong id="variant-label">E · 焦点阅读层</strong>
+        <span>点击重置位置</span>
+      </button>
+      <button type="button" data-switch-variant="next" aria-label="下一个方案">→</button>
+    </nav>
+
+    <div id="prototype-announcer" class="visually-hidden" aria-live="polite"></div>
+    <script type="module" src="/prototype.js"></script>
+  </body>
+</html>

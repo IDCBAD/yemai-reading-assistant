@@ -3,6 +3,7 @@ import {
   ConversationRequestCoordinator,
   deriveActiveConversationIds,
   deriveAgentRunSummary,
+  deriveMessageRunNote,
   getNextQueuedMessageId,
   reconcileTransientMessages,
   waitForAbortable,
@@ -23,6 +24,24 @@ const assistant = (
 });
 
 describe('agent queue state', () => {
+  it('keeps the assistant message observable before the first visible token', () => {
+    expect(deriveMessageRunNote(assistant('m1', 'running', 'waiting-first-token'))).toEqual({
+      kind: 'running',
+      copy: 'Agent 正在思考…',
+    });
+    expect(deriveMessageRunNote(assistant('m1', 'streaming', 'streaming'))).toEqual({
+      kind: 'running',
+      copy: '正在组织回答…',
+    });
+  });
+
+  it('hands observability over to the stream cursor after text arrives', () => {
+    expect(deriveMessageRunNote({
+      ...assistant('m1', 'streaming', 'streaming'),
+      content: '第一段回答',
+    })).toBeNull();
+  });
+
   it('summarises one active request and later queued requests', () => {
     expect(deriveAgentRunSummary([
       assistant('m1', 'running', 'waiting-first-token'),

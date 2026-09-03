@@ -26,8 +26,9 @@ function readableTimestamp(timestamp: number) {
 function cardSections(card: ReadingCardRow, headingLevel: 1 | 2) {
   const heading = '#'.repeat(headingLevel);
   const sections = [
-    `${heading} ${card.title.trim() || '未命名阅读卡片'}`,
+    `${heading} ${card.title.trim() || '未命名收藏卡片'}`,
     '',
+    `> 类型：${card.kind === 'excerpt' ? '回答片段' : '完整回答'}`,
     `> 收藏时间：${readableTimestamp(card.createdAt)}`,
   ];
   if (card.bodyMarkdown.trim()) sections.push('', card.bodyMarkdown.trim());
@@ -53,7 +54,7 @@ export function readingCardToMarkdown(card: ReadingCardRow) {
 
 export function readingCardsToMarkdown(cards: ReadingCardRow[], exportedAt = Date.now()) {
   const sections = [
-    '# 页脉阅读卡片',
+    '# 页脉收藏卡片',
     '',
     `> 导出时间：${readableTimestamp(exportedAt)}`,
     `> 卡片数量：${cards.length}`,

@@ -17,6 +17,7 @@ import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } f
 import { STARTER_ACTIONS } from '../starterActions';
 import { parsePageOverview } from '../pageOverview';
 import { messageDecisionInteractions } from '../agentDecision';
+import { deriveMessageRunNote } from '../agentQueue';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
@@ -52,6 +53,12 @@ interface MessageListProps {
   onBranch: (message: ChatMessage) => void;
   onToggleReadingCard: (
     message: ChatMessage,
+    contextSources: AnswerContextSource[],
+    origin?: ReadingCardFeedbackOrigin,
+  ) => void;
+  onCollectAssistantExcerpt: (
+    message: ChatMessage,
+    text: string,
     contextSources: AnswerContextSource[],
     origin?: ReadingCardFeedbackOrigin,
   ) => void;
@@ -195,23 +202,6 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
   );
 }
 
-function getRunNote(message: ChatMessage) {
-  if (message.status === 'queued') return { kind: 'queued', copy: '排队中' } as const;
-  if (message.status === 'stopped' && !message.content) return { kind: 'stopped', copy: '已停止' } as const;
-  if (message.status === 'failed' && !message.content) {
-    return { kind: 'failed', copy: message.errorMessage ?? '运行失败' } as const;
-  }
-  if (message.status === 'running') {
-    const copy = message.stage === 'reading-page'
-      ? '正在读取当前页面…'
-      : message.stage === 'creating-conversation'
-        ? '正在创建 WorkOS 会话…'
-        : 'Agent 正在处理…';
-    return { kind: 'running', copy } as const;
-  }
-  return null;
-}
-
 function AssistantMessage({
   message,
   contextSources,
@@ -240,7 +230,7 @@ function AssistantMessage({
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [bookmarkConfirmed, setBookmarkConfirmed] = useState(false);
   const bookmarkConfirmationTimerRef = useRef<number | null>(null);
-  const runNote = getRunNote(message);
+  const runNote = deriveMessageRunNote(message);
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
     && message.status !== 'streaming'
@@ -378,7 +368,7 @@ function AssistantMessage({
                   className={`assistant-action assistant-bookmark-action pressable${saved ? ' is-saved' : ''}${bookmarkConfirmed ? ' did-save' : ''}`}
                   type="button"
                   onClick={toggleReadingCard}
-                  aria-label={saved ? '取消收藏回答' : '收藏为阅读卡片'}
+                  aria-label={saved ? '取消收藏回答' : '收藏完整回答'}
                   aria-pressed={saved}
                   tooltip={saved ? '已收藏，点击取消' : '收藏回答'}
                 >
@@ -827,6 +817,7 @@ export function MessageList({
   onRetry,
   onBranch,
   onToggleReadingCard,
+  onCollectAssistantExcerpt,
   onOpenBranchOrigin,
   onAddAssistantQuote,
   onResolveDecision,
@@ -1018,8 +1009,8 @@ export function MessageList({
         setSelectionAction({
           messageId: article.dataset.assistantMessageId ?? '',
           text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
-          left: Math.max(8, Math.min(rect.left, window.innerWidth - 108)),
-          top: Math.max(8, rect.top - 39),
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - 196)),
+          top: Math.max(8, rect.top - 49),
         });
       });
     };
@@ -1233,29 +1224,55 @@ export function MessageList({
         ),
       )}
       {selectionAction && createPortal(
-        <button
-          className="assistant-selection-action pressable"
-          type="button"
+        <div
+          className="assistant-selection-action"
+          role="toolbar"
+          aria-label="处理选中的回答片段"
           style={{ left: selectionAction.left, top: selectionAction.top }}
           onPointerDown={(event) => event.preventDefault()}
-          onClick={() => {
-            if (!messages.some((message) => message.id === selectionAction.messageId)) return;
-            onAddAssistantQuote({
-              id: `quote-assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-              text: selectionAction.text,
-              pageTitle: '页脉回答',
-              pageUrl: '',
-              createdAt: Date.now(),
-              origin: 'assistant',
-              sourceMessageId: selectionAction.messageId,
-            });
-            window.getSelection()?.removeAllRanges();
-            setSelectionAction(null);
-          }}
         >
-          <KoboyoIcon name="quote" size={12} />
-          添加到对话
-        </button>,
+          <button
+            className="assistant-selection-action__button is-primary pressable"
+            type="button"
+            onClick={(event) => {
+              const message = messages.find((item) => item.id === selectionAction.messageId);
+              if (!message) return;
+              const bounds = event.currentTarget.getBoundingClientRect();
+              onCollectAssistantExcerpt(
+                message,
+                selectionAction.text,
+                answerContexts.get(message.id) ?? [],
+                { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 },
+              );
+              window.getSelection()?.removeAllRanges();
+              setSelectionAction(null);
+            }}
+          >
+            <KoboyoIcon name="bookmark" size={12} />
+            收藏片段
+          </button>
+          <button
+            className="assistant-selection-action__button pressable"
+            type="button"
+            onClick={() => {
+              if (!messages.some((message) => message.id === selectionAction.messageId)) return;
+              onAddAssistantQuote({
+                id: `quote-assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                text: selectionAction.text,
+                pageTitle: '页脉回答',
+                pageUrl: '',
+                createdAt: Date.now(),
+                origin: 'assistant',
+                sourceMessageId: selectionAction.messageId,
+              });
+              window.getSelection()?.removeAllRanges();
+              setSelectionAction(null);
+            }}
+          >
+            <KoboyoIcon name="quote" size={12} />
+            引用追问
+          </button>
+        </div>,
         document.body,
       )}
       </main>

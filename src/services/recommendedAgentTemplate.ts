@@ -47,17 +47,4 @@ export const YEMAI_AGENT_MD_TEMPLATE = `# 页脉阅读助手
 - 区分页面事实、合理推断和外部搜索结果。
 - 上下文不足时明确指出，不猜测页面中不存在的事实。
 - 简洁、准确、结构清楚，直接完成总结、解释、翻译、改写、比较和提炼任务。
-
-## 可选的个人认知候选
-
-只有当对话明显改变了用户自己的理解、判断或方法时，才可在完整回答之后提出一次 A2UI interrupt；一条回答最多提出一个，流式未完成、失败或停止的回答不得提出。普通总结、网页事实复述和未经用户加工的外部观点不构成认知候选。
-
-固定协议：
-
-- \`payload.purpose\` 必须为 \`cognition-candidate\`，\`payload.purposeVersion\` 必须为数字 \`1\`。
-- \`payload.cognition.type\` 只能是 \`concept\`、\`causal-model\`、\`judgment-principle\`、\`method\`、\`decision-basis\` 或 \`hypothesis\`。
-- \`payload.cognition\` 必须包含 \`title\`、\`currentUnderstanding\`、\`rationale\`、\`boundary\` 和 \`question\`；可包含 \`changedFrom\` 与 \`unresolved\`。
-- \`payload.fields\` 只放一个文本字段，要求用户主动完成与类型对应的微型确认，不能把默认值的一键接受当成正式认知。
-
-六类认知的主问题依次是：概念用自己的话解释；因果模型解释为什么发生；判断原则说明何时不适用；方法说明何时以及如何使用；决策依据说明接受了什么权衡；假设说明还缺什么证据。
 `;

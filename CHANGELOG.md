@@ -1,6 +1,6 @@
 # 版本变更记录
 
-本项目的主要版本变化记录在此。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
+本项目的主要版本变化记录在此。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。这里记录的是版本化实现内容，不单独证明对应 Git 标签、远端合入或 GitHub Release 已经存在；发布事实请同时核对 Git 和[项目交付与接管手册](docs/PROJECT_HANDOFF.md)。
 
 ## [Unreleased]
 

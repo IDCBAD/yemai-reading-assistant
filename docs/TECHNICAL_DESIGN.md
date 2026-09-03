@@ -20,7 +20,7 @@
 - MiniSearch：本地全文检索、字段权重和英文前缀/模糊匹配
 - Vitest：纯逻辑单元测试
 
-第一版不引入大型状态库和动效库。状态使用 React Reducer 与显式 Repository；动效以 CSS transition 为主。
+当前不引入大型状态库。Side Panel 使用 React Hooks 和显式 Repository 管理状态；可测试的队列、导航、搜索和迁移规则优先提取为纯逻辑模块。动效以 CSS transition 和少量专用组件为主。
 
 ## 3. 扩展入口
 
@@ -28,10 +28,11 @@
 entrypoints/
 ├── background.ts
 ├── content.ts
-└── sidepanel/
-    ├── index.html
-    ├── main.tsx
-    └── App.tsx
+└── sidepanel.html
+
+src/sidepanel/
+├── main.tsx
+└── App.tsx
 ```
 
 建议最低 Chrome 版本为 116，以使用 `chrome.sidePanel.open()` 响应内容脚本中的用户点击。
@@ -46,7 +47,7 @@ entrypoints/
 - 渲染和定位划词悬浮入口
 - 在 Side Panel 已打开时上报新选区
 - 提取页面正文和页面元数据
-- 处理普通文章与 X 的抽取策略
+- 使用通用网页抽取与降级策略；当前没有 X / Twitter 专用抽取器
 - 仅在 `https://aipower.yingdao.com` 且收到明确导入请求时读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定键
 
 不得负责：
@@ -266,9 +267,9 @@ interface WorkosTransport {
 - `PublicV1Transport`：官方公开 v1 API，认证只需要 `AP_...` Token。
 - `InternalV2Transport`：WorkOS 网页端 v2 协议，先订阅 SSE、再提交消息，并以 `runId` 关联本轮事件。
 
-附件上传暂时不属于统一执行传输：它仍调用 v1 公开上传接口，并要求单独配置 v1 API Token。迁移原因、风险和删除条件见 [WorkOS v2 可切换传输通道迁移方案](./WORKOS_V2_TRANSPORT_MIGRATION.md)。
+附件上传不属于统一执行传输，而是通过独立的 `WorkosFileUploader` 接口实现。公开 v1 连接使用公开 multipart 上传；内部 v2 连接使用 WorkOS 网页端临时 OSS 地址协议，不要求额外配置公开 v1 Token。迁移原因、风险和删除条件见 [WorkOS v2 可切换传输通道迁移方案](./WORKOS_V2_TRANSPORT_MIGRATION.md)。
 
-输入框的粘贴图片与附件按钮复用同一条上传管道：`Composer` 只负责从 `ClipboardEvent.clipboardData` 中提取图片、生成可读文件名并交给上层；`App` 统一完成数量和大小校验、v1 文件上传、草稿状态更新以及发送时的 URL/MIME 组装。没有图片的粘贴事件不会被拦截，因此文本输入仍保持原生行为。
+输入框的粘贴图片与附件按钮复用同一条上传管道：`Composer` 只负责从 `ClipboardEvent.clipboardData` 中提取图片、生成可读文件名并交给上层；`App` 统一完成数量和大小校验、按当前连接选择上传器、草稿状态更新以及发送时的 URL/MIME 组装。没有图片的粘贴事件不会被拦截，因此文本输入仍保持原生行为。
 
 图片上传期间使用 `URL.createObjectURL(file)` 提供即时预览；远端 `fileReadUrl` 确认可显示后切换为远端地址并调用 `URL.revokeObjectURL()`。本地 `blob:` 地址被明确排除在工作区快照之外，删除附件、清空历史和 Side Panel 卸载时也会释放，避免把图片数据写入 `chrome.storage.local` 或长期占用内存。已发送图片渲染为行内附件 Token；完整图片只在 Token 悬浮、聚焦或点击时挂载，悬浮预览根据视口空间自动选择向上或向下展开，并在滚动、缩放或移出安全区域时关闭。远端图片不可显示时降级为普通文件 Chip。
 
@@ -298,6 +299,8 @@ POST /oapi/agent/v1/agents/{agentId}/conversations
 
 ### 8.2 上传文件
 
+公开 v1 上传：
+
 ```text
 POST /oapi/power/v1/file/upload
 Content-Type: multipart/form-data
@@ -311,6 +314,8 @@ Content-Type: multipart/form-data
   "filename": "example.pdf"
 }
 ```
+
+内部网页上传先申请 `uploadUrl` 与 `readUrl`，再向受信任 OSS 地址执行 PUT；发送时只使用 `readUrl`。两条通道的认证与格式白名单不同，但向上层提供相同的上传结果语义。
 
 ### 8.3 v1 SSE 执行
 
@@ -386,7 +391,7 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 
 ### X / Twitter
 
-优先提取当前详情页中可识别的 `article`，并保留作者、正文和页面 URL。无法可靠识别线程时返回 partial 状态，不读取整个时间线。
+当前没有 X / Twitter 专用抽取器。详情页仍经过通用 Readability 和可见文本降级策略，不承诺可靠识别作者、线程边界或完整时间线；精确内容优先通过普通划词或智能框选加入。
 
 ### 降级
 
@@ -426,6 +431,7 @@ permissions:
 host_permissions:
 - https://aipower.yingdao.com/*
 - https://power-api.yingdao.com/*
+- https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*
 
 content_scripts.matches:
 - http://*/*
@@ -495,11 +501,13 @@ CommandPalette result
 
 恢复归档与打开工作页由一个纯函数完成。工作页达到上限时，函数返回原工作区，不会出现“已经恢复但没有打开”的半完成状态。命令面板使用 `dialog + listbox/option` 语义，支持 `Ctrl/⌘ + K`、上下方向键、Enter 和 Escape；键盘触发的高频交互不使用进出场动画。
 
-## 16. 阅读卡片（已实现）
+## 16. 收藏卡片（已实现）
 
 Dexie schema v2 新增 `readingCards` 实体表。卡片不进入 `WorkspaceState`，也不参与工作区增量对比；Side Panel 通过独立 Repository 加载、写入和删除卡片，避免一次收藏操作触发会话、消息、来源和产物表的同步。
 
-每张卡片使用 `reading-card:{conversationId}:{messageId}` 作为稳定主键，重复收藏同一回答只更新同一行。实体保存回答 Markdown 快照、展示标题、摘要、有限来源、Agent 产物元数据、来源会话/消息 ID 和时间戳；不保存凭据、内部推理、工具参数、原始事件或文件二进制。
+完整回答使用 `reading-card:{conversationId}:{messageId}` 作为稳定主键；回答片段使用来源会话、消息与规范化片段指纹组成稳定主键，因此同一回答可收藏多个片段，而相同片段不会重复。实体用可向后兼容的 `kind` 区分 `answer` 与 `excerpt`；旧数据缺少该字段时按 `answer` 处理。实体保存正文快照、展示标题、摘要、有限来源、来源会话/消息 ID 和时间戳；只有完整回答保留 Agent 产物元数据。两类卡片都不保存凭据、内部推理、工具参数、原始事件或文件二进制。
+
+收藏入口只调用卡片 Repository，不调用认知 Agent 或目录写入。对话划词浮层把“收藏片段”和“引用追问”作为两个独立动作，避免把长期保存和下一轮上下文混成一个状态。认知目录连接继续存在，但未来的认知形成 Module 必须从用户主动选择的卡片显式发起。
 
 卡片与原消息是弱引用关系：删除卡片不修改原消息，删除或清空会话也不级联删除卡片。原会话存在时，返回链路复用工作页唯一绑定和消息定位能力；若会话已归档，恢复与打开在一个纯工作区变换中完成；工作页满额或原消息不存在时保持当前工作区不变。
 

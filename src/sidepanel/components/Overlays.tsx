@@ -691,7 +691,7 @@ export function SettingsDrawer({
             <div className="agent-template-heading">
               <div>
                 <strong>Agent.md 推荐模板</strong>
-                <p>让 Agent 正确识别页脉提供的上下文。</p>
+                <p>只约定上下文和信任边界，不再让 Agent 自动提出认知。使用过旧模板时请重新复制覆盖。</p>
               </div>
               <button
                 className="copy-template-button pressable"
@@ -714,12 +714,12 @@ export function SettingsDrawer({
           <section className="settings-section cognition-directory-section">
             <div className="cognition-directory-heading">
               <div>
-                <strong>个人认知目录</strong>
-                <p>确认后的认知写入你选择的独立 Markdown 目录。</p>
+                <strong>本地知识目录</strong>
+                <p>保留目录连接。当前收藏不会自动写入，未来只有你主动形成并确认认知后才会使用。</p>
               </div>
               <span className={`cognition-directory-state is-${cognitionDirectoryState.kind}`}>
                 {cognitionDirectoryState.kind === 'ready'
-                  ? '可用'
+                  ? '已连接'
                   : cognitionDirectoryState.kind === 'needs-permission'
                     ? '需要授权'
                     : cognitionDirectoryState.kind === 'unsupported'
@@ -763,7 +763,7 @@ export function SettingsDrawer({
                 </button>
               )}
             </div>
-            <p className="field-help">页脉只管理带有效 <code>yemai_id</code> 的文件；清空会话、阅读卡片或索引都不会删除这些 Markdown。</p>
+            <p className="field-help">现有 Markdown 不会被删除或改写。页脉只识别带有效 <code>yemai_id</code> 的既有文件，收藏卡片仍保存在浏览器本地。</p>
           </section>
 
           <section className="settings-section settings-section--row">
@@ -802,7 +802,7 @@ export function SettingsDrawer({
             <div className="local-backup-heading">
               <div>
                 <strong>本地数据备份</strong>
-                <p>这里只备份会话和阅读卡片。独立认知目录不包含在备份中，请在文件系统或 Obsidian 中单独备份。</p>
+                <p>这里只备份会话和收藏卡片。独立认知目录不包含在备份中，请在文件系统或 Obsidian 中单独备份。</p>
               </div>
             </div>
             {backupStatus ? (
@@ -811,7 +811,7 @@ export function SettingsDrawer({
                 <div><dt>消息</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.messages)}</dd></div>
                 <div><dt>来源</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.sources)}</dd></div>
                 <div><dt>产物</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.artifacts)}</dd></div>
-                <div><dt>阅读卡片</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.readingCards)}</dd></div>
+                <div><dt>收藏卡片</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.readingCards)}</dd></div>
               </dl>
             ) : (
               <p>{backupStatusIssue ?? '正在统计本地知识资产…'}</p>
@@ -973,7 +973,7 @@ export function SettingsDrawer({
                 </div>
                 <dl className="destructive-impact-list">
                   <div className="is-affected"><dt>将删除</dt><dd>{clearImpact?.affected ?? '全部本机会话、消息和临时资源'}</dd></div>
-                  <div><dt>仍保留</dt><dd>{clearImpact?.preserved ?? '阅读卡片和连接设置'}</dd></div>
+                  <div><dt>仍保留</dt><dd>{clearImpact?.preserved ?? '收藏卡片和连接设置'}</dd></div>
                 </dl>
                 <div className="destructive-impact-actions">
                   <button className="secondary-button pressable" type="button" onClick={() => setClearHistoryConfirmOpen(false)}>取消</button>

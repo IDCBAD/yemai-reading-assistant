@@ -275,6 +275,7 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
   readingCards.forEach((row, index) => {
     if (!hasStringValue(row, 'bodyMarkdown')
       || !hasStringValue(row, 'excerpt')
+      || (row.kind !== undefined && row.kind !== 'answer' && row.kind !== 'excerpt')
       || !Array.isArray(row.sources)
       || !Array.isArray(row.artifacts)
       || row.sources.some((source) => !isRecord(source)

@@ -1,4 +1,4 @@
-import type { ReadingCardRow, ReadingCardSource } from '../data/database';
+import type { ReadingCardKind, ReadingCardRow, ReadingCardSource } from '../data/database';
 import type { AnswerContextSource } from './answerContext';
 import type { ChatMessage, Conversation, OpenConversationTab, WorkspaceState } from './types';
 import { openConversationInWorkspace } from './workspaceNavigation';
@@ -16,6 +16,21 @@ function compactText(value: string) {
 
 function truncate(value: string, limit: number) {
   return value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function excerptTitle(value: string) {
+  const compact = compactText(value);
+  const firstSentence = compact.split(/[。！？!?；;]/u)[0]?.trim() || compact;
+  return truncate(firstSentence || '收藏的回答片段', MAX_CARD_TITLE_LENGTH);
+}
+
+function stableTextFingerprint(value: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${(hash >>> 0).toString(36)}-${value.length.toString(36)}`;
 }
 
 function cardTitle(conversation: Conversation, message: ChatMessage) {
@@ -52,12 +67,15 @@ export function readingCardId(conversationId: string, messageId: string) {
   return `reading-card:${conversationId}:${messageId}`;
 }
 
-export function createReadingCard(
-  conversation: Conversation,
-  message: ChatMessage,
-  contextSources: AnswerContextSource[],
-  createdAt = Date.now(),
-): ReadingCardRow {
+export function readingCardKind(card: Pick<ReadingCardRow, 'kind'>): ReadingCardKind {
+  return card.kind ?? 'answer';
+}
+
+export function readingCardExcerptId(conversationId: string, messageId: string, text: string) {
+  return `reading-card:excerpt:${conversationId}:${messageId}:${stableTextFingerprint(compactText(text))}`;
+}
+
+function readingCardSources(conversation: Conversation, contextSources: AnswerContextSource[]) {
   const sources = uniqueSources(contextSources
     .map(contextSource)
     .filter((source): source is ReadingCardSource => Boolean(source)));
@@ -66,16 +84,51 @@ export function createReadingCard(
     url: page.url,
     site: page.site,
   })));
+  return sources.length > 0 ? sources : fallbackSources;
+}
+
+export function createReadingCard(
+  conversation: Conversation,
+  message: ChatMessage,
+  contextSources: AnswerContextSource[],
+  createdAt = Date.now(),
+): ReadingCardRow {
   const excerpt = compactText(message.content);
   return {
     id: readingCardId(conversation.id, message.id),
+    kind: 'answer',
     sourceConversationId: conversation.id,
     sourceMessageId: message.id,
     title: cardTitle(conversation, message),
     excerpt: truncate(excerpt || message.artifacts?.map((artifact) => artifact.filename).join('、') || 'Agent 产物', MAX_CARD_EXCERPT_LENGTH),
     bodyMarkdown: message.content,
-    sources: sources.length > 0 ? sources : fallbackSources,
+    sources: readingCardSources(conversation, contextSources),
     artifacts: (message.artifacts ?? []).map((artifact) => ({ ...artifact })),
+    messageCreatedAt: message.respondedAt ?? message.createdAt,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+export function createReadingCardExcerpt(
+  conversation: Conversation,
+  message: ChatMessage,
+  selection: string,
+  contextSources: AnswerContextSource[],
+  createdAt = Date.now(),
+): ReadingCardRow {
+  const bodyMarkdown = selection.trim();
+  const excerpt = compactText(bodyMarkdown);
+  return {
+    id: readingCardExcerptId(conversation.id, message.id, bodyMarkdown),
+    kind: 'excerpt',
+    sourceConversationId: conversation.id,
+    sourceMessageId: message.id,
+    title: excerptTitle(bodyMarkdown),
+    excerpt: truncate(excerpt, MAX_CARD_EXCERPT_LENGTH),
+    bodyMarkdown,
+    sources: readingCardSources(conversation, contextSources),
+    artifacts: [],
     messageCreatedAt: message.respondedAt ?? message.createdAt,
     createdAt,
     updatedAt: createdAt,

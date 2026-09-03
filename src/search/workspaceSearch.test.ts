@@ -192,4 +192,106 @@ describe('createWorkspaceSearchIndex', () => {
     });
     expect(results.filter((result) => result.kind === 'message')).toHaveLength(0);
   });
+
+  it('limits collection-scoped searches to saved cards', () => {
+    const item = conversation({
+      title: '包含共同关键词的会话',
+      messages: [message('message-16', 'assistant', '共同关键词也出现在原始回答。')],
+    });
+    const card: ReadingCardRow = {
+      id: 'reading-card:conversation-1:message-16',
+      sourceConversationId: item.id,
+      sourceMessageId: 'message-16',
+      title: '包含共同关键词的收藏',
+      excerpt: '共同关键词收藏内容',
+      bodyMarkdown: '共同关键词收藏内容',
+      sources: [],
+      artifacts: [],
+      messageCreatedAt: 16,
+      createdAt: 30,
+      updatedAt: 30,
+    };
+
+    const results = createWorkspaceSearchIndex(workspace([item]), [card])
+      .search('共同关键词', 24, 'reading-cards');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: 'reading-card', readingCardId: card.id });
+  });
+
+  it('returns recent saved cards in collection scope when the query is empty', () => {
+    const card = (id: string, title: string, updatedAt: number): ReadingCardRow => ({
+      id,
+      sourceConversationId: 'conversation-1',
+      sourceMessageId: id,
+      title,
+      excerpt: title,
+      bodyMarkdown: title,
+      sources: [],
+      artifacts: [],
+      messageCreatedAt: updatedAt,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const cards = [card('older-card', '较早收藏', 20), card('newer-card', '最近收藏', 50)];
+
+    expect(createWorkspaceSearchIndex(workspace(), cards).recent(10, 'reading-cards'))
+      .toMatchObject([
+        { kind: 'reading-card', title: '最近收藏' },
+        { kind: 'reading-card', title: '较早收藏' },
+      ]);
+  });
+
+  it('does not surface saved cards from a fuzzy match in a source URL path', () => {
+    const card: ReadingCardRow = {
+      id: 'reading-card:url-path-only',
+      sourceConversationId: 'conversation-1',
+      sourceMessageId: 'message-url-path-only',
+      title: '身份与准则',
+      excerpt: '只讨论稳定身份与动态知识。',
+      bodyMarkdown: '只讨论稳定身份与动态知识。',
+      sources: [{
+        title: '上下文工程',
+        site: 'AI Agents in Depth',
+        url: 'https://aihero.dev/agent-book/book/chapter2/kv-cache-example',
+      }],
+      artifacts: [],
+      messageCreatedAt: 40,
+      createdAt: 40,
+      updatedAt: 40,
+    };
+
+    expect(createWorkspaceSearchIndex(workspace(), [card]).search('chche', 24, 'reading-cards'))
+      .toEqual([]);
+  });
+
+  it('keeps readable source identity searchable without indexing its URL path', () => {
+    const card: ReadingCardRow = {
+      id: 'reading-card:source-identity',
+      sourceConversationId: 'conversation-1',
+      sourceMessageId: 'message-source-identity',
+      title: '身份与准则',
+      excerpt: '只讨论稳定身份与动态知识。',
+      bodyMarkdown: '只讨论稳定身份与动态知识。',
+      sources: [{
+        title: '上下文工程',
+        url: 'https://aihero.dev/private/path-token',
+      }],
+      artifacts: [],
+      messageCreatedAt: 41,
+      createdAt: 41,
+      updatedAt: 41,
+    };
+    const index = createWorkspaceSearchIndex(workspace(), [card]);
+
+    expect(index.search('上下文工程', 24, 'reading-cards')[0]).toMatchObject({
+      readingCardId: card.id,
+      matchLabel: '卡片来源',
+    });
+    expect(index.search('aihero.dev', 24, 'reading-cards')[0]).toMatchObject({
+      readingCardId: card.id,
+      matchLabel: '卡片来源',
+    });
+    expect(index.search('path-token', 24, 'reading-cards')).toEqual([]);
+  });
 });

@@ -28,6 +28,7 @@ describe('reading card Markdown export', () => {
   it('keeps title, body, sources, saved time, and artifact links', () => {
     const markdown = readingCardToMarkdown(card());
     expect(markdown).toContain('# 可靠性：评估 / 方案');
+    expect(markdown).toContain('> 类型：完整回答');
     expect(markdown).toContain('2026-08-24T00:00:00.000Z');
     expect(markdown).toContain('这里是**正文**。');
     expect(markdown).toContain('[来源 \\[一\\]](<https://example.com/a?q=1>)');
@@ -45,9 +46,22 @@ describe('reading card Markdown export', () => {
     expect(markdown).not.toContain('blob:');
   });
 
+  it('labels excerpt exports without turning them into cognition', () => {
+    const markdown = readingCardToMarkdown(card({
+      kind: 'excerpt',
+      title: '前缀不变才能复用缓存',
+      bodyMarkdown: 'KV Cache 复用的前提是前缀保持不变。',
+      artifacts: [],
+    }));
+
+    expect(markdown).toContain('> 类型：回答片段');
+    expect(markdown).toContain('KV Cache 复用的前提');
+    expect(markdown).not.toContain('认知');
+  });
+
   it('combines all cards into one readable Markdown document', () => {
     const markdown = readingCardsToMarkdown([card(), card({ id: 'card-2', title: '第二张卡片' })], 100);
-    expect(markdown).toContain('# 页脉阅读卡片');
+    expect(markdown).toContain('# 页脉收藏卡片');
     expect(markdown).toContain('> 卡片数量：2');
     expect(markdown).toContain('## 可靠性：评估 / 方案');
     expect(markdown).toContain('## 第二张卡片');

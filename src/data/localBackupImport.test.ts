@@ -157,6 +157,10 @@ describe('local backup import', () => {
       ...backup,
       messages: [{ ...backup.messages[0], conversationId: 'missing' }],
     }))).toThrow('找不到所属会话');
+    expect(() => parseYemaiBackup(JSON.stringify({
+      ...backup,
+      readingCards: [{ ...backup.readingCards[0], kind: 'generated-cognition' }],
+    }))).toThrow('readingCards 第 1 项结构不完整');
   });
 
   it('merges idempotently and keeps the newer reading card', async () => {

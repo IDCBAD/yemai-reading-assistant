@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
 import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } from '../types';
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
+import { DraftInputBuffer } from '../draftInputBuffer';
 import { AgentRunStatus } from './AgentRunStatus';
 import { ContextWorkbench } from './ContextWorkbench';
 import { IconTooltipButton } from './IconTooltipButton';
@@ -34,7 +35,7 @@ interface ComposerProps {
   onAttachmentUnavailable: () => void;
   smartSelectionActive: boolean;
   onStartSmartSelection: () => void;
-  onSend: () => void;
+  onSend: (input: string) => boolean;
   onStop: () => void;
 }
 
@@ -78,9 +79,31 @@ export function Composer({
   const pasteAnnouncementTimerRef = useRef<number | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
+  const inputCommitCallbackRef = useRef(onInputChange);
+  const inputBufferRef = useRef<DraftInputBuffer | null>(null);
+  if (!inputBufferRef.current) {
+    inputBufferRef.current = new DraftInputBuffer(input, {
+      setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+    });
+  }
+  const inputBuffer = inputBufferRef.current;
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
   const [pasteAnnouncement, setPasteAnnouncement] = useState('');
   const [dragDepth, setDragDepth] = useState(0);
+  const [localInput, setLocalInput] = useState(input);
+  inputCommitCallbackRef.current = onInputChange;
+
+  const resetLocalInput = (value: string) => {
+    inputBuffer.reset(value);
+    setLocalInput(value);
+  };
+
+  const updateLocalInput = (value: string) => {
+    inputBuffer.update(value, (latest) => inputCommitCallbackRef.current(latest));
+    setLocalInput(value);
+  };
+
   const canAddTab = tabs.length < maxTabs;
   const contextItemCount = contextItems.length;
   const selections = contextItems.filter((item) => item.kind === 'selection' && item.included);
@@ -88,7 +111,7 @@ export function Composer({
     .filter((item): item is Extract<ContextItem, { kind: 'file' | 'image' }> => item.kind === 'file' || item.kind === 'image')
     .map((item) => item.attachment);
   const hasContent =
-    input.trim().length > 0 ||
+    localInput.trim().length > 0 ||
     selections.length > 0 ||
     contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
   const hasUploadingAttachments = contextItems.some(
@@ -102,6 +125,23 @@ export function Composer({
     contextItemCount > 0 ? 'has-context' : '',
     hasContent ? 'has-content' : '',
   ].filter(Boolean).join(' ');
+
+  useLayoutEffect(() => {
+    // Keep this callback tied to the tab being left. Using the latest callback
+    // here could flush the previous tab's draft into the newly selected tab.
+    const commitForTab = onInputChange;
+    return () => {
+      inputBuffer.flush(commitForTab);
+    };
+  }, [activeTabId]);
+
+  useLayoutEffect(() => {
+    resetLocalInput(input);
+  }, [activeTabId, focusRequestId]);
+
+  useLayoutEffect(() => {
+    if (inputBuffer.syncExternal(input)) setLocalInput(input);
+  }, [input]);
 
   useEffect(() => {
     if (!tabMenu) return;
@@ -312,8 +352,9 @@ export function Composer({
             ref={inputRef}
             name="agent-question"
             autoComplete="off"
-            value={input}
-            onChange={(event) => onInputChange(event.target.value)}
+            value={localInput}
+            onChange={(event) => updateLocalInput(event.target.value)}
+            onBlur={() => inputBuffer.flush((latest) => inputCommitCallbackRef.current(latest))}
             onPaste={(event) => {
               const clipboardImages = extractClipboardImages(event.clipboardData);
               if (clipboardImages.length === 0) return;
@@ -337,7 +378,7 @@ export function Composer({
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                if (canSend) onSend();
+                if (canSend && onSend(inputBuffer.value)) resetLocalInput('');
               }
             }}
             placeholder={waitingForDecision
@@ -406,7 +447,9 @@ export function Composer({
               <IconTooltipButton
                 className="send-button pressable"
                 type="button"
-                onClick={onSend}
+                onClick={() => {
+                  if (canSend && onSend(inputBuffer.value)) resetLocalInput('');
+                }}
                 disabled={!canSend}
                 aria-label={waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
                 tooltip={waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? '发送消息' : '输入内容后发送'}

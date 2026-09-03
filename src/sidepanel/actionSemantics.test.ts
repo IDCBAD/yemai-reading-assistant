@@ -88,7 +88,7 @@ describe('destructive action presentation', () => {
       title: '删除“产品演进建议”？',
       description: '删除后无法恢复。',
       affected: '该会话及 182 条消息',
-      preserved: '阅读卡片和上传文件',
+      preserved: '收藏卡片和上传文件',
       confirmLabel: '删除会话',
     });
   });
@@ -114,7 +114,7 @@ describe('destructive action presentation', () => {
       placement: 'inline',
       icon: 'history-clear',
       affected: '13 个会话、182 条消息和临时资源',
-      preserved: '2 张阅读卡片和连接设置',
+      preserved: '2 张收藏卡片和连接设置',
     });
     expect(replaceKnowledgeImpact(current, incoming)).toMatchObject({
       placement: 'inline',

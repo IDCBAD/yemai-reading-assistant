@@ -34,8 +34,8 @@ export function TopBar({
           className="icon-button pressable"
           type="button"
           onClick={onOpenSearch}
-          aria-label="搜索阅读历史"
-          title="搜索阅读历史（Ctrl/⌘ K）"
+          aria-label={readingCardsOpen ? '搜索收藏' : '搜索阅读历史'}
+          title={`${readingCardsOpen ? '搜索收藏' : '搜索阅读历史'}（Ctrl/⌘ K）`}
         >
           <KoboyoIcon name="search" size={18} />
         </button>
@@ -55,9 +55,9 @@ export function TopBar({
           className={`icon-button topbar-reading-cards pressable${readingCardsOpen ? ' is-active' : ''}`}
           type="button"
           onClick={onOpenReadingCards}
-          aria-label={readingCardsOpen ? '关闭阅读卡片' : '打开阅读卡片'}
+          aria-label={readingCardsOpen ? '关闭收藏' : '打开收藏'}
           aria-pressed={readingCardsOpen}
-          title="阅读卡片"
+          title="收藏"
           data-reading-cards-trigger="true"
         >
           <KoboyoIcon name="bookmark" size={17} />

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Conversation } from './types';
-import { createReadingCard, openReadingCardSourceInWorkspace, readingCardSourceAvailable } from './readingCards';
+import {
+  createReadingCard,
+  createReadingCardExcerpt,
+  openReadingCardSourceInWorkspace,
+  readingCardKind,
+  readingCardSourceAvailable,
+} from './readingCards';
 
 function conversation(): Conversation {
   const page = { title: 'Agent 文章', site: 'example.com', url: 'https://example.com/agent', status: 'read' as const };
@@ -30,6 +36,7 @@ describe('createReadingCard', () => {
     const card = createReadingCard(source, source.messages[0]!, [], 20);
     expect(card).toMatchObject({
       id: 'reading-card:conversation-1:message-1',
+      kind: 'answer',
       title: '评估框架',
       bodyMarkdown: source.messages[0]!.content,
       messageCreatedAt: 12,
@@ -37,6 +44,42 @@ describe('createReadingCard', () => {
     });
     expect(card.excerpt).toContain('可靠性与安全性');
     expect(card.sources[0]).toMatchObject({ url: 'https://example.com/agent' });
+  });
+
+  it('creates stable excerpt cards and deduplicates the same normalized selection', () => {
+    const source = conversation();
+    const first = createReadingCardExcerpt(
+      source,
+      source.messages[0]!,
+      '  KV Cache 的前缀保持不变，才能复用计算结果。  ',
+      [],
+      20,
+    );
+    const duplicate = createReadingCardExcerpt(
+      source,
+      source.messages[0]!,
+      'KV Cache 的前缀保持不变，才能复用计算结果。',
+      [],
+      30,
+    );
+    const another = createReadingCardExcerpt(
+      source,
+      source.messages[0]!,
+      '模型只能往左看，因此前缀可以缓存。',
+      [],
+      30,
+    );
+
+    expect(first).toMatchObject({
+      kind: 'excerpt',
+      bodyMarkdown: 'KV Cache 的前缀保持不变，才能复用计算结果。',
+      title: 'KV Cache 的前缀保持不变，才能复用计算结果',
+      artifacts: [],
+    });
+    expect(duplicate.id).toBe(first.id);
+    expect(another.id).not.toBe(first.id);
+    expect(readingCardKind(first)).toBe('excerpt');
+    expect(readingCardKind({})).toBe('answer');
   });
 
   it('remains readable when the original conversation is gone', () => {

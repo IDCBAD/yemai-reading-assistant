@@ -59,7 +59,7 @@ type ContextItem =
 
 ## 兼容策略
 
-工作区存储版本升级为 v5。加载 v1 到 v4 数据时，会把旧的 `draftQuotes`、`draftAttachments` 和 `draftPageReference` 转换成 `draftContextItems`。旧消息中的 `references`、`attachments` 和 `pageContext` 仍可读取；新消息以 `contextItems` 为准。
+工作区存储当前版本为 v6。加载 v1 到 v4 数据时，会把旧的 `draftQuotes`、`draftAttachments` 和 `draftPageReference` 转换成 `draftContextItems`；v5 数据按当前结构规范化为 v6。旧消息中的 `references`、`attachments` 和 `pageContext` 仍可读取；新消息以 `contextItems` 为准。
 
 ## 后续扩展
 

@@ -1,8 +1,10 @@
-# 页脉下一产品方向：个人认知循环
+# 页脉历史产品方向：个人认知循环
 
-> 决策状态：已确认
+> 决策状态：已被“先收藏，再形成认知”部分取代
 > 决策日期：2026-08-26
-> 边界：本文记录 v0.5 之后的产品方向，不表示相关能力已经实现、验收或发布。当前产品事实仍以 [PROJECT_HANDOFF.md](./PROJECT_HANDOFF.md) 和 [PRODUCT_SPEC.md](./PRODUCT_SPEC.md) 为准。
+> 取代日期：2026-08-31
+> 当前方向：[`COLLECTION_FIRST_DIRECTION.md`](./COLLECTION_FIRST_DIRECTION.md)
+> 边界：本文保留当时的判断与原型记录，不再作为当前默认形成路径。独立 Markdown 目录决策仍然有效。
 
 ## 1. 核心判断
 

@@ -89,6 +89,26 @@ const STAGE_PRESENTATION: Record<
   streaming: { label: '正在组织回答', orbState: 'shaping' },
 };
 
+export function deriveMessageRunNote(message: ChatMessage) {
+  if (message.status === 'queued') return { kind: 'queued', copy: '排队中' } as const;
+  if (message.status === 'stopped' && !message.content) return { kind: 'stopped', copy: '已停止' } as const;
+  if (message.status === 'failed' && !message.content) {
+    return { kind: 'failed', copy: message.errorMessage ?? '运行失败' } as const;
+  }
+  if (message.content || (message.status !== 'running' && message.status !== 'streaming')) return null;
+
+  const copy = message.stage === 'reading-page'
+    ? '正在读取当前页面…'
+    : message.stage === 'creating-conversation'
+      ? '正在创建 WorkOS 会话…'
+      : message.stage === 'streaming'
+        ? '正在组织回答…'
+        : message.stage === 'waiting-user-input'
+          ? '等待你的选择…'
+          : 'Agent 正在思考…';
+  return { kind: 'running', copy } as const;
+}
+
 export function deriveAgentRunSummary(messages: ChatMessage[]): AgentRunSummary | null {
   const active = messages.find((message) =>
     message.role === 'assistant' && (message.status === 'running' || message.status === 'streaming'));

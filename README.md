@@ -4,7 +4,13 @@
 
 页脉是一个运行在 Chrome Side Panel 中的个人 AI 阅读助手。它把当前网页、选中的内容、文件和图片组织成可追踪的上下文，并通过影刀 WorkOS Agent 提供连续对话、流式回答、会话分支和本地工作区。
 
-当前版本已经进入可稳定使用阶段，适合在真实网页中进行阅读、提问和资料整理。
+当前本地代码版本为 `0.5.0`，已经完成主要功能实现与自动化门禁，适合继续进行真实网页验证和个人使用；正式发布状态与代码实现状态请以[项目交付与接管手册](docs/PROJECT_HANDOFF.md)为准。
+
+如果你是第一次接手项目，请按以下顺序阅读：
+
+1. [项目交付与接管手册](docs/PROJECT_HANDOFF.md)
+2. [页脉领域语言](CONTEXT.md)
+3. 与当前任务直接相关的专项文档
 
 ## 核心能力
 
@@ -131,7 +137,7 @@ Agent 返回的输出文件与用户上传附件分开管理。生成图片在�
 
 - Agent UUID 和连接凭证保存在 `chrome.storage.local`，并限制为扩展可信上下文访问。
 - 会话、消息、草稿、工作页和来源关系只保存在本地扩展存储中。
-- 设置页分别展示历史数据和扩展全部本地数据的占用，进度以 Chrome `storage.local` 的 10 MiB 配额计算。
+- 设置页分别展示 IndexedDB 历史、扩展配置和浏览器估算配额；配额来自 `navigator.storage.estimate()`，不是固定 10 MiB 精确上限。
 - 页脉在用户发送问题时才构造 Agent 上下文；页面 Snapshot 最长 12,000 个字符，不写入本地会话历史。
 - 文件和图片仅在用户主动加入并发送时上传。
 - 原始思维链、工具参数和完整工具输出不会进入产品界面或本地历史。
@@ -170,30 +176,32 @@ v0.5 在设置页提供“本地数据备份”：可以把会话、消息、来
 
 全局搜索、MiniSearch 和阅读卡片界面已经按需加载。生产构建仍会提示 Side Panel 主分包超过 500 kB；它不影响扩展运行，后续可以继续拆分设置页和其他非首屏能力，Markdown 渲染因主消息流直接依赖，需要单独评估交互收益与复杂度。
 
-## 当前限制与后续方向
+## 当前限制与下一产品方向
 
-- 增加 X / Twitter 详情页和线程的专用抽取策略。
-- 继续优化智能框选的候选块粒度与复杂页面兼容性。
-- 探索批量读取多个链接，但不会在交互和状态模型确认前提前接入。
-- 增加 WorkOS 远端历史同步；本地知识资产已经具备备份、迁移与 Markdown 出口。
-- 优化 Side Panel 首屏分包体积。
+X / Twitter 专用抽取、智能框选兼容性和 Side Panel 首屏分包体积仍是当前版本的质量与维护事项，但不再把更多平台适配、批量链接或 WorkOS 远端历史同步作为下一阶段产品主线。
+
+已经确认的下一产品方向是“个人认知循环”：把网页与 AI 对话中真正改变用户理解的时刻沉淀为可追溯、会演化的本地认知，并在未来相关网页中重新唤醒。该方向尚未实现；范围、边界、验证标准和下一步见[个人认知循环方向](docs/COGNITION_LOOP_DIRECTION.md)。
 
 ## 设计与技术文档
 
+- [项目交付与接管手册](docs/PROJECT_HANDOFF.md)
+- [可复用项目 SOP](docs/REUSABLE_PROJECT_SOP.md)
+- [页脉领域语言](CONTEXT.md)
 - [版本变更记录](CHANGELOG.md)
 - [发布验证清单](docs/RELEASE_CHECKLIST.md)
 - [产品需求与 MVP 范围](docs/PRODUCT_SPEC.md)
+- [下一产品方向：个人认知循环](docs/COGNITION_LOOP_DIRECTION.md)
 - [技术架构设计](docs/TECHNICAL_DESIGN.md)
 - [统一上下文工作台架构](docs/context-workbench-architecture.md)
-- [v0.5 本地备份与迁移验收标准](docs/V0.5_ACCEPTANCE.md)
-- [实施与验收计划](docs/IMPLEMENTATION_PLAN.md)
 - [WorkOS Agent 安全指令建议](docs/WORKOS_AGENT_PROMPT.md)
 - [WorkOS v2 传输迁移说明](docs/WORKOS_V2_TRANSPORT_MIGRATION.md)
-- [WorkOS 流式重构记录](docs/WORKOS_STREAMING_REFACTOR_NOTES.md)
+- [历史文档归档地图](docs/archive/README.md)
 
 ## 当前状态
 
-当前候选代码版本为 `0.5.0`；最新已发布安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。`main` 是经过类型检查、自动化测试、真实 Chrome 人工回归和生产构建验证的稳定基线；`v0.5.0` 只有在独立验收通过后才提交、合并、创建标签与 Release。新功能应从独立分支开发，并在合并前至少运行：
+截至 2026-08-25 的交付基线：本地 `main` 位于 `a2b7d21`，代码版本为 `0.5.0`，并比 `origin/main` 超前 4 个提交。v0.4.1 与 v0.5 已合入本地 `main`，但尚未推送；仓库标签只有 `v0.1.0`、`v0.2.0`，最新有明确发布证据的安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。v0.5 已记录 50 个测试文件、263 项测试和生产构建通过，但逐项 Chrome 回归记录与正式 Release 尚未完成。完整状态和下一步见[项目交付与接管手册](docs/PROJECT_HANDOFF.md)。
+
+新功能应从独立分支开发，并在合并前至少运行：
 
 ```bash
 npm run check

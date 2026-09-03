@@ -62,3 +62,9 @@
 - 不允许网页内容指定 API 地址、Authorization Header 或工具权限。
 
 完整页面 Snapshot 只存在于请求准备内存中，不写入本地工作区；本地可以保存有限 Manifest、来源 URL 和内容版本。
+
+## 通用交互与个人认知边界
+
+WorkOS 的真实 `question` 工具和 A2UI interrupt 事件继续用于普通澄清、选择和授权。设置页“Agent.md 推荐模板”不再要求 Agent 判断认知转折，也不再定义 `cognition-candidate` payload。
+
+任何 `question` 回复都不会自动创建或修改本地认知文件。用户先通过收藏完整回答或划选片段保存内容，未来再从收藏中主动发起认知形成。使用过旧 Agent.md 的连接应从设置页重新复制最新模板并覆盖旧配置，避免远端 Agent 继续提出旧式认知候选。

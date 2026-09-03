@@ -88,7 +88,7 @@ export function historyDeletionPresentation(action: HistoryDeletionAction): Hist
       title: `删除“${action.title}”？`,
       description: '删除后无法恢复。',
       affected: `该会话及 ${action.messageCount} 条消息`,
-      preserved: '阅读卡片和上传文件',
+      preserved: '收藏卡片和上传文件',
       confirmLabel: '删除会话',
     };
   }
@@ -97,7 +97,7 @@ export function historyDeletionPresentation(action: HistoryDeletionAction): Hist
     title: `清空 ${action.conversationCount} 条已归档历史？`,
     description: '删除后无法恢复。',
     affected: `${action.conversationCount} 个归档会话及 ${action.messageCount} 条消息`,
-    preserved: '其他会话和阅读卡片',
+    preserved: '其他会话和收藏卡片',
     confirmLabel: '清空已归档',
   };
 }
@@ -114,7 +114,7 @@ export function clearHistoryImpact(counts: YemaiBackupCounts): InlineImpactPrese
     placement: 'inline',
     icon: 'history-clear',
     affected: `${counts.conversations} 个会话、${counts.messages} 条消息和临时资源`,
-    preserved: `${counts.readingCards} 张阅读卡片和连接设置`,
+    preserved: `${counts.readingCards} 张收藏卡片和连接设置`,
   };
 }
 
@@ -125,7 +125,7 @@ export function replaceKnowledgeImpact(
   return {
     placement: 'inline',
     icon: 'database-replace',
-    affected: `${current.conversations} 个会话、${current.messages} 条消息和 ${current.readingCards} 张阅读卡片`,
+    affected: `${current.conversations} 个会话、${current.messages} 条消息和 ${current.readingCards} 张收藏卡片`,
     preserved: '连接设置和界面偏好',
     currentMessages: current.messages,
     incomingMessages: incoming.messages,
