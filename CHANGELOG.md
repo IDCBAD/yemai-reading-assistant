@@ -6,6 +6,29 @@
 
 暂无。
 
+## [0.6.0] - 2026-09-04
+
+页脉从“自动形成认知”转向“先收藏，再形成认知”的个人知识入口版本。本次也是继公开版 v0.2.0 后的累计发布，包含 v0.3～v0.5 已记录的本地历史、搜索、阅读卡片和备份迁移能力。
+
+### 新增
+
+- Agent 完整回答和用户划选的回答片段都可以一键收藏；两者统一进入收藏，同时保留类型和原始对话来源。
+- 收藏页升级为可循环浏览的知识卡片河流，支持滚轮、拖拽与键盘浏览；打开详情后返回会恢复原卡片位置。
+- 收藏场景复用全局搜索，并提供“收藏 / 全部”范围切换；从搜索结果打开卡片、返回搜索和两级 `Esc` 关闭均保持上下文。
+- 保留独立 Markdown 认知目录的选择、权限恢复、连接检查和既有文件读取能力，为后续从收藏卡片主动形成认知保留本地出口。
+
+### 调整
+
+- 取消 Agent 在普通对话中自动提出并写入认知的默认路径；收藏动作不调用 Agent，也不会修改本地认知目录。
+- 长文本输入改为本地草稿缓冲，降低连续退格时的输入卡顿；Agent 工作期间增加可见状态反馈。
+- 收藏详情采用独立阅读层，优化窄 Side Panel 中的正文换行、字体清晰度、长代码和表格滚动。
+
+### 修复
+
+- 修复收藏河流空白、卡片无法打开、详情返回后卡片位置跳动，以及鼠标悬停卡片时滚轮失效的问题。
+- 修复完整回答与划词收藏正文在详情中被右侧裁切的问题。
+- 修复收藏搜索把来源 URL 路径中的近似英文误判为正文命中的问题；来源标题、站点和域名仍然可检索。
+
 ## [0.5.0] - 2026-08-24
 
 页脉本地知识资产备份、迁移与可读导出版本。
@@ -161,7 +184,8 @@
 - 暂不支持 WorkOS 远端历史同步、跨设备同步和 PowerPoint 附件。
 - 生产构建的 Side Panel 主分包目前超过 500 kB，但不影响扩展运行。
 
-[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.2.0...v0.6.0
 [0.5.0]: https://github.com/IDCBAD/yemai-reading-assistant/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.1
 [0.4.0]: https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.4.0

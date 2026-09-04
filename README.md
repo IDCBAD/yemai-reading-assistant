@@ -4,7 +4,7 @@
 
 页脉是一个运行在 Chrome Side Panel 中的个人 AI 阅读助手。它把当前网页、选中的内容、文件和图片组织成可追踪的上下文，并通过影刀 WorkOS Agent 提供连续对话、流式回答、会话分支和本地工作区。
 
-当前本地代码版本为 `0.5.0`，已经完成主要功能实现与自动化门禁，适合继续进行真实网页验证和个人使用；正式发布状态与代码实现状态请以[项目交付与接管手册](docs/PROJECT_HANDOFF.md)为准。
+当前稳定版本为 [`v0.6.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.0)，适合个人使用与继续验证。它把网页与 AI 对话组织为可追溯的本地工作区，并将真正值得保留的完整回答或结论片段沉淀到收藏中。
 
 如果你是第一次接手项目，请按以下顺序阅读：
 
@@ -20,6 +20,8 @@
 - **统一上下文工作台**：网页、引用、文件和图片以独立上下文项进入输入区，发送前仍可检查或移除。
 - **文件与图片问答**：支持文件选择和剪贴板图片粘贴，展示上传状态、格式和来源，并随问题一起发送。
 - **富内容回答**：Mermaid 代码块按需渲染为安全图表；Agent 生成图片可直接查看大图，HTML、Markdown、PDF、Office 等输出文件以紧凑卡片提供下载。
+- **收藏知识卡片**：一键收藏完整回答，或划选其中的结论保存为片段；收藏卡片在可循环浏览的卡片河流中呈现，并可打开独立阅读层。
+- **收藏内搜索**：在收藏页直接搜索正文、来源标题、站点和域名，也可以随时切换回全部会话与收藏的全局搜索。
 - **连续会话与工作页**：最多同时打开 10 个会话工作页；草稿、消息、上下文、远端 UUID 和打开状态均可本地恢复。
 - **回答分支**：可以从任意已完成回答创建独立分支，并保留父子关系、来源导航和树状历史。
 - **可管理的本地历史**：设置页显示本地存储占用；已归档会话可以单条永久删除或批量清空。
@@ -53,9 +55,9 @@
 
 ## 从 GitHub Release 安装到 Chrome
 
-普通用户不需要安装 Node.js，也不需要下载源码或 `docs` 文档。请在 GitHub Release 页面操作：
+普通用户不需要安装 Node.js，也不需要下载源码或 `docs` 文档。请前往[最新 GitHub Release](https://github.com/IDCBAD/yemai-reading-assistant/releases/latest)操作：
 
-1. 在页面底部的 **Assets** 中下载 `yemai-reading-assistant-版本号-chrome.zip`。
+1. 在页面底部的 **Assets** 中下载 `yemai-reading-assistant-0.6.0-chrome.zip`。
 2. 将 ZIP 解压到一个固定文件夹。不要直接选择 ZIP 文件本身。
 3. 在 Chrome 地址栏打开 `chrome://extensions`。
 4. 打开右上角的“开发者模式”。
@@ -180,7 +182,7 @@ v0.5 在设置页提供“本地数据备份”：可以把会话、消息、来
 
 X / Twitter 专用抽取、智能框选兼容性和 Side Panel 首屏分包体积仍是当前版本的质量与维护事项，但不再把更多平台适配、批量链接或 WorkOS 远端历史同步作为下一阶段产品主线。
 
-已经确认的下一产品方向是“个人认知循环”：把网页与 AI 对话中真正改变用户理解的时刻沉淀为可追溯、会演化的本地认知，并在未来相关网页中重新唤醒。该方向尚未实现；范围、边界、验证标准和下一步见[个人认知循环方向](docs/COGNITION_LOOP_DIRECTION.md)。
+当前采用“先收藏，再形成认知”的产品路径：捕获阶段由用户明确收藏完整回答或划选片段，不再让 Agent 在普通对话中随机决定什么是个人认知，也不会自动写入本地目录。等真实收藏积累后，再从用户主动选择的卡片形成可追溯、会演化的本地认知。当前边界见[收藏优先方向](docs/COLLECTION_FIRST_DIRECTION.md)，历史判断见[个人认知循环方向](docs/COGNITION_LOOP_DIRECTION.md)。
 
 ## 设计与技术文档
 
@@ -190,7 +192,8 @@ X / Twitter 专用抽取、智能框选兼容性和 Side Panel 首屏分包体�
 - [版本变更记录](CHANGELOG.md)
 - [发布验证清单](docs/RELEASE_CHECKLIST.md)
 - [产品需求与 MVP 范围](docs/PRODUCT_SPEC.md)
-- [下一产品方向：个人认知循环](docs/COGNITION_LOOP_DIRECTION.md)
+- [当前产品方向：先收藏，再形成认知](docs/COLLECTION_FIRST_DIRECTION.md)
+- [历史产品方向：个人认知循环](docs/COGNITION_LOOP_DIRECTION.md)
 - [技术架构设计](docs/TECHNICAL_DESIGN.md)
 - [统一上下文工作台架构](docs/context-workbench-architecture.md)
 - [WorkOS Agent 安全指令建议](docs/WORKOS_AGENT_PROMPT.md)
@@ -199,7 +202,7 @@ X / Twitter 专用抽取、智能框选兼容性和 Side Panel 首屏分包体�
 
 ## 当前状态
 
-截至 2026-08-25 的交付基线：本地 `main` 位于 `a2b7d21`，代码版本为 `0.5.0`，并比 `origin/main` 超前 4 个提交。v0.4.1 与 v0.5 已合入本地 `main`，但尚未推送；仓库标签只有 `v0.1.0`、`v0.2.0`，最新有明确发布证据的安装包仍为 [`v0.2.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.2.0)。v0.5 已记录 50 个测试文件、263 项测试和生产构建通过，但逐项 Chrome 回归记录与正式 Release 尚未完成。完整状态和下一步见[项目交付与接管手册](docs/PROJECT_HANDOFF.md)。
+截至 2026-09-04，`main` 已发布为 [`v0.6.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.0)。该版本从公开版 v0.2.0 累计加入本地历史与全文搜索、阅读卡片、备份迁移、收藏卡片河流、回答片段收藏和收藏范围搜索；自动化门禁为 59 个测试文件、337 项测试、TypeScript 检查和 Chrome MV3 生产构建全部通过。人工使用仍应重点观察不同网页的内容抽取兼容性、WorkOS 实验性连接稳定性和长时间浏览收藏河流的性能。
 
 新功能应从独立分支开发，并在合并前至少运行：
 
