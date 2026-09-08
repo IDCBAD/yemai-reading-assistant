@@ -1,4 +1,3 @@
-import MiniSearch from 'minisearch';
 import {
   appendCognitionEvent,
   cognitionFilename,
@@ -332,6 +331,7 @@ export class CognitionLoopService {
   }
 
   async findReencounters(page: CognitionPageSignal) {
+    const { default: MiniSearch } = await import('minisearch');
     const site = page.site ?? (() => {
       try { return new URL(page.url).hostname; } catch { return ''; }
     })();

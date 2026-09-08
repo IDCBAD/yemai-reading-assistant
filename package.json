@@ -9,6 +9,7 @@
     "prototype:river": "node scripts/serve-collection-river-prototype.mjs",
     "prototype:loop": "node scripts/serve-collection-loop-prototype.mjs",
     "build": "wxt build",
+    "build:diagnostic": "wxt build -c wxt.diagnostic.config.ts --mode diagnostic",
     "zip": "wxt zip",
     "check": "tsc --noEmit",
     "test": "vitest run"

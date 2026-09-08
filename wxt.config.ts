@@ -4,12 +4,13 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: ({ mode }) => {
     const development = mode === 'development';
+    const diagnostic = mode === 'diagnostic';
     return {
-      name: development ? '页脉 · AI 阅读助手 DEV' : '页脉 · AI 阅读助手',
-      short_name: development ? '页脉 DEV' : '页脉',
+      name: diagnostic ? '页脉 · 生命周期诊断' : development ? '页脉 · AI 阅读助手 DEV' : '页脉 · AI 阅读助手',
+      short_name: diagnostic ? '页脉诊断' : development ? '页脉 DEV' : '页脉',
       description: '读过的，终会连起来。时间让零散的阅读，慢慢显出形状。',
       version: '0.6.0',
-      version_name: development ? '0.6.0 DEV' : '0.6.0',
+      version_name: diagnostic ? '0.6.0 DIAGNOSTIC' : development ? '0.6.0 DEV' : '0.6.0',
       minimum_chrome_version: '116',
       permissions: ['sidePanel', 'storage', 'favicon'],
       host_permissions: [

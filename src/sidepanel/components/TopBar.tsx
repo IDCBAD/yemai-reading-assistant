@@ -2,20 +2,30 @@ import { KoboyoIcon } from './KoboyoIcon';
 import { YemaiMark } from './YemaiMark';
 
 interface TopBarProps {
-  onOpenSearch: () => void;
+  onOpenSearch: (origin?: 'pointer' | 'keyboard') => void;
+  onPrepareSearch: () => void;
   onOpenReadingCards: () => void;
+  onPrepareReadingCards: () => void;
   onOpenSettings: () => void;
+  onPrepareSettings: () => void;
   onOpenCognitionSignal?: () => void;
   cognitionSignalCount?: number;
   readingCardsOpen?: boolean;
+  searchPreparing?: boolean;
+  readingCardsPreparing?: boolean;
   readingCardFeedbackCount?: number;
 }
 
 export function TopBar({
   onOpenSearch,
+  onPrepareSearch,
   onOpenReadingCards,
+  onPrepareReadingCards,
   onOpenSettings,
+  onPrepareSettings,
   readingCardsOpen = false,
+  searchPreparing = false,
+  readingCardsPreparing = false,
   readingCardFeedbackCount = 0,
   onOpenCognitionSignal,
   cognitionSignalCount = 0,
@@ -31,10 +41,13 @@ export function TopBar({
 
       <div className="topbar-meta">
         <button
-          className="icon-button pressable"
+          className={`icon-button pressable${searchPreparing ? ' is-preparing' : ''}`}
           type="button"
-          onClick={onOpenSearch}
-          aria-label={readingCardsOpen ? '搜索收藏' : '搜索阅读历史'}
+          onClick={(event) => onOpenSearch(event.detail === 0 ? 'keyboard' : 'pointer')}
+          onPointerEnter={onPrepareSearch}
+          onFocus={onPrepareSearch}
+          aria-label={searchPreparing ? '正在准备搜索' : readingCardsOpen ? '搜索收藏' : '搜索阅读历史'}
+          aria-busy={searchPreparing || undefined}
           title={`${readingCardsOpen ? '搜索收藏' : '搜索阅读历史'}（Ctrl/⌘ K）`}
         >
           <KoboyoIcon name="search" size={18} />
@@ -52,11 +65,14 @@ export function TopBar({
           </button>
         )}
         <button
-          className={`icon-button topbar-reading-cards pressable${readingCardsOpen ? ' is-active' : ''}`}
+          className={`icon-button topbar-reading-cards pressable${readingCardsOpen || readingCardsPreparing ? ' is-active' : ''}${readingCardsPreparing ? ' is-preparing' : ''}`}
           type="button"
           onClick={onOpenReadingCards}
-          aria-label={readingCardsOpen ? '关闭收藏' : '打开收藏'}
-          aria-pressed={readingCardsOpen}
+          onPointerEnter={onPrepareReadingCards}
+          onFocus={onPrepareReadingCards}
+          aria-label={readingCardsPreparing ? '正在准备收藏' : readingCardsOpen ? '关闭收藏' : '打开收藏'}
+          aria-pressed={readingCardsOpen || readingCardsPreparing}
+          aria-busy={readingCardsPreparing || undefined}
           title="收藏"
           data-reading-cards-trigger="true"
         >
@@ -71,6 +87,8 @@ export function TopBar({
           className="icon-button pressable"
           type="button"
           onClick={onOpenSettings}
+          onPointerEnter={onPrepareSettings}
+          onFocus={onPrepareSettings}
           aria-label="打开设置"
         >
           <KoboyoIcon name="settings" size={18} />

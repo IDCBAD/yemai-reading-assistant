@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ReadingCardRow } from '../../data/database';
@@ -11,6 +11,7 @@ import {
 import { readingCardKind, readingCardSourceAvailable } from '../readingCards';
 import type { Conversation } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
+import { finishUiPerformanceMeasure } from '../performanceTelemetry';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { ReadingCardRiver, type ReadingCardOpenModality } from './ReadingCardRiver';
@@ -64,7 +65,7 @@ export function ReadingCardsPanel({
 }: ReadingCardsPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rendered, setRendered] = useState(open);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(open);
   const [readerModality, setReaderModality] = useState<ReadingCardOpenModality>('programmatic');
   const [exportFeedback, setExportFeedback] = useState<{
     key: string;
@@ -75,6 +76,10 @@ export function ReadingCardsPanel({
   const panelRef = useRef<HTMLElement>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
   selectedIdRef.current = selectedId;
+
+  useLayoutEffect(() => {
+    if (open) finishUiPerformanceMeasure('reading-cards-shell');
+  }, [open]);
 
   const exportPresentation = (key: string, action: SemanticAction) => actionPresentation(
     action,

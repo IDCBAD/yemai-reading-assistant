@@ -1,5 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from 'react';
 import { browser } from 'wxt/browser';
+import { DIAGNOSTICS_ENABLED, recordDiagnosticResources, recordLifecycle, setDiagnosticResources } from '../shared/lifecycleDiagnostics';
 import { normalizeSourceIdentityUrl } from '../content/pageManifest';
 import {
   buildAgentContent,
@@ -82,10 +83,10 @@ import {
 } from './agentQueue';
 import type { AnswerContextSource } from './answerContext';
 import { Composer } from './components/Composer';
-import { MessageList, type ReadingCardFeedbackOrigin } from './components/MessageList';
-import { ConfirmDialog, HistoryPopover, SettingsDrawer } from './components/Overlays';
+import { CognitionReencounterNotice } from './components/CognitionReencounterNotice';
+import type { ReadingCardFeedbackOrigin } from './components/MessageList';
 import { TopBar } from './components/TopBar';
-import { CognitionLocalView, CognitionReencounterNotice, CognitionWorkbench, type CognitionDetails } from './components/CognitionWorkbench';
+import type { CognitionDetails } from './components/CognitionWorkbench';
 import {
   attachmentContextItem,
   cloneContextItems,
@@ -144,6 +145,8 @@ import {
   type WorkspaceSearchSession,
 } from './searchSession';
 import { PAGE_OVERVIEW_PROMPT } from './starterActions';
+import { finishUiPerformanceMeasure, startUiPerformanceMeasure } from './performanceTelemetry';
+import { runPreparedSurfaceOpen } from './surfacePreparation';
 import type {
   AgentDecision,
   AssistantArtifact,
@@ -157,10 +160,58 @@ import type {
 } from './types';
 import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
 
-const CommandPalette = lazy(() => import('./components/CommandPalette')
-  .then((module) => ({ default: module.CommandPalette })));
-const ReadingCardsPanel = lazy(() => import('./components/ReadingCardsPanel')
-  .then((module) => ({ default: module.ReadingCardsPanel })));
+type CommandPaletteModule = typeof import('./components/CommandPalette');
+type ReadingCardsSurface = typeof import('./components/ReadingCardsPanel').ReadingCardsPanel;
+
+let commandPaletteModule: CommandPaletteModule | null = null;
+let commandPaletteLoad: Promise<CommandPaletteModule> | null = null;
+let readingCardsSurface: ReadingCardsSurface | null = null;
+let readingCardsLoad: Promise<ReadingCardsSurface> | null = null;
+
+const loadCommandPalette = () => {
+  if (commandPaletteModule) return Promise.resolve(commandPaletteModule);
+  if (!commandPaletteLoad) {
+    commandPaletteLoad = import('./components/CommandPalette')
+      .then((module) => {
+        commandPaletteModule = module;
+        return commandPaletteModule;
+      })
+      .catch((error) => {
+        commandPaletteLoad = null;
+        throw error;
+      });
+  }
+  return commandPaletteLoad;
+};
+const loadCognitionWorkbench = () => import('./components/CognitionWorkbench');
+const loadMessageList = () => import('./components/MessageList')
+  .then((module) => ({ default: module.MessageList }));
+const loadOverlays = () => import('./components/Overlays');
+const loadReadingCardsPanel = () => {
+  if (readingCardsSurface) return Promise.resolve(readingCardsSurface);
+  if (!readingCardsLoad) {
+    readingCardsLoad = import('./components/ReadingCardsPanel')
+      .then((module) => {
+        readingCardsSurface = module.ReadingCardsPanel;
+        return readingCardsSurface;
+      })
+      .catch((error) => {
+        readingCardsLoad = null;
+        throw error;
+      });
+  }
+  return readingCardsLoad;
+};
+const prepareCommandPalette = () => { void loadCommandPalette(); };
+const prepareCognitionWorkbench = () => { void loadCognitionWorkbench(); };
+const prepareOverlays = () => { void loadOverlays(); };
+const prepareReadingCardsPanel = () => { void loadReadingCardsPanel(); };
+const CognitionLocalView = lazy(() => loadCognitionWorkbench().then((module) => ({ default: module.CognitionLocalView })));
+const CognitionWorkbench = lazy(() => loadCognitionWorkbench().then((module) => ({ default: module.CognitionWorkbench })));
+const ConfirmDialog = lazy(() => loadOverlays().then((module) => ({ default: module.ConfirmDialog })));
+const HistoryPopover = lazy(() => loadOverlays().then((module) => ({ default: module.HistoryPopover })));
+const MessageList = lazy(loadMessageList);
+const SettingsDrawer = lazy(() => loadOverlays().then((module) => ({ default: module.SettingsDrawer })));
 
 function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -319,10 +370,15 @@ export default function App() {
   const [readingCards, setReadingCards] = useState<ReadingCardRow[]>([]);
   const [readingCardsLoaded, setReadingCardsLoaded] = useState(false);
   const [readingCardsIssue, setReadingCardsIssue] = useState<string | undefined>();
+  const [readingCardsPreparing, setReadingCardsPreparing] = useState(false);
   const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
   const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
   const [searchSession, setSearchSession] = useState<WorkspaceSearchSession | null>(null);
+  const [searchPreparing, setSearchPreparing] = useState(false);
+  const [searchEntranceEnabled, setSearchEntranceEnabled] = useState(false);
   const [searchSuspended, setSearchSuspended] = useState(false);
+  const [pendingOpenTabId, setPendingOpenTabId] = useState<string | null>(null);
+  const [tabSwitchPending, startTabSwitchTransition] = useTransition();
   const [searchNavigationTarget, setSearchNavigationTarget] = useState<{
     conversationId: string;
     messageId: string;
@@ -338,6 +394,10 @@ export default function App() {
   const [localBackupStatus, setLocalBackupStatus] = useState<LocalBackupStatus | null>(null);
   const [localBackupStatusIssue, setLocalBackupStatusIssue] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<PageContext>(CURRENT_PAGE);
+
+  useLayoutEffect(() => {
+    finishUiPerformanceMeasure('sidepanel-shell');
+  }, []);
   const [pageIssue, setPageIssue] = useState<string | null>(null);
   const [smartSelectionActive, setSmartSelectionActive] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -368,7 +428,11 @@ export default function App() {
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
   const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
+  const searchPreparationRequestRef = useRef(0);
   const searchSuspendedRef = useRef(false);
+  const readingCardsPreparationRequestRef = useRef(0);
+  const readingCardsLoadTaskRef = useRef<Promise<void> | null>(null);
+  const readingCardsHydratedRef = useRef(false);
   const readingCardWritesRef = useRef(new Set<string>());
   const readingCardFeedbackSequenceRef = useRef(0);
   const readingCardFeedbackTimerRef = useRef<number | null>(null);
@@ -392,6 +456,24 @@ export default function App() {
   const requestCoordinatorRef = useRef<ConversationRequestCoordinator<QueuedAgentRequest> | null>(null);
   const cognitionRegistryRef = useRef(new DexieCognitionDirectoryRegistry());
   const cognitionProjectionRef = useRef(new DexieCognitionProjection());
+  useEffect(() => {
+    if (!DIAGNOSTICS_ENABLED) return;
+    setDiagnosticResources(() => ({
+      conversations: workspaceRef.current.conversations.length,
+      messages: workspaceRef.current.conversations.reduce((count, conversation) => count + conversation.messages.length, 0),
+      runningMessages: workspaceRef.current.conversations.reduce((count, conversation) => count + conversation.messages.filter((message) => message.status === 'running' || message.status === 'streaming').length, 0),
+      queuedMessages: workspaceRef.current.conversations.reduce((count, conversation) => count + conversation.messages.filter((message) => message.status === 'queued').length, 0),
+      pageSnapshots: pendingPageSnapshotsRef.current.size,
+      pageSnapshotCharacters: [...pendingPageSnapshotsRef.current.values()].reduce((count, page) => count + page.markdown.length, 0),
+      pagePreparations: pendingPagePreparationsRef.current.size,
+      decisionRequests: pendingDecisionRequestsRef.current.size,
+      attachmentFiles: attachmentFilesRef.current.size,
+      attachmentUploads: attachmentUploadsRef.current.size,
+      previewUrls: attachmentPreviewUrlsRef.current.size,
+      cognitionComparison: Boolean(cognitionComparisonAbortRef.current),
+    }));
+    recordDiagnosticResources();
+  });
   searchSuspendedRef.current = searchSuspended;
   if (!requestCoordinatorRef.current) {
     requestCoordinatorRef.current = new ConversationRequestCoordinator((request, signal) =>
@@ -414,6 +496,14 @@ export default function App() {
       ?? workspace.conversations[0]!,
     [activeOpenTab.conversationId, workspace.conversations],
   );
+  useLayoutEffect(() => {
+    if (pendingOpenTabId && activeOpenTab.id === pendingOpenTabId) {
+      finishUiPerformanceMeasure('tab-switch-content');
+    }
+  }, [activeOpenTab.id, pendingOpenTabId]);
+  useEffect(() => {
+    if (!tabSwitchPending) setPendingOpenTabId(null);
+  }, [tabSwitchPending]);
   const activeConversationIds = useMemo(
     () => deriveActiveConversationIds(workspace.conversations),
     [workspace.conversations],
@@ -590,9 +680,9 @@ export default function App() {
     return () => { mounted = false; };
   }, [cognitionDirectoryState.kind, cognitionLoop, currentPage.manifest?.description, currentPage.manifest?.leading_excerpt, currentPage.manifest?.outline, currentPage.site, currentPage.title, currentPage.url, currentPageSelection]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let mounted = true;
-    void loadReadingCards()
+    const task = loadReadingCards()
       .then((cards) => {
         if (!mounted) return;
         readingCardsRef.current = cards;
@@ -601,7 +691,11 @@ export default function App() {
       })
       .catch(() => {
         if (mounted) setReadingCardsIssue('无法读取本地收藏，暂时不能保证重启后恢复。');
+      })
+      .finally(() => {
+        readingCardsHydratedRef.current = true;
       });
+    readingCardsLoadTaskRef.current = task;
     return () => {
       mounted = false;
     };
@@ -628,6 +722,19 @@ export default function App() {
     }, 350);
     return () => window.clearTimeout(saveTimer);
   }, [workspace, workspaceHydrated]);
+
+  useEffect(() => {
+    if (!workspaceHydrated) return undefined;
+
+    const idleId = window.requestIdleCallback(() => {
+      prepareCommandPalette();
+      prepareCognitionWorkbench();
+      prepareOverlays();
+      prepareReadingCardsPanel();
+    }, { timeout: 1_500 });
+
+    return () => window.cancelIdleCallback(idleId);
+  }, [workspaceHydrated]);
 
   useEffect(() => {
     if (!settingsOpen || !workspaceHydrated) return;
@@ -905,7 +1012,12 @@ export default function App() {
 
   useEffect(() => {
     const port = browser.runtime.connect({ name: 'yebian-sidepanel' });
-    return () => port.disconnect();
+    recordLifecycle('panel-port-created');
+    if (DIAGNOSTICS_ENABLED) port.onDisconnect.addListener(() => recordLifecycle('panel-port-disconnected'));
+    return () => {
+      recordLifecycle('react-port-cleanup');
+      port.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -1009,36 +1121,92 @@ export default function App() {
     };
   }, []);
 
-  const openCommandPalette = useCallback(() => {
-    setSearchSession(searchSessionControllerRef.current.open(
+  const openCommandPalette = useCallback((origin: 'pointer' | 'keyboard' = 'pointer') => {
+    startUiPerformanceMeasure('search-shell');
+    const requestId = ++searchPreparationRequestRef.current;
+    const session = searchSessionControllerRef.current.open(
       workspaceRef.current,
       readingCardsRef.current,
       workspaceSearchScopeForSurface(readingCardsOpen),
-    ));
-    setSearchSuspended(false);
-    setHistoryOpen(false);
-    setSettingsOpen(false);
+    );
+    const commitOpen = () => {
+      setSearchEntranceEnabled(origin === 'pointer');
+      setSearchSession(session);
+      setSearchSuspended(false);
+      setHistoryOpen(false);
+      setSettingsOpen(false);
+      setSearchPreparing(false);
+    };
+    if (commandPaletteModule?.isCommandPaletteSessionReady(session)) {
+      commitOpen();
+      return;
+    }
+    setSearchPreparing(true);
+    void runPreparedSurfaceOpen({
+      load: loadCommandPalette,
+      prepareData: async () => {
+        const module = await loadCommandPalette();
+        if (module.isCommandPaletteSessionReady(session)) return;
+        startUiPerformanceMeasure('search-index');
+        const index = module.prepareCommandPaletteSession(session);
+        finishUiPerformanceMeasure('search-index', { documentCount: index.documentCount });
+      },
+      shouldCommit: () => searchPreparationRequestRef.current === requestId,
+      commit: commitOpen,
+    }).catch(() => {
+      if (searchPreparationRequestRef.current === requestId) setSearchPreparing(false);
+    });
   }, [readingCardsOpen]);
 
   const closeCommandPalette = useCallback(() => {
+    searchPreparationRequestRef.current += 1;
     searchSessionControllerRef.current.close();
+    setSearchPreparing(false);
     setSearchSession(null);
     setSearchSuspended(false);
   }, []);
 
   const closeReadingCards = useCallback(() => {
+    readingCardsPreparationRequestRef.current += 1;
+    setReadingCardsPreparing(false);
     setReadingCardsOpen(false);
     setReadingCardSelectionId(undefined);
     setSearchSuspended(false);
   }, []);
 
-  const openReadingCards = useCallback(() => {
-    setReadingCardSelectionId(undefined);
-    setReadingCardsLoaded(true);
-    setReadingCardsOpen(true);
-    setHistoryOpen(false);
-    closeCommandPalette();
-    setSettingsOpen(false);
+  const openReadingCards = useCallback((options: {
+    selectedCardId?: string;
+    preserveSearch?: boolean;
+  } = {}) => {
+    startUiPerformanceMeasure('reading-cards-shell');
+    const requestId = ++readingCardsPreparationRequestRef.current;
+    const commitOpen = () => {
+      setReadingCardSelectionId(options.selectedCardId);
+      setReadingCardsLoaded(true);
+      setReadingCardsOpen(true);
+      setHistoryOpen(false);
+      setSettingsOpen(false);
+      setReadingCardsPreparing(false);
+      if (options.preserveSearch) setSearchSuspended(true);
+      else closeCommandPalette();
+    };
+    if (readingCardsSurface && readingCardsHydratedRef.current) {
+      commitOpen();
+      return;
+    }
+    setReadingCardsPreparing(true);
+    void runPreparedSurfaceOpen({
+      load: async () => {
+        await Promise.all([
+          loadReadingCardsPanel(),
+          readingCardsLoadTaskRef.current ?? Promise.resolve(),
+        ]);
+      },
+      shouldCommit: () => readingCardsPreparationRequestRef.current === requestId,
+      commit: commitOpen,
+    }).catch(() => {
+      if (readingCardsPreparationRequestRef.current === requestId) setReadingCardsPreparing(false);
+    });
   }, [closeCommandPalette]);
 
   const showReadingCardFeedback = useCallback((origin?: ReadingCardFeedbackOrigin, label = '已加入收藏') => {
@@ -1236,7 +1404,7 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
         event.preventDefault();
-        openCommandPalette();
+        openCommandPalette('keyboard');
         return;
       }
       if (event.key === 'Escape') {
@@ -1267,7 +1435,13 @@ export default function App() {
   };
 
   const selectTab = (tabId: string) => {
-    setWorkspace((current) => selectWorkspaceTab(current, tabId));
+    if (tabId === workspaceRef.current.activeOpenTabId) return;
+    startUiPerformanceMeasure('tab-switch-feedback');
+    startUiPerformanceMeasure('tab-switch-content');
+    setPendingOpenTabId(tabId);
+    startTabSwitchTransition(() => {
+      setWorkspace((current) => selectWorkspaceTab(current, tabId));
+    });
     setHistoryOpen(false);
   };
 
@@ -1283,10 +1457,7 @@ export default function App() {
 
   const selectSearchResult = useCallback((result: WorkspaceSearchResult, query: string) => {
     if (result.kind === 'reading-card' && result.readingCardId) {
-      setSearchSuspended(true);
-      setReadingCardSelectionId(result.readingCardId);
-      setReadingCardsLoaded(true);
-      setReadingCardsOpen(true);
+      openReadingCards({ selectedCardId: result.readingCardId, preserveSearch: true });
       return;
     }
     const current = workspaceRef.current;
@@ -2347,7 +2518,7 @@ export default function App() {
     cognitionComparisonAbortRef.current?.abort();
     cognitionComparisonAbortRef.current = null;
     setCognitionWorkbench(null);
-  }, [closeCommandPalette]);
+  }, [closeCommandPalette, openReadingCards]);
   const closeCognitionPreview = useCallback(() => setCognitionPreview(null), []);
 
   const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
@@ -2481,11 +2652,20 @@ export default function App() {
       }
     : undefined;
 
+  const ReadyCommandPalette = commandPaletteModule?.CommandPalette ?? null;
+  const ReadyReadingCardsPanel = readingCardsSurface;
+
   return (
     <div className="app-shell">
       <TopBar
         onOpenSearch={openCommandPalette}
-        onOpenReadingCards={readingCardsOpen ? closeReadingCards : openReadingCards}
+        onOpenReadingCards={(readingCardsOpen || readingCardsPreparing)
+          ? closeReadingCards
+          : () => openReadingCards()}
+        onPrepareSearch={prepareCommandPalette}
+        onPrepareReadingCards={prepareReadingCardsPanel}
+        searchPreparing={searchPreparing}
+        readingCardsPreparing={readingCardsPreparing}
         readingCardsOpen={readingCardsOpen}
         readingCardFeedbackCount={readingCardFeedback?.count ?? 0}
         cognitionSignalCount={cognitionReencounters.length}
@@ -2499,6 +2679,7 @@ export default function App() {
           closeCommandPalette();
           setHistoryOpen(false);
         }}
+        onPrepareSettings={prepareOverlays}
       />
       <span className="visually-hidden" role="status" aria-live="polite">
         {readingCardsIssue ?? readingCardFeedback?.label ?? ''}
@@ -2531,56 +2712,59 @@ export default function App() {
           <button type="button" className="pressable" onClick={() => void cognitionLoop.rebuildProjection().then(applyCognitionScan)}>重新扫描</button>
         </aside>
       )}
-      <MessageList
-        key={activeConversation.id}
-        messages={activeConversation.messages}
-        savedMessageIds={savedMessageIds}
-        navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
-          ? searchNavigationTarget
-          : undefined}
-        branchOrigin={branchOrigin}
-        branchUnavailableReason={runSummary
-          ? '请等待当前回答结束后再创建分支'
-          : workspace.openTabs.length >= MAX_OPEN_TABS
-            ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+      <Suspense fallback={<div className="message-stage" aria-busy="true"><main className="messages" /></div>}>
+        <MessageList
+          key={activeConversation.id}
+          messages={activeConversation.messages}
+          savedMessageIds={savedMessageIds}
+          navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
+            ? searchNavigationTarget
             : undefined}
-        onUseStarter={(value) => {
-          patchActiveConversation({ draftInput: value });
-          setComposerFocusRequest((request) => request + 1);
-        }}
-        onEditUserMessage={(message) => {
-          patchActiveConversation({ draftInput: message.content });
-          setComposerFocusRequest((request) => request + 1);
-        }}
-        onRetry={retryMessage}
-        onBranch={branchFromMessage}
-        onToggleReadingCard={(message, contextSources, origin) => {
-          void toggleReadingCard(message, contextSources, origin);
-        }}
-        onCollectAssistantExcerpt={(message, text, contextSources, origin) => {
-          void collectReadingCardExcerpt(message, text, contextSources, origin);
-        }}
-        onOpenBranchOrigin={() => {
-          if (branchParent) selectHistory(branchParent.id);
-        }}
-        onAddAssistantQuote={(quote) => {
-          updateConversation(activeConversation.id, (conversation) => {
-            const alreadyAdded = conversation.draftContextItems.some((item) => item.kind === 'selection'
-              && item.selection.sourceMessageId === quote.sourceMessageId
-              && item.selection.text === quote.text);
-            return alreadyAdded
-              ? conversation
-              : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
-          });
-        }}
-        onResolveDecision={(message, decisionId, action, answers) => {
-          void resolveAgentDecision(activeConversation.id, message.id, decisionId, action, answers);
-        }}
-      />
+          branchOrigin={branchOrigin}
+          branchUnavailableReason={runSummary
+            ? '请等待当前回答结束后再创建分支'
+            : workspace.openTabs.length >= MAX_OPEN_TABS
+              ? `最多打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个`
+              : undefined}
+          onUseStarter={(value) => {
+            patchActiveConversation({ draftInput: value });
+            setComposerFocusRequest((request) => request + 1);
+          }}
+          onEditUserMessage={(message) => {
+            patchActiveConversation({ draftInput: message.content });
+            setComposerFocusRequest((request) => request + 1);
+          }}
+          onRetry={retryMessage}
+          onBranch={branchFromMessage}
+          onToggleReadingCard={(message, contextSources, origin) => {
+            void toggleReadingCard(message, contextSources, origin);
+          }}
+          onCollectAssistantExcerpt={(message, text, contextSources, origin) => {
+            void collectReadingCardExcerpt(message, text, contextSources, origin);
+          }}
+          onOpenBranchOrigin={() => {
+            if (branchParent) selectHistory(branchParent.id);
+          }}
+          onAddAssistantQuote={(quote) => {
+            updateConversation(activeConversation.id, (conversation) => {
+              const alreadyAdded = conversation.draftContextItems.some((item) => item.kind === 'selection'
+                && item.selection.sourceMessageId === quote.sourceMessageId
+                && item.selection.text === quote.text);
+              return alreadyAdded
+                ? conversation
+                : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
+            });
+          }}
+          onResolveDecision={(message, decisionId, action, answers) => {
+            void resolveAgentDecision(activeConversation.id, message.id, decisionId, action, answers);
+          }}
+        />
+      </Suspense>
       <Composer
         tabs={workspace.openTabs}
         conversations={workspace.conversations}
         activeTabId={activeOpenTab.id}
+        pendingTabId={tabSwitchPending ? pendingOpenTabId ?? undefined : undefined}
         input={activeConversation.draftInput}
         focusRequestId={composerFocusRequest}
         contextItems={draftContextItems}
@@ -2637,96 +2821,105 @@ export default function App() {
         }}
       />
 
-      <HistoryPopover
-        open={historyOpen}
-        conversations={workspace.conversations}
-        openTabs={workspace.openTabs}
-        activeId={activeConversation.id}
-        maxTabs={MAX_OPEN_TABS}
-        onClose={() => setHistoryOpen(false)}
-        onSelect={selectHistory}
-        onArchive={archiveConversation}
-        onRestore={restoreConversation}
-        onDeleteArchived={requestDeleteArchivedConversation}
-        onClearArchived={requestClearArchived}
-      />
-      {searchSession && (
+      {historyOpen && (
         <Suspense fallback={null}>
-          <CommandPalette
-            session={searchSession}
-            maxTabs={MAX_OPEN_TABS}
-            suspended={searchSuspended}
-            onClose={closeCommandPalette}
-            onSelect={selectSearchResult}
-          />
-        </Suspense>
-      )}
-      {readingCardsLoaded && (
-        <Suspense fallback={null}>
-          <ReadingCardsPanel
-            open={readingCardsOpen}
-            cards={readingCards}
+          <HistoryPopover
+            open
             conversations={workspace.conversations}
-            selectedCardId={readingCardSelectionId}
-            paused={shouldPauseReadingCardsForSearch(Boolean(searchSession), searchSuspended)}
-            issue={readingCardsIssue}
-            removalUndo={readingCardRemovalUndo}
-            onClose={closeReadingCards}
-            onReaderClose={() => {
-              setReadingCardSelectionId(undefined);
-              setSearchSuspended(false);
-            }}
-            onRemove={(card) => void removeSavedReadingCard(card)}
-            onUndoRemove={() => void undoRemovedReadingCard()}
-            onOpenSource={openReadingCardSource}
-            onExportCard={exportCardMarkdown}
-            onExportAll={exportAllCardsMarkdown}
+            openTabs={workspace.openTabs}
+            activeId={activeConversation.id}
+            maxTabs={MAX_OPEN_TABS}
+            onClose={() => setHistoryOpen(false)}
+            onSelect={selectHistory}
+            onArchive={archiveConversation}
+            onRestore={restoreConversation}
+            onDeleteArchived={requestDeleteArchivedConversation}
+            onClearArchived={requestClearArchived}
           />
         </Suspense>
       )}
-      <SettingsDrawer
-        open={settingsOpen}
-        settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
-        connectionIssue={connectionIssue}
-        bubbleEnabled={selectionBubbleEnabled}
-        storageUsage={localStorageUsage}
-        storageUsageIssue={localStorageUsageIssue}
-        backupStatus={localBackupStatus}
-        backupStatusIssue={localBackupStatusIssue}
-        cognitionDirectoryState={cognitionDirectoryState}
-        onSaveConnection={saveConnection}
-        onTestConnection={testConnection}
-        onImportWorkosCredentials={importWorkosLoginCredentials}
-        onRemoveCredentials={removeCredentials}
-        onBubbleEnabledChange={changeSelectionBubble}
-        onExportBackup={exportBackup}
-        onInspectBackup={inspectBackup}
-        onImportBackup={importBackup}
-        onClose={() => setSettingsOpen(false)}
-        onClearHistory={clearLocalHistory}
-        onConnectCognitionDirectory={connectCognitionDirectory}
-        onReconnectCognitionDirectory={reconnectCognitionDirectory}
-        onDisconnectCognitionDirectory={disconnectCognitionDirectory}
-      />
-      {cognitionWorkbench && (
-        <CognitionWorkbench
-          cognition={cognitionWorkbench.cognition}
-          state={cognitionWorkbench.state}
-          result={cognitionWorkbench.result}
-          issue={cognitionWorkbench.issue}
-          details={cognitionWorkbench.details}
-          onResolve={(outcome, revision, boundary, reason) => void resolveCognitionComparison(outcome, revision, boundary, reason)}
-          onClose={closeCognitionWorkbench}
+      {searchSession && ReadyCommandPalette && (
+        <ReadyCommandPalette
+          session={searchSession}
+          maxTabs={MAX_OPEN_TABS}
+          suspended={searchSuspended}
+          animateEntrance={searchEntranceEnabled}
+          onClose={closeCommandPalette}
+          onSelect={selectSearchResult}
         />
+      )}
+      {readingCardsLoaded && ReadyReadingCardsPanel && (
+        <ReadyReadingCardsPanel
+          open={readingCardsOpen}
+          cards={readingCards}
+          conversations={workspace.conversations}
+          selectedCardId={readingCardSelectionId}
+          paused={shouldPauseReadingCardsForSearch(Boolean(searchSession), searchSuspended)}
+          issue={readingCardsIssue}
+          removalUndo={readingCardRemovalUndo}
+          onClose={closeReadingCards}
+          onReaderClose={() => {
+            setReadingCardSelectionId(undefined);
+            setSearchSuspended(false);
+          }}
+          onRemove={(card) => void removeSavedReadingCard(card)}
+          onUndoRemove={() => void undoRemovedReadingCard()}
+          onOpenSource={openReadingCardSource}
+          onExportCard={exportCardMarkdown}
+          onExportAll={exportAllCardsMarkdown}
+        />
+      )}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsDrawer
+            open
+            settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
+            connectionIssue={connectionIssue}
+            bubbleEnabled={selectionBubbleEnabled}
+            storageUsage={localStorageUsage}
+            storageUsageIssue={localStorageUsageIssue}
+            backupStatus={localBackupStatus}
+            backupStatusIssue={localBackupStatusIssue}
+            cognitionDirectoryState={cognitionDirectoryState}
+            onSaveConnection={saveConnection}
+            onTestConnection={testConnection}
+            onImportWorkosCredentials={importWorkosLoginCredentials}
+            onRemoveCredentials={removeCredentials}
+            onBubbleEnabledChange={changeSelectionBubble}
+            onExportBackup={exportBackup}
+            onInspectBackup={inspectBackup}
+            onImportBackup={importBackup}
+            onClose={() => setSettingsOpen(false)}
+            onClearHistory={clearLocalHistory}
+            onConnectCognitionDirectory={connectCognitionDirectory}
+            onReconnectCognitionDirectory={reconnectCognitionDirectory}
+            onDisconnectCognitionDirectory={disconnectCognitionDirectory}
+          />
+        </Suspense>
+      )}
+      {cognitionWorkbench && (
+        <Suspense fallback={null}>
+          <CognitionWorkbench
+            cognition={cognitionWorkbench.cognition}
+            state={cognitionWorkbench.state}
+            result={cognitionWorkbench.result}
+            issue={cognitionWorkbench.issue}
+            details={cognitionWorkbench.details}
+            onResolve={(outcome, revision, boundary, reason) => void resolveCognitionComparison(outcome, revision, boundary, reason)}
+            onClose={closeCognitionWorkbench}
+          />
+        </Suspense>
       )}
       {cognitionPreview && (
-        <CognitionLocalView
-          cognition={cognitionPreview.cognition}
-          details={cognitionPreview.details}
-          issue={cognitionPreview.issue}
-          onCompare={() => void startCognitionComparison(cognitionPreview.cognition)}
-          onClose={closeCognitionPreview}
-        />
+        <Suspense fallback={null}>
+          <CognitionLocalView
+            cognition={cognitionPreview.cognition}
+            details={cognitionPreview.details}
+            issue={cognitionPreview.issue}
+            onCompare={() => void startCognitionComparison(cognitionPreview.cognition)}
+            onClose={closeCognitionPreview}
+          />
+        </Suspense>
       )}
       {historyDeletion && (() => {
         const presentation = historyDeletionPresentation(historyDeletion.kind === 'conversation'
@@ -2741,17 +2934,19 @@ export default function App() {
             messageCount: historyDeletion.messageCount,
           });
         return (
-          <ConfirmDialog
-            open
-            icon={presentation.icon}
-            title={presentation.title}
-            description={presentation.description}
-            affected={presentation.affected}
-            preserved={presentation.preserved}
-            confirmLabel={presentation.confirmLabel}
-            onCancel={() => setHistoryDeletion(null)}
-            onConfirm={confirmHistoryDeletion}
-          />
+          <Suspense fallback={null}>
+            <ConfirmDialog
+              open
+              icon={presentation.icon}
+              title={presentation.title}
+              description={presentation.description}
+              affected={presentation.affected}
+              preserved={presentation.preserved}
+              confirmLabel={presentation.confirmLabel}
+              onCancel={() => setHistoryDeletion(null)}
+              onConfirm={confirmHistoryDeletion}
+            />
+          </Suspense>
         );
       })()}
     </div>

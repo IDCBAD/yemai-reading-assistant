@@ -4,7 +4,6 @@ import {
   validatePublicApiToken,
 } from './workosConnection';
 import { uploadWorkosFile } from './workosClient';
-import { internalV2Headers } from './workosInternalV2';
 import {
   connectionError,
   parseJsonEnvelope,
@@ -77,6 +76,7 @@ export async function uploadInternalWorkosFile(
   file: File,
   signal?: AbortSignal,
 ): Promise<WorkosFileUploadResult> {
+  const { internalV2Headers } = await import('./workosInternalV2');
   const contentType = contentTypeForFile(file);
   let tempResponse: Response;
   try {

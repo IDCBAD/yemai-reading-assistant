@@ -1,12 +1,16 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  createWorkspaceSearchIndex,
   type WorkspaceSearchResult,
   type WorkspaceSearchScope,
 } from '../../search/workspaceSearch';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { commandPaletteHighlightParts, nextCommandPaletteIndex } from '../commandPalette';
+import { finishUiPerformanceMeasure, startUiPerformanceMeasure } from '../performanceTelemetry';
 import type { WorkspaceSearchSession } from '../searchSession';
+import {
+  workspaceSearchIndexCache,
+  type WorkspaceSearchIndexCacheLike,
+} from '../workspaceSearchIndexCache';
 import { KoboyoIcon } from './KoboyoIcon';
 
 interface CommandPaletteProps {
@@ -15,6 +19,8 @@ interface CommandPaletteProps {
   onClose: () => void;
   onSelect: (result: WorkspaceSearchResult, query: string) => void;
   suspended?: boolean;
+  animateEntrance?: boolean;
+  indexCache?: WorkspaceSearchIndexCacheLike;
 }
 
 function ResultText({ value, query, matchedTerms }: { value: string; query: string; matchedTerms: string[] }) {
@@ -23,26 +29,44 @@ function ResultText({ value, query, matchedTerms }: { value: string; query: stri
     : <span key={`${part.value}-${index}`}>{part.value}</span>);
 }
 
+export function isCommandPaletteSessionReady(
+  session: WorkspaceSearchSession,
+  indexCache: WorkspaceSearchIndexCacheLike = workspaceSearchIndexCache,
+) {
+  return indexCache.peek(session) !== null;
+}
+
+export function prepareCommandPaletteSession(
+  session: WorkspaceSearchSession,
+  indexCache: WorkspaceSearchIndexCacheLike = workspaceSearchIndexCache,
+) {
+  return indexCache.getOrCreate(session);
+}
+
 export function CommandPalette({
   session,
   maxTabs,
   onClose,
   onSelect,
   suspended = false,
+  animateEntrance = false,
+  indexCache = workspaceSearchIndexCache,
 }: CommandPaletteProps) {
-  const { workspace, readingCards } = session;
+  const { workspace } = session;
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<WorkspaceSearchScope>(session.initialScope);
   const deferredQuery = useDeferredValue(query);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [searchIndex, setSearchIndex] = useState(() => indexCache.peek(session));
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLElement>(null);
-  const searchIndex = useMemo(() => createWorkspaceSearchIndex(workspace, readingCards), [session]);
   const results = useMemo(
-    () => deferredQuery.trim()
-      ? searchIndex.search(deferredQuery, 24, scope)
-      : searchIndex.recent(10, scope),
+    () => !searchIndex
+      ? []
+      : deferredQuery.trim()
+        ? searchIndex.search(deferredQuery, 24, scope)
+        : searchIndex.recent(10, scope),
     [deferredQuery, scope, searchIndex],
   );
   const disabledIndexes = useMemo(() => new Set(results.flatMap((result, index) => {
@@ -51,7 +75,32 @@ export function CommandPalette({
     return !alreadyOpen && workspace.openTabs.length >= maxTabs ? [index] : [];
   })), [maxTabs, results, workspace.openTabs]);
 
+  useEffect(() => {
+    const existing = indexCache.peek(session);
+    if (existing) {
+      setSearchIndex(existing);
+      return undefined;
+    }
+    setSearchIndex(null);
+    let cancelled = false;
+    let buildTimer: number | undefined;
+    const frame = window.requestAnimationFrame(() => {
+      buildTimer = window.setTimeout(() => {
+        startUiPerformanceMeasure('search-index');
+        const next = indexCache.getOrCreate(session);
+        finishUiPerformanceMeasure('search-index', { documentCount: next.documentCount });
+        if (!cancelled) setSearchIndex(next);
+      }, 0);
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      if (buildTimer !== undefined) window.clearTimeout(buildTimer);
+    };
+  }, [indexCache, session]);
+
   useLayoutEffect(() => {
+    finishUiPerformanceMeasure('search-shell');
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery('');
     setScope(session.initialScope);
@@ -84,7 +133,7 @@ export function CommandPalette({
 
   return (
     <div
-      className={`command-palette-layer${suspended ? ' is-suspended' : ''}`}
+      className={`command-palette-layer${suspended ? ' is-suspended' : ''}${animateEntrance ? ' has-entrance' : ''}`}
       aria-hidden={suspended}
       inert={suspended || undefined}
     >
@@ -171,10 +220,12 @@ export function CommandPalette({
           <kbd>ESC</kbd>
         </div>
         <div className="command-results-heading" role="status" aria-live="polite">
-          <span>{deferredQuery.trim()
-            ? scope === 'reading-cards' ? '收藏匹配' : '匹配结果'
-            : scope === 'reading-cards' ? '最近收藏' : '最近会话'}</span>
-          <small>{results.length}</small>
+          <span>{!searchIndex
+            ? '正在准备搜索'
+            : deferredQuery.trim()
+              ? scope === 'reading-cards' ? '收藏匹配' : '匹配结果'
+              : scope === 'reading-cards' ? '最近收藏' : '最近会话'}</span>
+          <small>{searchIndex ? results.length : '…'}</small>
         </div>
         <div
           className="command-results"
@@ -185,7 +236,12 @@ export function CommandPalette({
             : scope === 'reading-cards' ? '最近收藏' : '最近会话'}
           ref={listRef}
         >
-          {results.length === 0 ? (
+          {!searchIndex ? (
+            <div className="command-empty" role="status">
+              <strong>正在准备搜索</strong>
+              <span>先输入也可以，索引完成后会立即显示结果。</span>
+            </div>
+          ) : results.length === 0 ? (
             <div className="command-empty">
               <strong>{scope === 'reading-cards' ? '没有找到相关收藏' : '没有找到相关内容'}</strong>
               <span>{scope === 'reading-cards'

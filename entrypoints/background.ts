@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { recordLifecycle, startLifecycleDiagnostics } from '../src/shared/lifecycleDiagnostics';
 import type {
   ContentRequest,
   CommandResponse,
@@ -35,6 +36,7 @@ type SidePanelWithLifecycle = typeof browser.sidePanel & {
 };
 
 export default defineBackground(() => {
+  startLifecycleDiagnostics('background');
   let panelConnections = 0;
   let bubbleEnabled = true;
   const sidePanel = browser.sidePanel as SidePanelWithLifecycle;
@@ -42,6 +44,7 @@ export default defineBackground(() => {
   const openPanelTabs = new Set<number>();
   const legacyHiddenPanelTabs = new Set<number>();
   const hasNativePanelLifecycle = Boolean(sidePanel.onOpened && sidePanel.onClosed);
+  recordLifecycle('lifecycle-capabilities', { hasNativePanelLifecycle });
 
   void browser.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
   void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
@@ -69,16 +72,20 @@ export default defineBackground(() => {
   browser.runtime.onConnect.addListener((port) => {
     if (port.name !== 'yebian-sidepanel') return;
     panelConnections += 1;
+    recordLifecycle('panel-connected', { panelConnections });
     port.onDisconnect.addListener(() => {
       panelConnections = Math.max(0, panelConnections - 1);
+      recordLifecycle('panel-disconnected', { panelConnections });
     });
   });
 
   sidePanel.onOpened?.addListener((info) => {
+    recordLifecycle('native-panel-opened', { windowId: info.windowId, tabScoped: info.tabId !== undefined });
     if (info.tabId === undefined) openPanelWindows.add(info.windowId);
     else openPanelTabs.add(info.tabId);
   });
   sidePanel.onClosed?.addListener((info) => {
+    recordLifecycle('native-panel-closed', { windowId: info.windowId, tabScoped: info.tabId !== undefined });
     if (info.tabId === undefined) openPanelWindows.delete(info.windowId);
     else openPanelTabs.delete(info.tabId);
   });

@@ -1,6 +1,7 @@
 node_modules/
 .wxt/
 .output/
+.output-diagnostic/
 .playwright-cli/
 output/
 dist/

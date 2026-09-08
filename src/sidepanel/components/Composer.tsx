@@ -1,18 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
 import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } from '../types';
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
 import { DraftInputBuffer } from '../draftInputBuffer';
-import { AgentRunStatus } from './AgentRunStatus';
+import { finishUiPerformanceMeasure } from '../performanceTelemetry';
 import { ContextWorkbench } from './ContextWorkbench';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
+
+const AgentRunStatus = lazy(() => import('./AgentRunStatus')
+  .then((module) => ({ default: module.AgentRunStatus })));
 
 interface ComposerProps {
   tabs: OpenConversationTab[];
   conversations: Conversation[];
   activeTabId: string;
+  pendingTabId?: string;
   input: string;
   focusRequestId: number;
   contextItems: ContextItem[];
@@ -49,6 +53,7 @@ export function Composer({
   tabs,
   conversations,
   activeTabId,
+  pendingTabId,
   input,
   focusRequestId,
   contextItems,
@@ -81,6 +86,10 @@ export function Composer({
   const tabButtonsRef = useRef(new Map<string, HTMLButtonElement>());
   const inputCommitCallbackRef = useRef(onInputChange);
   const inputBufferRef = useRef<DraftInputBuffer | null>(null);
+
+  useLayoutEffect(() => {
+    if (pendingTabId) finishUiPerformanceMeasure('tab-switch-feedback');
+  }, [pendingTabId]);
   if (!inputBufferRef.current) {
     inputBufferRef.current = new DraftInputBuffer(input, {
       setTimeout: (callback, delay) => window.setTimeout(callback, delay),
@@ -279,16 +288,18 @@ export function Composer({
           <div className="tab-list" role="tablist" aria-label="已打开的会话工作页">
             {tabs.map((tab, index) => {
               const conversation = conversations.find((item) => item.id === tab.conversationId);
+              const pending = tab.id === pendingTabId && tab.id !== activeTabId;
               return (
                 <button
                   ref={(element) => {
                     if (element) tabButtonsRef.current.set(tab.id, element);
                     else tabButtonsRef.current.delete(tab.id);
                   }}
-                  className={`workspace-tab pressable${tab.id === activeTabId ? ' is-active' : ''}`}
+                  className={`workspace-tab pressable${tab.id === activeTabId ? ' is-active' : ''}${pending ? ' is-pending' : ''}`}
                   type="button"
                   role="tab"
                   aria-selected={tab.id === activeTabId}
+                  aria-busy={pending || undefined}
                   aria-haspopup="menu"
                   title={`${conversation?.branch ? `分支 ${conversation.branch.ordinal} · ` : ''}${conversation?.title ?? '新的阅读对话'}，右键关闭`}
                   onClick={() => onSelectTab(tab.id)}
@@ -438,11 +449,15 @@ export function Composer({
               )}
             </div>
             <div className="composer-status-actions">
-              <AgentRunStatus summary={runSummary} />
               {runSummary && (
-                <IconTooltipButton className="stop-button pressable" type="button" onClick={onStop} aria-label="停止当前任务" tooltip="停止生成">
-                  <KoboyoIcon name="stop-generating-square" size={15} />
-                </IconTooltipButton>
+                <>
+                  <Suspense fallback={<span className="agent-run-copy" role="status">{runSummary.label}</span>}>
+                    <AgentRunStatus summary={runSummary} />
+                  </Suspense>
+                  <IconTooltipButton className="stop-button pressable" type="button" onClick={onStop} aria-label="停止当前任务" tooltip="停止生成">
+                    <KoboyoIcon name="stop-generating-square" size={15} />
+                  </IconTooltipButton>
+                </>
               )}
               <IconTooltipButton
                 className="send-button pressable"
