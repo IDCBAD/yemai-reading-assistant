@@ -4,7 +4,7 @@
 
 页脉是一个运行在 Chrome Side Panel 中的个人 AI 阅读助手。它把当前网页、选中的内容、文件和图片组织成可追踪的上下文，并通过影刀 WorkOS Agent 提供连续对话、流式回答、会话分支和本地工作区。
 
-当前稳定版本为 [`v0.6.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.0)，适合个人使用与继续验证。它把网页与 AI 对话组织为可追溯的本地工作区，并将真正值得保留的完整回答或结论片段沉淀到收藏中。
+当前固化版本为 [`v0.6.1`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.1)，适合个人使用与继续验证。它把网页与 AI 对话组织为可追溯的本地工作区，并将真正值得保留的完整回答或结论片段沉淀到收藏中。
 
 如果你是第一次接手项目，请按以下顺序阅读：
 
@@ -57,7 +57,7 @@
 
 普通用户不需要安装 Node.js，也不需要下载源码或 `docs` 文档。请前往[最新 GitHub Release](https://github.com/IDCBAD/yemai-reading-assistant/releases/latest)操作：
 
-1. 在页面底部的 **Assets** 中下载 `yemai-reading-assistant-0.6.0-chrome.zip`。
+1. 在页面底部的 **Assets** 中下载 `yemai-reading-assistant-0.6.1-chrome.zip`。
 2. 将 ZIP 解压到一个固定文件夹。不要直接选择 ZIP 文件本身。
 3. 在 Chrome 地址栏打开 `chrome://extensions`。
 4. 打开右上角的“开发者模式”。
@@ -197,12 +197,13 @@ X / Twitter 专用抽取、智能框选兼容性和 Side Panel 首屏分包体�
 - [技术架构设计](docs/TECHNICAL_DESIGN.md)
 - [统一上下文工作台架构](docs/context-workbench-architecture.md)
 - [WorkOS Agent 安全指令建议](docs/WORKOS_AGENT_PROMPT.md)
+- [WorkOS 网页端流式接口接入文档](docs/WORKOS_INTERNAL_WEB_STREAMING_API.md)
 - [WorkOS v2 传输迁移说明](docs/WORKOS_V2_TRANSPORT_MIGRATION.md)
 - [历史文档归档地图](docs/archive/README.md)
 
 ## 当前状态
 
-截至 2026-09-04，`main` 已发布为 [`v0.6.0`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.0)。该版本从公开版 v0.2.0 累计加入本地历史与全文搜索、阅读卡片、备份迁移、收藏卡片河流、回答片段收藏和收藏范围搜索；自动化门禁为 59 个测试文件、337 项测试、TypeScript 检查和 Chrome MV3 生产构建全部通过。人工使用仍应重点观察不同网页的内容抽取兼容性、WorkOS 实验性连接稳定性和长时间浏览收藏河流的性能。
+截至 2026-09-21，当前版本固化为 [`v0.6.1`](https://github.com/IDCBAD/yemai-reading-assistant/releases/tag/v0.6.1)，在 v0.6.0 基础上合入侧边栏响应速度、搜索索引复用与生命周期诊断改进，并补充 WorkOS 网页端流式接口文档。66 个测试文件、353 项测试、TypeScript 检查、Chrome MV3 生产与诊断构建、ZIP 打包全部通过。本次没有新增真实 Chrome / WorkOS 人工回归；仍需观察页面抽取兼容性、实验性连接稳定性和长期使用性能。版本标签及安装包以 Release 页面为准。
 
 新功能应从独立分支开发，并在合并前至少运行：
 
