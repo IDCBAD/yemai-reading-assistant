@@ -486,7 +486,7 @@ describe('WorkosSseParser', () => {
     expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('未知字段');
   });
 
-  it('recognizes only the fixed versioned cognition candidate purpose', () => {
+  it('ignores retired cognition candidate interrupts', () => {
     const onInterrupt = vi.fn();
     const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
     const candidate = {
@@ -512,11 +512,7 @@ describe('WorkosSseParser', () => {
         },
       },
     }));
-    expect(onInterrupt).toHaveBeenCalledWith(expect.objectContaining({
-      purpose: 'cognition-candidate',
-      purposeVersion: 1,
-      cognitionCandidate: candidate,
-    }));
+    expect(onInterrupt).not.toHaveBeenCalled();
 
     onInterrupt.mockClear();
     parser.push(nestedEvent({
@@ -530,7 +526,7 @@ describe('WorkosSseParser', () => {
         },
       },
     }));
-    expect(onInterrupt).toHaveBeenCalledWith(expect.not.objectContaining({ cognitionCandidate: expect.anything() }));
+    expect(onInterrupt).not.toHaveBeenCalled();
   });
 
   it('emits replied and rejected interrupt resolutions with safe answer values', () => {

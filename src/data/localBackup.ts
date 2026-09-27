@@ -78,6 +78,21 @@ function hasFiniteNumber(record: Record<string, unknown>, key: string) {
   return isFiniteNumber(record[key]);
 }
 
+function isBackupCollectionMaterial(item: unknown) {
+  return isRecord(item)
+    && hasString(item, 'cardId')
+    && hasStringValue(item, 'title')
+    && hasStringValue(item, 'answer')
+    && (item.question === undefined || hasStringValue(item, 'question'))
+    && (item.kind === 'answer' || item.kind === 'excerpt')
+    && isValidTimestamp(item.savedAt)
+    && Array.isArray(item.sources)
+    && item.sources.every((source) => isRecord(source)
+      && hasStringValue(source, 'title')
+      && hasStringValue(source, 'url')
+      && (source.site === undefined || hasStringValue(source, 'site')));
+}
+
 function isPageRecord(value: unknown) {
   if (!isRecord(value)) return false;
   return hasStringValue(value, 'title')
@@ -245,6 +260,8 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
       || !hasStringValue(row, 'subtitle')
       || !hasStringValue(row, 'draftInput')
       || !Array.isArray(row.draftContextItems)
+      || (row.draftCollectionMaterials !== undefined && (!Array.isArray(row.draftCollectionMaterials)
+        || !row.draftCollectionMaterials.every(isBackupCollectionMaterial)))
       || !isPageRecord(row.page)) {
       throw new YemaiBackupValidationError(`conversations 第 ${index + 1} 项结构不完整。`);
     }
@@ -253,8 +270,12 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
     if (!hasFiniteNumber(row, 'position')
       || !hasFiniteNumber(row, 'createdAt')
       || !hasStringValue(row, 'content')
+      || (row.collectionSend !== undefined && row.collectionSend !== true)
+      || (row.collectionMode !== undefined && row.collectionMode !== 'question')
       || (row.role !== 'user' && row.role !== 'assistant')
-      || !['queued', 'running', 'streaming', 'complete', 'stopped', 'failed'].includes(String(row.status))) {
+      || !['queued', 'running', 'streaming', 'complete', 'stopped', 'failed'].includes(String(row.status))
+      || (row.collectionMaterials !== undefined && (!Array.isArray(row.collectionMaterials)
+        || !row.collectionMaterials.every(isBackupCollectionMaterial)))) {
       throw new YemaiBackupValidationError(`messages 第 ${index + 1} 项结构不完整。`);
     }
   });
@@ -276,6 +297,7 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
     if (!hasStringValue(row, 'bodyMarkdown')
       || !hasStringValue(row, 'excerpt')
       || (row.kind !== undefined && row.kind !== 'answer' && row.kind !== 'excerpt')
+      || (row.question !== undefined && !hasStringValue(row, 'question'))
       || !Array.isArray(row.sources)
       || !Array.isArray(row.artifacts)
       || row.sources.some((source) => !isRecord(source)

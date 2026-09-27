@@ -1,6 +1,7 @@
 import { contextItemsFromMessage, contextPage, contextSelections } from '../sidepanel/contextItems';
 import type { ChatMessage, PageContext } from '../sidepanel/types';
 import { createStableSourceId } from '../content/pageManifest';
+import { collectionMessagePrompt } from '../data/collectionPrompt';
 
 interface BranchTurn {
   role: ChatMessage['role'];
@@ -92,7 +93,7 @@ function buildVisibleConversationContext(
       const page = contextPage(contextItemsFromMessage(message))?.page;
       return {
         role: message.role,
-        content: message.content,
+        content: collectionMessagePrompt(message),
         ...(page?.url
           ? { pageSourceId: page.sourceId ?? createStableSourceId(page.url) }
           : {}),
@@ -150,7 +151,7 @@ export function buildTransportHandoffContext(messages: ChatMessage[]) {
   const turns: BranchTurn[] = selected.map(({ message, references }) => {
     const page = contextPage(contextItemsFromMessage(message))?.page;
     const pageSourceId = page?.url ? page.sourceId ?? createStableSourceId(page.url) : undefined;
-    const clippedContent = clip(message.content, TRANSPORT_HANDOFF_MAX_TURN_CONTENT_CHARS);
+    const clippedContent = clip(collectionMessagePrompt(message), TRANSPORT_HANDOFF_MAX_TURN_CONTENT_CHARS);
     const selectedReferences = references.slice(0, TRANSPORT_HANDOFF_MAX_REFERENCES_PER_TURN);
     const mappedReferences = selectedReferences.map((reference) => {
       const clippedText = clip(reference.text, TRANSPORT_HANDOFF_MAX_REFERENCE_CHARS);

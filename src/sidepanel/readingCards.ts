@@ -71,15 +71,33 @@ export function readingCardKind(card: Pick<ReadingCardRow, 'kind'>): ReadingCard
   return card.kind ?? 'answer';
 }
 
+export function triggeringQuestion(conversation: Conversation, messageId: string) {
+  const index = conversation.messages.findIndex((message) => message.id === messageId);
+  if (index < 0) return undefined;
+  const question = conversation.messages.slice(0, index).reverse().find((message) => message.role === 'user');
+  return question?.content.trim() || undefined;
+}
+
+export function readingCardQuestion(card: ReadingCardRow, conversations: Conversation[]) {
+  if (typeof card.question === 'string' && card.question.trim()) return card.question.trim();
+  const conversation = conversations.find((item) => item.id === card.sourceConversationId);
+  return conversation ? triggeringQuestion(conversation, card.sourceMessageId) : undefined;
+}
+
 export function readingCardExcerptId(conversationId: string, messageId: string, text: string) {
   return `reading-card:excerpt:${conversationId}:${messageId}:${stableTextFingerprint(compactText(text))}`;
 }
 
-function readingCardSources(conversation: Conversation, contextSources: AnswerContextSource[]) {
-  const sources = uniqueSources(contextSources
-    .map(contextSource)
-    .filter((source): source is ReadingCardSource => Boolean(source)));
-  const fallbackSources = uniqueSources(conversation.pages.map((page) => ({
+function readingCardSources(conversation: Conversation, messageId: string, contextSources: AnswerContextSource[]) {
+  const messageIndex = conversation.messages.findIndex((message) => message.id === messageId);
+  const question = messageIndex < 0
+    ? undefined
+    : conversation.messages.slice(0, messageIndex).reverse().find((message) => message.role === 'user');
+  const sources = uniqueSources([
+    ...contextSources.map(contextSource).filter((source): source is ReadingCardSource => Boolean(source)),
+    ...(question?.collectionMaterials?.flatMap((material) => material.sources.map((source) => ({ ...source }))) ?? []),
+  ]);
+  const fallbackSources = uniqueSources(conversation.pages.filter((page) => Boolean(page.url)).map((page) => ({
     title: page.title,
     url: page.url,
     site: page.site,
@@ -99,10 +117,11 @@ export function createReadingCard(
     kind: 'answer',
     sourceConversationId: conversation.id,
     sourceMessageId: message.id,
+    question: triggeringQuestion(conversation, message.id),
     title: cardTitle(conversation, message),
     excerpt: truncate(excerpt || message.artifacts?.map((artifact) => artifact.filename).join('、') || 'Agent 产物', MAX_CARD_EXCERPT_LENGTH),
     bodyMarkdown: message.content,
-    sources: readingCardSources(conversation, contextSources),
+    sources: readingCardSources(conversation, message.id, contextSources),
     artifacts: (message.artifacts ?? []).map((artifact) => ({ ...artifact })),
     messageCreatedAt: message.respondedAt ?? message.createdAt,
     createdAt,
@@ -124,10 +143,11 @@ export function createReadingCardExcerpt(
     kind: 'excerpt',
     sourceConversationId: conversation.id,
     sourceMessageId: message.id,
+    question: triggeringQuestion(conversation, message.id),
     title: excerptTitle(bodyMarkdown),
     excerpt: truncate(excerpt, MAX_CARD_EXCERPT_LENGTH),
     bodyMarkdown,
-    sources: readingCardSources(conversation, contextSources),
+    sources: readingCardSources(conversation, message.id, contextSources),
     artifacts: [],
     messageCreatedAt: message.respondedAt ?? message.createdAt,
     createdAt,

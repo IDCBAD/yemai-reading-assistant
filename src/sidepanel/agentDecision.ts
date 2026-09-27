@@ -36,7 +36,11 @@ export function messageDecisionInteractions(message: {
   interactions?: AgentDecision[];
   decision?: AgentDecision;
 }) {
-  return message.interactions ?? (message.decision ? [message.decision] : []);
+  const interactions = message.interactions ?? (message.decision ? [message.decision] : []);
+  return interactions.filter((interaction) => {
+    const legacy = interaction as AgentDecision & { purpose?: string; cognitionCandidate?: unknown; cognitionReceipt?: unknown };
+    return legacy.purpose !== 'cognition-candidate' && !legacy.cognitionCandidate && !legacy.cognitionReceipt;
+  });
 }
 
 export function upsertAgentInteraction(

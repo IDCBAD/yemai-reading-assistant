@@ -90,6 +90,20 @@ describe('createReadingCard', () => {
     expect(card.bodyMarkdown).toContain('可靠性');
   });
 
+  it('keeps the typed question and material sources with a collected answer', () => {
+    const source = conversation();
+    source.messages.unshift({
+      id: 'question-1', role: 'user', content: '整理这些收藏', createdAt: 10, status: 'complete',
+      collectionMaterials: [{
+        cardId: 'saved-1', title: '判断', kind: 'excerpt', question: '原问题是什么？',
+        answer: '选中的回答片段', sources: [{ title: '原文', url: 'https://example.com/original' }], savedAt: 9,
+      }],
+    });
+    const card = createReadingCard(source, source.messages[1]!, [], 20);
+    expect(card.question).toBe('整理这些收藏');
+    expect(card.sources).toContainEqual({ title: '原文', url: 'https://example.com/original' });
+  });
+
   it('restores an archived source and opens its work page atomically', () => {
     const source = conversation();
     source.archivedAt = 30;

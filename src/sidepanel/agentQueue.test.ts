@@ -24,6 +24,13 @@ const assistant = (
 });
 
 describe('agent queue state', () => {
+  it('keeps a running summary during output and clears it after completion', () => {
+    const message = { ...assistant('m1', 'streaming', 'streaming'), content: '第一段回答' };
+    expect(deriveAgentRunSummary([message])?.label).toBe('正在回答');
+    expect(deriveAgentRunSummary([{ ...message, status: 'complete' }])).toBeNull();
+    expect(deriveAgentRunSummary([{ ...message, status: 'stopped' }])).toBeNull();
+    expect(deriveAgentRunSummary([{ ...message, status: 'failed' }])).toBeNull();
+  });
   it('keeps the assistant message observable before the first visible token', () => {
     expect(deriveMessageRunNote(assistant('m1', 'running', 'waiting-first-token'))).toEqual({
       kind: 'running',

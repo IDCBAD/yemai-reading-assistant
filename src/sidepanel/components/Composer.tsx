@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BorderBeam } from 'border-beam';
-import type { AgentRunSummary, ContextItem, Conversation, OpenConversationTab } from '../types';
+import type { AgentRunSummary, CollectionMaterial, ContextItem, Conversation, OpenConversationTab } from '../types';
 import { extractClipboardImages, namePastedImages } from '../clipboardImages';
 import { DraftInputBuffer } from '../draftInputBuffer';
 import { finishUiPerformanceMeasure } from '../performanceTelemetry';
@@ -9,15 +9,13 @@ import { ContextWorkbench } from './ContextWorkbench';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 
-const AgentRunStatus = lazy(() => import('./AgentRunStatus')
-  .then((module) => ({ default: module.AgentRunStatus })));
-
 interface ComposerProps {
   tabs: OpenConversationTab[];
   conversations: Conversation[];
   activeTabId: string;
   pendingTabId?: string;
   input: string;
+  collectionMaterials?: CollectionMaterial[];
   focusRequestId: number;
   contextItems: ContextItem[];
   activeConversationIds: Set<string>;
@@ -32,6 +30,7 @@ interface ComposerProps {
   onNewConversation: () => void;
   onToggleHistory: () => void;
   onInputChange: (value: string) => void;
+  onRemoveCollectionMaterials?: () => void;
   onContextIncludedChange: (id: string, included: boolean) => void;
   onRemoveContextItem: (id: string) => void;
   onRetryAttachment: (id: string) => void;
@@ -55,6 +54,7 @@ export function Composer({
   activeTabId,
   pendingTabId,
   input,
+  collectionMaterials,
   focusRequestId,
   contextItems,
   activeConversationIds,
@@ -69,6 +69,7 @@ export function Composer({
   onNewConversation,
   onToggleHistory,
   onInputChange,
+  onRemoveCollectionMaterials,
   onContextIncludedChange,
   onRemoveContextItem,
   onRetryAttachment,
@@ -114,15 +115,16 @@ export function Composer({
   };
 
   const canAddTab = tabs.length < maxTabs;
-  const contextItemCount = contextItems.length;
+  const contextItemCount = contextItems.length + (collectionMaterials?.length ?? 0);
   const selections = contextItems.filter((item) => item.kind === 'selection' && item.included);
   const attachments = contextItems
     .filter((item): item is Extract<ContextItem, { kind: 'file' | 'image' }> => item.kind === 'file' || item.kind === 'image')
     .map((item) => item.attachment);
-  const hasContent =
-    localInput.trim().length > 0 ||
-    selections.length > 0 ||
-    contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
+  const hasContent = collectionMaterials?.length
+    ? localInput.trim().length > 0
+    : localInput.trim().length > 0 ||
+      selections.length > 0 ||
+      contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
   const hasUploadingAttachments = contextItems.some(
     (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
   );
@@ -236,14 +238,15 @@ export function Composer({
       <BorderBeam
         className="composer-beam"
         size="md"
-        colorVariant="colorful"
+        colorVariant="ocean"
+        staticColors
         theme="light"
         strength={1}
-        duration={3.1}
-        brightness={1.65}
-        saturation={1.8}
-        hueRange={70}
-        active={Boolean(runSummary)}
+        duration={4.8}
+        brightness={1.3}
+        saturation={0.8}
+        hueRange={0}
+        active={Boolean(runSummary) && !waitingForDecision}
         borderRadius={16}
       >
         <div
@@ -351,6 +354,15 @@ export function Composer({
           </div>
         </div>
 
+        {Boolean(collectionMaterials?.length) && (
+          <div className="composer-collection-context">
+            <details>
+              <summary>已加入 {collectionMaterials!.length} 条收藏问答 · 提问时发送</summary>
+              <ul>{collectionMaterials!.map((material) => <li key={material.cardId}>{material.title}</li>)}</ul>
+            </details>
+            <button type="button" onClick={onRemoveCollectionMaterials} aria-label="移除已加入的收藏问答">移除</button>
+          </div>
+        )}
         <ContextWorkbench
           items={contextItems}
           onIncludedChange={onContextIncludedChange}
@@ -389,11 +401,16 @@ export function Composer({
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                if (canSend && onSend(inputBuffer.value)) resetLocalInput('');
+                if (canSend && onSend(inputBuffer.value)) {
+                    resetLocalInput('');
+                    inputRef.current?.focus({ preventScroll: true });
+                  }
               }
             }}
             placeholder={waitingForDecision
               ? '请先完成上方选择…'
+              : collectionMaterials?.length
+                ? `针对这 ${collectionMaterials.length} 条收藏提问…`
               : selections.length > 0
                 ? `针对已引用的 ${selections.length} 段内容提问…`
                 : '继续追问，或粘贴图片提问…'}
@@ -449,28 +466,29 @@ export function Composer({
               )}
             </div>
             <div className="composer-status-actions">
-              {runSummary && (
-                <>
-                  <Suspense fallback={<span className="agent-run-copy" role="status">{runSummary.label}</span>}>
-                    <AgentRunStatus summary={runSummary} />
-                  </Suspense>
-                  <IconTooltipButton className="stop-button pressable" type="button" onClick={onStop} aria-label="停止当前任务" tooltip="停止生成">
-                    <KoboyoIcon name="stop-generating-square" size={15} />
-                  </IconTooltipButton>
-                </>
+              {Boolean(runSummary?.queuedCount) && (
+                <span className="composer-queue-count" role="status">{runSummary!.queuedCount} 条排队</span>
               )}
-              <IconTooltipButton
-                className="send-button pressable"
+              {(!runSummary || hasContent || hasUploadingAttachments) && <IconTooltipButton
+                className={`send-button pressable${runSummary ? ' send-button--queue' : ''}`}
                 type="button"
                 onClick={() => {
-                  if (canSend && onSend(inputBuffer.value)) resetLocalInput('');
+                  if (canSend && onSend(inputBuffer.value)) {
+                    resetLocalInput('');
+                    inputRef.current?.focus({ preventScroll: true });
+                  }
                 }}
                 disabled={!canSend}
-                aria-label={waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : '发送消息'}
-                tooltip={waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? '发送消息' : '输入内容后发送'}
+                aria-label={waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : runSummary ? '加入队列' : '发送消息'}
+                tooltip={waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? (runSummary ? '加入队列' : '发送消息') : '输入内容后发送'}
               >
                 <KoboyoIcon name="send" size={17} />
-              </IconTooltipButton>
+              </IconTooltipButton>}
+              {runSummary && (
+                <IconTooltipButton className="stop-button pressable" type="button" onClick={() => { onStop(); inputRef.current?.focus({ preventScroll: true }); }} aria-label="停止当前任务" tooltip="停止生成">
+                  <span className="stop-button-square" aria-hidden="true" />
+                </IconTooltipButton>
+              )}
             </div>
           </div>
         </div>

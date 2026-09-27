@@ -165,6 +165,15 @@ describe('createWorkspaceSearchIndex', () => {
       .toEqual(['最近会话', '较早会话']);
   });
 
+  it('does not show the replacement empty draft as history after clearing conversations', () => {
+    const replacement = conversation({
+      id: 'replacement', title: '新的阅读对话', isDraft: true, messages: [],
+    });
+    const index = createWorkspaceSearchIndex(workspace([replacement]));
+    expect(index.recent()).toEqual([]);
+    expect(index.search('新的阅读对话')).toEqual([]);
+  });
+
   it('searches saved reading cards and suppresses the duplicate source message', () => {
     const item = conversation({
       messages: [message('message-15', 'assistant', '这是值得独立收藏的关键结论。')],

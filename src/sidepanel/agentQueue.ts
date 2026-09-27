@@ -124,6 +124,7 @@ export function deriveAgentRunSummary(messages: ChatMessage[]): AgentRunSummary 
     status,
     stage,
     ...STAGE_PRESENTATION[stage],
+    ...(stage === 'streaming' && active.content ? { label: '正在回答' } : {}),
     queuedCount: messages.filter((message) =>
       message.role === 'assistant' && message.status === 'queued').length,
   };

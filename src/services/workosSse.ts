@@ -1,4 +1,3 @@
-import type { CognitionType } from '../cognition/cognitionLoop';
 
 export interface WorkosSseCallbacks {
   onText: (text: string) => void;
@@ -69,18 +68,6 @@ export interface WorkosA2uiInterrupt {
   fields: WorkosA2uiField[];
   toolMessageId?: string;
   toolCallId?: string;
-  purpose?: 'cognition-candidate';
-  purposeVersion?: 1;
-  cognitionCandidate?: {
-    type: CognitionType;
-    title: string;
-    currentUnderstanding: string;
-    changedFrom?: string;
-    rationale: string;
-    boundary: string;
-    unresolved?: string;
-    question: string;
-  };
 }
 
 export interface WorkosInterruptResolution {
@@ -212,49 +199,13 @@ function projectA2uiField(value: unknown): WorkosA2uiField | undefined {
   return undefined;
 }
 
-const COGNITION_TYPES = new Set<CognitionType>([
-  'concept',
-  'causal-model',
-  'judgment-principle',
-  'method',
-  'decision-basis',
-  'hypothesis',
-]);
-
-function projectCognitionCandidate(payload: UnknownRecord) {
-  if (payload.purpose !== 'cognition-candidate' || payload.purposeVersion !== 1 || !isRecord(payload.cognition)) {
-    return undefined;
-  }
-  const candidate = payload.cognition;
-  const type = firstString(candidate, ['type']) as CognitionType | undefined;
-  const title = safeText(candidate.title, 160).trim();
-  const currentUnderstanding = safeText(candidate.currentUnderstanding, 4_000).trim();
-  const rationale = safeText(candidate.rationale, 4_000).trim();
-  const boundary = safeText(candidate.boundary, 4_000).trim();
-  const question = safeText(candidate.question, 240).trim();
-  if (!type || !COGNITION_TYPES.has(type) || !title || !currentUnderstanding || !rationale || !boundary || !question) {
-    return undefined;
-  }
-  const changedFrom = safeText(candidate.changedFrom, 4_000).trim();
-  const unresolved = safeText(candidate.unresolved, 4_000).trim();
-  return {
-    type,
-    title,
-    currentUnderstanding,
-    ...(changedFrom ? { changedFrom } : {}),
-    rationale,
-    boundary,
-    ...(unresolved ? { unresolved } : {}),
-    question,
-  };
-}
-
 function projectA2uiInterrupt(properties: UnknownRecord): WorkosA2uiInterrupt | undefined {
   if (firstString(properties, ['type']) !== 'a2ui') return undefined;
   const id = safeIdentifier(properties.id);
   const sessionId = safeIdentifier(properties.sessionID ?? properties.sessionId);
   const payload = isRecord(properties.payload) ? properties.payload : undefined;
   if (!id || !sessionId || !payload || !Array.isArray(payload.fields)) return undefined;
+  if (payload.purpose === 'cognition-candidate') return undefined;
   const seenLabels = new Set<string>();
   const fields = payload.fields.slice(0, 12).flatMap((value) => {
     const field = projectA2uiField(value);
@@ -264,20 +215,11 @@ function projectA2uiInterrupt(properties: UnknownRecord): WorkosA2uiInterrupt | 
   });
   if (!fields.length) return undefined;
   const tool = isRecord(properties.tool) ? properties.tool : undefined;
-  const cognitionCandidate = projectCognitionCandidate(payload);
-  const validCognitionCandidate = cognitionCandidate && fields.length === 1 && fields[0]?.type === 'text'
-    ? cognitionCandidate
-    : undefined;
   return {
     id,
     sessionId,
     title: safeLabel(firstString(payload, ['title']))?.slice(0, 120) ?? '需要你的选择',
     fields,
-    ...(validCognitionCandidate ? {
-      purpose: 'cognition-candidate' as const,
-      purposeVersion: 1 as const,
-      cognitionCandidate: validCognitionCandidate,
-    } : {}),
     ...(tool && safeIdentifier(tool.messageID ?? tool.messageId)
       ? { toolMessageId: safeIdentifier(tool.messageID ?? tool.messageId) }
       : {}),

@@ -28,6 +28,9 @@ vi.mock('wxt/browser', () => ({
           localStorageWrites.push(values);
           Object.entries(values).forEach(([key, value]) => localStorageState.set(key, value));
         },
+        async remove(key: string) {
+          localStorageState.delete(key);
+        },
         async getBytesInUse() {
           return JSON.stringify(Object.fromEntries(localStorageState)).length;
         },
@@ -63,13 +66,14 @@ function workspace(content = '迁移前消息'): WorkspaceState {
 
 let loadWorkspaceState: typeof import('./workspaceStorage').loadWorkspaceState;
 let saveWorkspaceState: typeof import('./workspaceStorage').saveWorkspaceState;
+let clearWorkspaceHistory: typeof import('./workspaceStorage').clearWorkspaceHistory;
 let database: typeof import('../data/database').yemaiDatabase;
 
 beforeAll(async () => {
   ({ yemaiDatabase: database } = await import('../data/database'));
   await database.delete();
   await database.open();
-  ({ loadWorkspaceState, saveWorkspaceState } = await import('./workspaceStorage'));
+  ({ loadWorkspaceState, saveWorkspaceState, clearWorkspaceHistory } = await import('./workspaceStorage'));
 });
 
 afterAll(async () => {
@@ -112,5 +116,24 @@ describe('workspace storage integration', () => {
       openTabs: [{ id: 'open-1', openedAt: 99 }],
     });
     expect((await database.messages.get('message-1'))?.content).toBe('数据库已经更新');
+  });
+
+  it('clears old conversations and the legacy backup while keeping a new empty draft', async () => {
+    const next = workspace();
+    next.conversations[0] = {
+      ...next.conversations[0]!,
+      id: 'replacement-draft',
+      title: '新的阅读对话',
+      isDraft: true,
+      messages: [],
+    };
+    next.openTabs[0] = { ...next.openTabs[0]!, conversationId: 'replacement-draft' };
+
+    await clearWorkspaceHistory(next);
+
+    expect((await database.conversations.toArray()).map((row) => row.id)).toEqual(['replacement-draft']);
+    expect(await database.messages.count()).toBe(0);
+    expect(localStorageState.has('workspaceState')).toBe(false);
+    expect((await loadWorkspaceState())?.conversations[0]?.messages).toEqual([]);
   });
 });

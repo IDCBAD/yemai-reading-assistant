@@ -40,6 +40,7 @@
 - 查看 Mermaid、Agent 生成图片和文件产物。
 - 创建会话分支、归档历史、全文搜索和精确定位消息。
 - 把完整回答或回答中的划选片段收藏成独立收藏卡片。
+- 在收藏列表多选问答，带入新会话后自行提问，或逐张新建到指定 Obsidian 问答目录（当前开发分支，待真实 Chrome 验证）。
 - 导出/导入版本化本地备份，并把收藏卡片导出为 Markdown。
 
 ### 2.2 明确不做什么
@@ -436,9 +437,7 @@ npm run zip
 
 ## 12. 推荐的下一步
 
-v0.6 发布后进入真实使用观察期：优先积累完整回答与划词片段收藏，验证卡片河流在长期数据量下的可读性、搜索准确性和性能；不要立即恢复 Agent 自动形成认知。下一次认知工作流设计应从用户主动选择的一张或多张收藏卡片开始，并继续把最终写入独立 Markdown 目录作为明确确认后的动作。
-
-下一产品主线已经调整为[先收藏，再形成认知](./COLLECTION_FIRST_DIRECTION.md)：先通过完整回答和划选片段积累确定的收藏事实，暂时停止由 Agent 在对话中自动提出认知候选。独立本地目录连接继续保留，但收藏不会自动写入；未来认知形成从用户主动选择的收藏卡片发起。
+当前开发分支已按用户确认的[收藏问答工作流](./COLLECTION_QA_WORKFLOW.md)实现列表多选、带资料的新会话草稿、用户提问后发送和逐张新建 Obsidian Markdown。先在真实 Chrome 中验证目录授权、同标题文件处理、草稿重载、断线后选择保留和首次 WorkOS 提问，再决定发布。旧认知功能入口与专门文档已移除；历史消息和旧 Markdown 保留。
 
 ## 13. 文档地图
 
@@ -449,8 +448,7 @@ v0.6 发布后进入真实使用观察期：优先积累完整回答与划词片
 - [CONTEXT.md](../CONTEXT.md)：稳定术语。
 - [README.md](../README.md)：用户安装和开发快速入口。
 - [CHANGELOG.md](../CHANGELOG.md)：版本实现内容。
-- [COLLECTION_FIRST_DIRECTION.md](./COLLECTION_FIRST_DIRECTION.md)：当前“先收藏，再形成认知”的产品方向。
-- [COGNITION_LOOP_DIRECTION.md](./COGNITION_LOOP_DIRECTION.md)：已被部分取代的历史方向记录。
+- [COLLECTION_QA_WORKFLOW.md](./COLLECTION_QA_WORKFLOW.md)：当前收藏问答、带资料提问和 Obsidian 保存流程。
 
 ### 现行专项约束
 
@@ -461,7 +459,6 @@ v0.6 发布后进入真实使用观察期：优先积累完整回答与划词片
 - [WORKOS_V2_TRANSPORT_MIGRATION.md](./WORKOS_V2_TRANSPORT_MIGRATION.md)
 - [WORKOS_AGENT_PROMPT.md](./WORKOS_AGENT_PROMPT.md)
 - [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)
-- [ADR 0001：使用独立 Markdown 目录保存认知](./adr/0001-independent-markdown-cognition-directory.md)
 
 ### 历史证据
 

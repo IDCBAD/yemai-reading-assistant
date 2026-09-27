@@ -164,13 +164,16 @@ export interface AgentDecision extends WorkosA2uiInterrupt {
   submittedAction?: 'reply' | 'reject';
   answers?: Record<string, string | string[]>;
   errorMessage?: string;
-  cognitionReceipt?: {
-    id: string;
-    filename: string;
-    savedAt: number;
-    remotePending?: boolean;
-    available?: boolean;
-  };
+}
+
+export interface CollectionMaterial {
+  cardId: string;
+  title: string;
+  kind: 'answer' | 'excerpt';
+  question?: string;
+  answer: string;
+  sources: Array<{ title: string; url: string; site?: string }>;
+  savedAt: number;
 }
 
 export type AgentDecisionField = WorkosA2uiField;
@@ -179,6 +182,12 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** Frozen materials sent from a collection selection, kept even if cards are removed later. */
+  collectionMaterials?: CollectionMaterial[];
+  /** A normal user question with selected collection materials attached as context. */
+  collectionMode?: 'question';
+  /** First answer of a collection synthesis, so an uncertain submit is never offered as a blind retry. */
+  collectionSend?: true;
   createdAt: number;
   respondedAt?: number;
   status: MessageStatus;
@@ -225,6 +234,8 @@ export interface Conversation {
   messages: ChatMessage[];
   draftInput: string;
   draftContextItems: ContextItem[];
+  /** Selected cards waiting for the user's first question in a new conversation. */
+  draftCollectionMaterials?: CollectionMaterial[];
 }
 
 export interface OpenConversationTab {

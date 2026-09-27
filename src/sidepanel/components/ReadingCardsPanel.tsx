@@ -2,13 +2,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ReadingCardRow } from '../../data/database';
+import type { QaSaveResult } from '../../services/obsidianQa';
+import { MAX_COLLECTION_MATERIAL_CHARACTERS, collectionContextText, collectionMaterials } from '../../data/collectionActions';
 import {
   actionPresentation,
   type ActionFeedbackState,
   type ReadingCardRemovalUndo,
   type SemanticAction,
 } from '../actionSemantics';
-import { readingCardKind, readingCardSourceAvailable } from '../readingCards';
+import { readingCardKind, readingCardQuestion, readingCardSourceAvailable } from '../readingCards';
 import type { Conversation } from '../types';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import { finishUiPerformanceMeasure } from '../performanceTelemetry';
@@ -31,6 +33,20 @@ interface ReadingCardsPanelProps {
   onOpenSource: (card: ReadingCardRow) => void;
   onExportCard: (card: ReadingCardRow) => Promise<void>;
   onExportAll: (cards: ReadingCardRow[]) => Promise<void>;
+  onStartConversation: (cards: ReadingCardRow[]) => string | undefined;
+  onSaveSelected: (cards: ReadingCardRow[]) => Promise<QaSaveResult[]>;
+  collectionSend?: { conversationId: string; cardIds: string[]; status: 'draft' | 'pending' | 'received' | 'uncertain' } | null;
+}
+
+const SELECTED_CARDS_KEY = 'yemai-selected-reading-card-ids-v1';
+
+function restoreSelectedCards(): string[] {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(SELECTED_CARDS_KEY) ?? '[]');
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function safeArtifactUrl(value?: string) {
@@ -62,8 +78,16 @@ export function ReadingCardsPanel({
   onOpenSource,
   onExportCard,
   onExportAll,
+  onStartConversation,
+  onSaveSelected,
+  collectionSend,
 }: ReadingCardsPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [view, setView] = useState<'river' | 'list'>('river');
+  const [selectedIds, setSelectedIds] = useState<string[]>(restoreSelectedCards);
+  const [saveReport, setSaveReport] = useState<QaSaveResult[] | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchIssue, setBatchIssue] = useState<string | null>(null);
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(open);
   const [readerModality, setReaderModality] = useState<ReadingCardOpenModality>('programmatic');
@@ -72,10 +96,15 @@ export function ReadingCardsPanel({
     state: Exclude<ActionFeedbackState, 'idle'>;
   } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const preserveSelectionOnCloseRef = useRef(false);
+  const openRef = useRef(open);
   const returnFocusIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
+  const batchCards = useMemo(() => cards.filter((card) => selectedIds.includes(card.id)), [cards, selectedIds]);
+  const sendCharacters = useMemo(() => collectionContextText(collectionMaterials(batchCards, conversations)).length, [batchCards, conversations]);
   selectedIdRef.current = selectedId;
+  openRef.current = open;
 
   useLayoutEffect(() => {
     if (open) finishUiPerformanceMeasure('reading-cards-shell');
@@ -119,10 +148,22 @@ export function ReadingCardsPanel({
   useEffect(() => {
     if (!open) return;
     const nextSelectedId = selectedCardId ?? null;
+    setView('river');
     setReaderModality('programmatic');
     setSelectedId(nextSelectedId);
     returnFocusIdRef.current = nextSelectedId;
   }, [open, selectedCardId]);
+
+  useEffect(() => {
+    if (open) return;
+    if (preserveSelectionOnCloseRef.current) {
+      preserveSelectionOnCloseRef.current = false;
+      return;
+    }
+    setSelectedIds([]);
+    setSaveReport(null);
+    setBatchIssue(null);
+  }, [open]);
 
   useEffect(() => {
     if (selectedId && !cards.some((card) => card.id === selectedId)) {
@@ -130,6 +171,22 @@ export function ReadingCardsPanel({
       onReaderClose?.();
     }
   }, [cards, onReaderClose, selectedId]);
+
+  useEffect(() => {
+    setSelectedIds((current) => current.filter((id) => cards.some((card) => card.id === id)));
+  }, [cards]);
+
+  useEffect(() => {
+    if (collectionSend?.status !== 'received') return;
+    const sent = new Set(collectionSend.cardIds);
+    setSelectedIds((current) => current.filter((id) => !sent.has(id)));
+  }, [collectionSend?.conversationId, collectionSend?.status]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SELECTED_CARDS_KEY, JSON.stringify(selectedIds));
+    } catch { /* Selection remains available for this sidepanel session. */ }
+  }, [selectedIds]);
 
   useEffect(() => {
     if (!open) return;
@@ -170,7 +227,7 @@ export function ReadingCardsPanel({
         return;
       }
       panelRef.current
-        ?.querySelector<HTMLElement>('.reading-card-river__open, .reading-cards-close')
+        ?.querySelector<HTMLElement>('.reading-card-river__open, .reading-card-list-open, .reading-cards-close')
         ?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
@@ -185,6 +242,49 @@ export function ReadingCardsPanel({
   const closeReader = () => {
     setSelectedId(null);
     onReaderClose?.();
+  };
+
+  const switchView = (nextView: 'river' | 'list') => {
+    if (selectedId) closeReader();
+    setView(nextView);
+  };
+
+  const toggleSelection = (cardId: string) => {
+    setSelectedIds((current) => current.includes(cardId)
+      ? current.filter((id) => id !== cardId)
+      : [...current, cardId]);
+    setSaveReport(null);
+    setBatchIssue(null);
+  };
+
+  const sendBatch = () => {
+    if (!batchCards.length || batchBusy) return;
+    if (sendCharacters > MAX_COLLECTION_MATERIAL_CHARACTERS) {
+      setBatchIssue(`所选问答过长，请缩小选择，为接下来的问题留出空间。`);
+      return;
+    }
+    const issue = onStartConversation(batchCards);
+    if (!issue) preserveSelectionOnCloseRef.current = true;
+    setBatchIssue(issue ?? null);
+  };
+
+  const saveBatch = async () => {
+    if (!batchCards.length || batchBusy) return;
+    setBatchBusy(true);
+    setBatchIssue(null);
+    setSaveReport(null);
+    try {
+      const results = await onSaveSelected(batchCards);
+      setSaveReport(results);
+      const failed = new Set(results.filter((result) => result.status === 'failed').map((result) => result.cardId));
+      setSelectedIds((current) => openRef.current ? current.filter((id) => failed.has(id)) : []);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        setBatchIssue(error instanceof Error ? error.message : '保存失败，请重试。');
+      }
+    } finally {
+      setBatchBusy(false);
+    }
   };
 
   if (!rendered) return null;
@@ -215,7 +315,7 @@ export function ReadingCardsPanel({
         onKeyDown={(event) => {
           if (event.key !== 'Tab') return;
           const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), a[href]',
+            'button:not(:disabled), input:not(:disabled), a[href]',
           ) ?? []).filter((element) => element.tabIndex >= 0 && !element.closest('[inert]'));
           if (focusable.length === 0) return;
           const first = focusable[0]!;
@@ -230,15 +330,19 @@ export function ReadingCardsPanel({
         }}
       >
         <header className="reading-cards-header">
-          <div>
-            <p className="eyebrow">Collection</p>
-            <h2>收藏</h2>
+          <div className="reading-cards-header-title">
+            <h2>收藏 <span className="reading-cards-count">{cards.length}</span></h2>
+          </div>
+          <div className="reading-cards-view-switch" role="group" aria-label="收藏视图">
+            <button type="button" className={view === 'river' ? 'is-active' : ''} aria-pressed={view === 'river'} onClick={() => switchView('river')}>瀑布流</button>
+            <button type="button" className={view === 'list' ? 'is-active' : ''} aria-pressed={view === 'list'} onClick={() => switchView('list')}>列表{selectedIds.length > 0 ? ` · ${selectedIds.length}` : ''}</button>
           </div>
           <div className="reading-cards-header-actions">
             {cards.length > 0 && (
               <button
                 className="reading-cards-export-all pressable"
                 type="button"
+                aria-label={exportAllPresentation.label}
                 disabled={exportAllPresentation.spinning}
                 onClick={() => runExport('all', 'export-all-cards', () => onExportAll(cards))}
                 aria-live="polite"
@@ -248,10 +352,9 @@ export function ReadingCardsPanel({
                   size={14}
                   className={exportAllPresentation.spinning ? 'is-spinning' : ''}
                 />
-                {exportAllPresentation.label}
+                <span>{exportAllPresentation.label}</span>
               </button>
             )}
-            <span className="reading-cards-count">{cards.length}</span>
             <button
               className="reading-cards-close pressable"
               type="button"
@@ -273,13 +376,43 @@ export function ReadingCardsPanel({
               <strong>还没有收藏</strong>
               <p>收藏完整回答，或划选其中的结论保存为片段。</p>
             </div>
-          ) : (
+          ) : view === 'river' ? (
             <ReadingCardRiver
               cards={cards}
               selectedCardId={selectedId}
               paused={paused}
               onOpenCard={openCard}
+              onRemoveCard={onRemove}
             />
+          ) : (
+            <div className="reading-cards-list-layout">
+              <div className="reading-cards-list" aria-label="收藏列表">
+                {cards.map((card) => (
+                  <div className={`reading-card-list-row${selectedIds.includes(card.id) ? ' is-selected' : ''}`} key={card.id}>
+                    <input type="checkbox" aria-label={`选择 ${card.title}`} checked={selectedIds.includes(card.id)} onChange={() => toggleSelection(card.id)} />
+                    <button type="button" className="reading-card-list-open" onClick={() => openCard(card.id, 'pointer')}>
+                      <small>{readingCardKindLabel(card)}{!readingCardQuestion(card, conversations) ? ' · 原问题缺失' : ''}</small>
+                      <strong>{card.title}</strong>
+                      <span>{readingCardQuestion(card, conversations) || '旧收藏找不到原始问题'}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="reading-cards-batch-actions">
+                {saveReport && <div className="reading-cards-save-report" role="status">
+                  <strong>保存结果</strong>
+                  {saveReport.map((result) => <p key={result.cardId}>{result.status === 'saved' ? '已新建' : result.status === 'existing' ? '已存在' : '未保存'} · {result.title}：{result.detail}</p>)}
+                </div>}
+                {batchIssue && <p className="reading-cards-issue" role="alert">{batchIssue}</p>}
+                {collectionSend?.status === 'uncertain' && <p className="reading-cards-batch-uncertain">上次发送结果待确认，原选择已保留，不会自动重发。</p>}
+                <div className="reading-cards-batch-meta"><span>已选 {selectedIds.length} 条</span><span>{selectedIds.length > 0 ? `${sendCharacters} / ${MAX_COLLECTION_MATERIAL_CHARACTERS} 字资料` : '勾选后可批量操作'}</span></div>
+                <div className="reading-cards-batch-buttons">
+                  <button type="button" disabled={!selectedIds.length || batchBusy} onClick={sendBatch}>用所选收藏开启新会话</button>
+                  <button type="button" disabled={!selectedIds.length || batchBusy} onClick={() => void saveBatch()}>{batchBusy ? '正在保存…' : '保存到 Obsidian'}</button>
+                </div>
+                {selectedIds.length > 0 && <button type="button" className="reading-cards-clear-selection" onClick={() => setSelectedIds([])}>清空选择</button>}
+              </div>
+            </div>
           )}
 
           {selected && (
@@ -288,7 +421,7 @@ export function ReadingCardsPanel({
                 className="reading-card-reader-scrim"
                 type="button"
                 tabIndex={-1}
-                aria-label="返回收藏河流"
+                aria-label={view === 'list' ? '返回收藏列表' : '返回收藏瀑布流'}
                 onClick={closeReader}
               />
               <section className="reading-card-reader" aria-labelledby="reading-card-reader-title">
@@ -297,7 +430,7 @@ export function ReadingCardsPanel({
                     className="reading-card-reader-back pressable"
                     type="button"
                     onClick={closeReader}
-                    aria-label="返回收藏河流"
+                    aria-label={view === 'list' ? '返回收藏列表' : '返回收藏瀑布流'}
                   >
                     <span aria-hidden="true">←</span>
                   </button>
@@ -308,6 +441,10 @@ export function ReadingCardsPanel({
                 </header>
 
                 <div className="reading-card-reader-body">
+                  <section className="reading-card-section reading-card-question">
+                    <h3>原始问题</h3>
+                    <p>{readingCardQuestion(selected, conversations) || '原问题缺失；不会由 WorkOS 猜测或补造。'}</p>
+                  </section>
                   <div className="reading-card-detail-meta">
                     <span>{selected.sources.length} 个来源</span>
                     <span>{selected.artifacts.length > 0 ? `${selected.artifacts.length} 个产物` : '正文快照'}</span>
@@ -411,10 +548,20 @@ export function ReadingCardsPanel({
         </div>
         {removalUndo && (
           <div className="reading-card-undo is-visible" role="status" aria-live="polite">
-            <KoboyoIcon name="bookmark-minus" size={16} />
-            <span>已移出收藏</span>
-            <span className="reading-card-undo-timer" aria-hidden="true"><i key={removalUndo.expiresAt} /></span>
-            <button className="pressable" type="button" onClick={onUndoRemove}>撤销</button>
+            <KoboyoIcon name="bookmark-minus" size={14} />
+            <span>已取消收藏</span>
+            <button
+              type="button"
+              onClick={() => {
+                const restoredId = removalUndo.card.id;
+                onUndoRemove();
+                window.requestAnimationFrame(() => {
+                  const card = [...(panelRef.current?.querySelectorAll<HTMLElement>('[data-reading-card-id]') ?? [])]
+                    .find((node) => node.dataset.readingCardId === restoredId);
+                  card?.querySelector<HTMLButtonElement>('.reading-card-river__open')?.focus({ preventScroll: true });
+                });
+              }}
+            >撤销</button>
           </div>
         )}
       </aside>

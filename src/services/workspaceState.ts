@@ -265,11 +265,30 @@ function isDecision(value: unknown) {
     && (value.answers === undefined || (isRecord(value.answers) && Object.values(value.answers).every(isDecisionAnswer)));
 }
 
+function isCollectionMaterial(value: unknown) {
+  return isRecord(value)
+    && typeof value.cardId === 'string'
+    && typeof value.title === 'string'
+    && (value.kind === 'answer' || value.kind === 'excerpt')
+    && (value.question === undefined || typeof value.question === 'string')
+    && typeof value.answer === 'string'
+    && typeof value.savedAt === 'number'
+    && Array.isArray(value.sources)
+    && value.sources.every((source) => isRecord(source)
+      && typeof source.title === 'string'
+      && typeof source.url === 'string'
+      && (source.site === undefined || typeof source.site === 'string'));
+}
+
 function isMessage(value: unknown): value is ChatMessage {
   return isRecord(value)
     && typeof value.id === 'string'
     && (value.role === 'user' || value.role === 'assistant')
     && typeof value.content === 'string'
+    && (value.collectionSend === undefined || value.collectionSend === true)
+    && (value.collectionMode === undefined || value.collectionMode === 'question')
+    && (value.collectionMaterials === undefined || (Array.isArray(value.collectionMaterials)
+      && value.collectionMaterials.every(isCollectionMaterial)))
     && typeof value.createdAt === 'number'
     && (value.respondedAt === undefined || typeof value.respondedAt === 'number')
     && typeof value.status === 'string'
@@ -312,7 +331,9 @@ function isConversationBase(value: unknown): value is UnknownRecord {
     && value.pages.every(isPage)
     && Array.isArray(value.messages)
     && value.messages.every(isMessage)
-    && typeof value.draftInput === 'string';
+    && typeof value.draftInput === 'string'
+    && (value.draftCollectionMaterials === undefined || (Array.isArray(value.draftCollectionMaterials)
+      && value.draftCollectionMaterials.every(isCollectionMaterial)));
 }
 
 function isConversation(value: unknown): value is Conversation {

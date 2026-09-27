@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "prototype:cognition": "node scripts/serve-cognition-prototype.mjs",
     "prototype:river": "node scripts/serve-collection-river-prototype.mjs",
     "prototype:loop": "node scripts/serve-collection-loop-prototype.mjs",
     "build": "wxt build",

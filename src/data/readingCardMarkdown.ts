@@ -31,6 +31,7 @@ function cardSections(card: ReadingCardRow, headingLevel: 1 | 2) {
     `> 类型：${card.kind === 'excerpt' ? '回答片段' : '完整回答'}`,
     `> 收藏时间：${readableTimestamp(card.createdAt)}`,
   ];
+  if (card.question?.trim()) sections.push('', `${heading}# 原始问题`, '', card.question.trim(), '', `${heading}# 回答`);
   if (card.bodyMarkdown.trim()) sections.push('', card.bodyMarkdown.trim());
   if (card.sources.length) {
     sections.push('', `${heading}# 来源`, '');

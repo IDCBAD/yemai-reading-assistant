@@ -1,7 +1,8 @@
-import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { memo, lazy, Suspense, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { collectionMessagePrompt } from '../../data/collectionActions';
 import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
 import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
 import type { ChatMessage, DraftAttachment, QuoteReference, RunActivity, RunActivityStatus } from '../types';
@@ -17,7 +18,8 @@ import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } f
 import { STARTER_ACTIONS } from '../starterActions';
 import { parsePageOverview } from '../pageOverview';
 import { messageDecisionInteractions } from '../agentDecision';
-import { deriveMessageRunNote } from '../agentQueue';
+import { deriveAgentRunSummary, deriveMessageRunNote } from '../agentQueue';
+import { collectionDeliveryState } from '../collectionConversation';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
@@ -31,8 +33,12 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { AgentDecisionCard, AgentDecisionReceipt } from './AgentDecisionCard';
 import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 
+const AgentRunStatus = lazy(() => import('./AgentRunStatus')
+  .then((module) => ({ default: module.AgentRunStatus })));
+
 interface MessageListProps {
   messages: ChatMessage[];
+  pendingCollectionCount?: number;
   savedMessageIds: ReadonlySet<string>;
   navigationTarget?: {
     messageId: string;
@@ -202,6 +208,29 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
   );
 }
 
+// Keep Markdown parsing independent of navigation, selection and action feedback.
+const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming }: { content: string; streaming: boolean }) {
+  const components = useMemo<Components>(() => ({
+    pre({ children }) {
+      const child = isValidElement<{ children?: unknown; className?: string }>(children) ? children : null;
+      const value = String(child?.props.children ?? '').replace(/\n$/, '');
+      const language = child?.props.className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase();
+      if (language === 'mermaid' && !streaming) {
+        return <MermaidDiagram source={value} />;
+      }
+      return <CodeBlock>{value}</CodeBlock>;
+    },
+    code({ children, className }) {
+      return <code className={className ?? 'inline-code'}>{children}</code>;
+    },
+  }), [streaming]);
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 function AssistantMessage({
   message,
   contextSources,
@@ -231,6 +260,7 @@ function AssistantMessage({
   const [bookmarkConfirmed, setBookmarkConfirmed] = useState(false);
   const bookmarkConfirmationTimerRef = useRef<number | null>(null);
   const runNote = deriveMessageRunNote(message);
+  const runSummary = useMemo(() => deriveAgentRunSummary([message]), [message]);
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
     && message.status !== 'streaming'
@@ -254,8 +284,12 @@ function AssistantMessage({
     interaction.status === 'replied' || interaction.status === 'rejected');
   const activeInteraction = [...interactions].reverse().find((interaction) =>
     interaction.status !== 'replied' && interaction.status !== 'rejected');
-  const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming';
-  const footerAvailable = actionsAvailable || message.status === 'failed';
+  const uncertainCollectionSend = Boolean(message.collectionSend && collectionDeliveryState(message) === 'uncertain');
+  const interruptedCollectionReply = Boolean(message.collectionSend
+    && collectionDeliveryState(message) === 'received'
+    && (message.status === 'failed' || message.status === 'stopped'));
+  const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming' && !uncertainCollectionSend;
+  const footerAvailable = actionsAvailable || (message.status === 'failed' && !uncertainCollectionSend);
 
   useEffect(() => () => {
     if (bookmarkConfirmationTimerRef.current !== null) {
@@ -304,7 +338,7 @@ function AssistantMessage({
           <AgentDecisionCard
             key={activeInteraction.id}
             decision={activeInteraction}
-            active={message.status === 'running' || message.status === 'streaming' || Boolean(activeInteraction.cognitionCandidate)}
+            active={message.status === 'running' || message.status === 'streaming'}
             onReply={(answers) => onResolveDecision(activeInteraction.id, 'reply', answers)}
             onReject={() => onResolveDecision(activeInteraction.id, 'reject')}
           />
@@ -313,33 +347,30 @@ function AssistantMessage({
           className={`markdown-body${pageOverview ? ' markdown-body--page-overview' : ''}`}
           data-assistant-selectable="true"
         >
-          {!message.content && interactions.length === 0 && runNote && (
+          <Suspense fallback={runSummary ? <div className="agent-run-status" role="status">{runSummary.label}</div> : null}>
+            <AgentRunStatus summary={runSummary} />
+          </Suspense>
+          {!message.content && interactions.length === 0 && runNote && runNote.kind !== 'running' && !uncertainCollectionSend && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
+            </div>
+          )}
+          {uncertainCollectionSend && (
+            <div className="message-run-note message-run-note--failed" role="status">
+              尚未收到 WorkOS 的回答，无法确认这次提问是否提交成功。请先在 WorkOS 中检查；页脉已保留会话和原选择，不会自动重发。
+            </div>
+          )}
+          {interruptedCollectionReply && (
+            <div className="message-run-note message-run-note--stopped" role="status">
+              {message.status === 'stopped'
+                ? '已停止生成，以下是已收到的内容。'
+                : '回答已收到，但生成未正常结束；内容可能不完整。'}
             </div>
           )}
           {pageOverview ? (
             <PageOverviewCard overview={pageOverview} onUseFollowUp={onUseFollowUp} />
           ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                pre({ children }) {
-                  const child = isValidElement<{ children?: unknown; className?: string }>(children) ? children : null;
-                  const value = String(child?.props.children ?? '').replace(/\n$/, '');
-                  const language = child?.props.className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase();
-                  if (language === 'mermaid' && message.status !== 'streaming') {
-                    return <MermaidDiagram source={value} />;
-                  }
-                  return <CodeBlock>{value}</CodeBlock>;
-                },
-                code({ children, className }) {
-                  return <code className={className ?? 'inline-code'}>{children}</code>;
-                },
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+            <AssistantMarkdown content={message.content} streaming={message.status === 'streaming'} />
           )}
           {message.status === 'streaming' && message.stage !== 'waiting-user-input' && message.content && (
             <span className="stream-cursor" aria-label="正在生成" />
@@ -351,7 +382,7 @@ function AssistantMessage({
         )}
         {footerAvailable && (
           <div className="assistant-footer" aria-label="回答操作">
-            {message.status === 'failed' && (
+            {message.status === 'failed' && !message.collectionSend && (
               <IconTooltipButton
                 className="assistant-action pressable"
                 type="button"
@@ -733,7 +764,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
   const attachments = contextAttachments(messageContextItems);
   const copyQuestion = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(collectionMessagePrompt(message));
       setCopyState('copied');
       window.setTimeout(() => setCopyState('idle'), 1400);
     } catch {
@@ -775,6 +806,12 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
         )}
         {attachments.length > 0 && message.content && ' '}
         {message.content && <span className="user-message-text">{message.content}</span>}
+        {message.collectionMaterials && (
+          <details className="collection-message-materials">
+            <summary>{message.collectionMode === 'question' ? `附带 ${message.collectionMaterials.length} 条收藏问答资料` : `已发送 ${message.collectionMaterials.length} 条收藏问答和整理要求`}</summary>
+            <pre>{collectionMessagePrompt(message)}</pre>
+          </details>
+        )}
         </div>
         <div className="user-message-actions" aria-label="提问操作">
           <MessageTime timestamp={message.createdAt} label="用户提问于" className="message-time--user" />
@@ -789,7 +826,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
               >
                 <KoboyoIcon name={copyState === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
               </IconTooltipButton>
-              <IconTooltipButton
+              {!message.collectionMaterials && <IconTooltipButton
                 className="user-message-action pressable"
                 type="button"
                 onClick={onEdit}
@@ -797,7 +834,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
                 tooltip="编辑提问"
               >
                 <KoboyoIcon name="edit" size={14} />
-              </IconTooltipButton>
+              </IconTooltipButton>}
             </>
           )}
         </div>
@@ -808,6 +845,7 @@ function UserMessage({ message, onEdit }: { message: ChatMessage; onEdit: () => 
 
 export function MessageList({
   messages,
+  pendingCollectionCount,
   savedMessageIds,
   navigationTarget,
   branchOrigin,
@@ -861,6 +899,33 @@ export function MessageList({
     });
   }, [messages]);
   conversationRailItemsRef.current = conversationRailItems;
+  // Local rail/scroll/selection updates must not render every conversation message again.
+  const renderedMessages = useMemo(() => messages.map((message) =>
+    message.role === 'assistant' ? (
+      <AssistantMessage
+        message={message}
+        contextSources={answerContexts.get(message.id) ?? []}
+        onUseFollowUp={onUseStarter}
+        onRetry={() => onRetry(message)}
+        onBranch={() => onBranch(message)}
+        saved={savedMessageIds.has(message.id)}
+        onToggleReadingCard={(origin) => onToggleReadingCard(
+          message,
+          answerContexts.get(message.id) ?? [],
+          origin,
+        )}
+        onResolveDecision={(decisionId, action, answers) =>
+          onResolveDecision(message, decisionId, action, answers)}
+        branchUnavailableReason={branchUnavailableReason}
+        key={message.id}
+      />
+    ) : (
+      <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
+    ),
+  ), [
+    messages, answerContexts, savedMessageIds, onUseStarter, onRetry, onBranch,
+    onToggleReadingCard, onResolveDecision, branchUnavailableReason, onEditUserMessage,
+  ]);
   const hasMessages = messages.length > 0;
   const responseStreaming = messages.some((message) => message.status === 'streaming' || message.status === 'running');
 
@@ -1006,11 +1071,16 @@ export function MessageList({
           return;
         }
         const rect = selection.getRangeAt(0).getBoundingClientRect();
+        const toolbarWidth = 184;
+        const toolbarHeight = 44;
+        const toolbarTop = rect.top >= toolbarHeight + 16
+          ? rect.top - toolbarHeight - 8
+          : rect.bottom + 8;
         setSelectionAction({
           messageId: article.dataset.assistantMessageId ?? '',
           text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
-          left: Math.max(8, Math.min(rect.left, window.innerWidth - 196)),
-          top: Math.max(8, rect.top - 49),
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)),
+          top: Math.max(8, Math.min(toolbarTop, window.innerHeight - toolbarHeight - 8)),
         });
       });
     };
@@ -1154,6 +1224,19 @@ export function MessageList({
   };
 
   if (messages.length === 0) {
+    if (pendingCollectionCount) {
+      return (
+        <div className="message-stage">
+          <main className="messages messages--empty">
+            <div className="empty-state">
+              <span className="empty-orbit" aria-hidden="true"><span>{String(pendingCollectionCount).padStart(2, '0')}</span></span>
+              <h2>已带入 {pendingCollectionCount} 条收藏问答</h2>
+              <p>在下方提出这次想问的问题。材料会随问题一起发送，现在尚未发送给 WorkOS。</p>
+            </div>
+          </main>
+        </div>
+      );
+    }
     return (
       <div className="message-stage">
         <main className="messages messages--empty">
@@ -1200,29 +1283,7 @@ export function MessageList({
           <strong>{branchOrigin.available ? '查看原会话' : '暂不可打开'}</strong>
         </button>
       )}
-      {messages.map((message) =>
-        message.role === 'assistant' ? (
-          <AssistantMessage
-            message={message}
-            contextSources={answerContexts.get(message.id) ?? []}
-            onUseFollowUp={onUseStarter}
-            onRetry={() => onRetry(message)}
-            onBranch={() => onBranch(message)}
-            saved={savedMessageIds.has(message.id)}
-            onToggleReadingCard={(origin) => onToggleReadingCard(
-              message,
-              answerContexts.get(message.id) ?? [],
-              origin,
-            )}
-            onResolveDecision={(decisionId, action, answers) =>
-              onResolveDecision(message, decisionId, action, answers)}
-            branchUnavailableReason={branchUnavailableReason}
-            key={message.id}
-          />
-        ) : (
-          <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
-        ),
-      )}
+      {renderedMessages}
       {selectionAction && createPortal(
         <div
           className="assistant-selection-action"
@@ -1232,7 +1293,7 @@ export function MessageList({
           onPointerDown={(event) => event.preventDefault()}
         >
           <button
-            className="assistant-selection-action__button is-primary pressable"
+            className="assistant-selection-action__button pressable"
             type="button"
             onClick={(event) => {
               const message = messages.find((item) => item.id === selectionAction.messageId);

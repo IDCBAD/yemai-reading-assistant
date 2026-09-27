@@ -28,7 +28,7 @@ import { uploadChannelCapabilities } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon, type KoboyoIconName } from './KoboyoIcon';
-import type { CognitionDirectoryState } from '../../cognition/cognitionLoop';
+import type { QaDirectoryState } from '../../services/obsidianQaBrowser';
 
 interface HistoryPopoverProps {
   open: boolean;
@@ -216,7 +216,7 @@ interface SettingsDrawerProps {
   storageUsageIssue: string | null;
   backupStatus: LocalBackupStatus | null;
   backupStatusIssue: string | null;
-  cognitionDirectoryState: CognitionDirectoryState;
+  qaDirectoryState: QaDirectoryState;
   onSaveConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onTestConnection: (settings: WorkosConnectionSettings) => Promise<void>;
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
@@ -227,9 +227,9 @@ interface SettingsDrawerProps {
   onImportBackup: (file: File, mode: LocalBackupImportMode) => Promise<LocalBackupImportReceipt>;
   onClose: () => void;
   onClearHistory: () => void;
-  onConnectCognitionDirectory: () => Promise<void>;
-  onReconnectCognitionDirectory: () => Promise<void>;
-  onDisconnectCognitionDirectory: () => Promise<void>;
+  onChooseQaDirectory: () => Promise<void>;
+  onReconnectQaDirectory: () => Promise<void>;
+  onDisconnectQaDirectory: () => Promise<void>;
 }
 
 export function SettingsDrawer({
@@ -241,7 +241,7 @@ export function SettingsDrawer({
   storageUsageIssue,
   backupStatus,
   backupStatusIssue,
-  cognitionDirectoryState,
+  qaDirectoryState,
   onSaveConnection,
   onTestConnection,
   onImportWorkosCredentials,
@@ -252,9 +252,9 @@ export function SettingsDrawer({
   onImportBackup,
   onClose,
   onClearHistory,
-  onConnectCognitionDirectory,
-  onReconnectCognitionDirectory,
-  onDisconnectCognitionDirectory,
+  onChooseQaDirectory,
+  onReconnectQaDirectory,
+  onDisconnectQaDirectory,
 }: SettingsDrawerProps) {
   const [showToken, setShowToken] = useState(false);
   const [draft, setDraft] = useState(settings);
@@ -272,7 +272,7 @@ export function SettingsDrawer({
   const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [cognitionDirectoryBusy, setCognitionDirectoryBusy] = useState(false);
+  const [qaDirectoryBusy, setQaDirectoryBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -291,7 +291,7 @@ export function SettingsDrawer({
     setReplaceBackupConfirmOpen(false);
     setClearHistoryConfirmOpen(false);
     setLocalError(null);
-    setCognitionDirectoryBusy(false);
+    setQaDirectoryBusy(false);
   }, [open, settings]);
 
   const patchDraft = (patch: Partial<WorkosConnectionSettings>) => {
@@ -691,7 +691,7 @@ export function SettingsDrawer({
             <div className="agent-template-heading">
               <div>
                 <strong>Agent.md 推荐模板</strong>
-                <p>只约定上下文和信任边界，不再让 Agent 自动提出认知。使用过旧模板时请重新复制覆盖。</p>
+                <p>约定上下文和来源边界。使用过旧模板时请重新复制覆盖。</p>
               </div>
               <button
                 className="copy-template-button pressable"
@@ -711,59 +711,59 @@ export function SettingsDrawer({
             </details>
           </section>
 
-          <section className="settings-section cognition-directory-section">
-            <div className="cognition-directory-heading">
+          <section className="settings-section qa-directory-section">
+            <div className="qa-directory-heading">
               <div>
-                <strong>本地知识目录</strong>
-                <p>保留目录连接。当前收藏不会自动写入，未来只有你主动形成并确认认知后才会使用。</p>
+                <strong>Obsidian 问答目录</strong>
+                <p>在 Obsidian 知识库中选择一个文件夹。只有你勾选收藏并点击保存，才会逐张新建 Markdown。</p>
               </div>
-              <span className={`cognition-directory-state is-${cognitionDirectoryState.kind}`}>
-                {cognitionDirectoryState.kind === 'ready'
+              <span className={`qa-directory-state is-${qaDirectoryState.kind}`}>
+                {qaDirectoryState.kind === 'ready'
                   ? '已连接'
-                  : cognitionDirectoryState.kind === 'needs-permission'
+                  : qaDirectoryState.kind === 'needs-permission'
                     ? '需要授权'
-                    : cognitionDirectoryState.kind === 'unsupported'
+                    : qaDirectoryState.kind === 'unsupported'
                       ? '不可用'
-                      : cognitionDirectoryState.kind === 'error'
+                      : qaDirectoryState.kind === 'error'
                         ? '访问失败'
                         : '未连接'}
               </span>
             </div>
-            {'name' in cognitionDirectoryState && cognitionDirectoryState.name && (
-              <div className="cognition-directory-name"><KoboyoIcon name="file" size={14} /><span>{cognitionDirectoryState.name}</span></div>
+            {'name' in qaDirectoryState && qaDirectoryState.name && (
+              <div className="qa-directory-name"><KoboyoIcon name="file" size={14} /><span>{qaDirectoryState.name}</span></div>
             )}
-            {cognitionDirectoryState.kind === 'unsupported' && <p role="status">当前浏览器不支持持续访问本地目录。请使用最新版 Chrome；页脉不会降级成一次性下载。</p>}
-            {cognitionDirectoryState.kind === 'error' && <p className="token-error" role="alert">{cognitionDirectoryState.message}</p>}
-            <div className="cognition-directory-actions">
-              {(cognitionDirectoryState.kind === 'unconfigured' || cognitionDirectoryState.kind === 'error') && (
+            {qaDirectoryState.kind === 'unsupported' && <p role="status">当前浏览器不支持持续访问本地目录，请使用最新版 Chrome。</p>}
+            {qaDirectoryState.kind === 'error' && <p className="token-error" role="alert">{qaDirectoryState.message}</p>}
+            <div className="qa-directory-actions">
+              {(qaDirectoryState.kind === 'unconfigured' || qaDirectoryState.kind === 'error' || qaDirectoryState.kind === 'ready') && (
                 <button
                   type="button"
                   className="secondary-button pressable"
-                  disabled={cognitionDirectoryBusy}
+                  disabled={qaDirectoryBusy}
                   onClick={() => {
-                    setCognitionDirectoryBusy(true);
-                    void onConnectCognitionDirectory().finally(() => setCognitionDirectoryBusy(false));
+                    setQaDirectoryBusy(true);
+                    void onChooseQaDirectory().catch(() => undefined).finally(() => setQaDirectoryBusy(false));
                   }}
-                >{cognitionDirectoryBusy ? '正在连接…' : '选择独立目录'}</button>
+                >{qaDirectoryBusy ? '正在选择…' : qaDirectoryState.kind === 'ready' ? '更换目录' : '选择目录'}</button>
               )}
-              {cognitionDirectoryState.kind === 'needs-permission' && (
+              {qaDirectoryState.kind === 'needs-permission' && (
                 <button
                   type="button"
                   className="secondary-button pressable"
-                  disabled={cognitionDirectoryBusy}
+                  disabled={qaDirectoryBusy}
                   onClick={() => {
-                    setCognitionDirectoryBusy(true);
-                    void onReconnectCognitionDirectory().finally(() => setCognitionDirectoryBusy(false));
+                    setQaDirectoryBusy(true);
+                    void onReconnectQaDirectory().catch(() => undefined).finally(() => setQaDirectoryBusy(false));
                   }}
-                >{cognitionDirectoryBusy ? '正在授权…' : '重新授权'}</button>
+                >{qaDirectoryBusy ? '正在授权…' : '重新授权'}</button>
               )}
-              {(cognitionDirectoryState.kind === 'ready' || cognitionDirectoryState.kind === 'needs-permission') && (
-                <button type="button" className="remove-token-button pressable" disabled={cognitionDirectoryBusy} onClick={() => void onDisconnectCognitionDirectory()}>
+              {(qaDirectoryState.kind === 'ready' || qaDirectoryState.kind === 'needs-permission') && (
+                <button type="button" className="remove-token-button pressable" disabled={qaDirectoryBusy} onClick={() => void onDisconnectQaDirectory()}>
                   断开连接（保留所有文件）
                 </button>
               )}
             </div>
-            <p className="field-help">现有 Markdown 不会被删除或改写。页脉只识别带有效 <code>yemai_id</code> 的既有文件，收藏卡片仍保存在浏览器本地。</p>
+            <p className="field-help">页脉只新建文件，不覆盖或删除现有文件。按文件内的收藏 ID 判断是否已保存；文件名使用日期和标题，同名加序号。旧目录连接不会自动迁入。</p>
           </section>
 
           <section className="settings-section settings-section--row">
@@ -802,7 +802,7 @@ export function SettingsDrawer({
             <div className="local-backup-heading">
               <div>
                 <strong>本地数据备份</strong>
-                <p>这里只备份会话和收藏卡片。独立认知目录不包含在备份中，请在文件系统或 Obsidian 中单独备份。</p>
+                <p>这里只备份会话和收藏卡片。Obsidian 问答文件不包含在备份中，请在 Obsidian 中单独备份。</p>
               </div>
             </div>
             {backupStatus ? (
@@ -968,7 +968,7 @@ export function SettingsDrawer({
                   <span><KoboyoIcon name="history-clear" size={19} /></span>
                   <div>
                     <strong id="clear-history-impact-title">清空本地历史？</strong>
-                    <p>完成后会创建一个新的空会话。</p>
+                    <p>完成后会创建一个新的空会话；提问前不会出现在历史搜索中。</p>
                   </div>
                 </div>
                 <dl className="destructive-impact-list">

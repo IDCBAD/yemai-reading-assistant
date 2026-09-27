@@ -160,10 +160,10 @@ function readingCardDocument(card: ReadingCardRow): WorkspaceSearchDocument {
 
 export function buildWorkspaceSearchDocuments(workspace: WorkspaceState, readingCards: ReadingCardRow[] = []): WorkspaceSearchDocument[] {
   return [
-    ...workspace.conversations.flatMap((conversation) => [
-    conversationDocument(conversation),
-    ...conversation.messages.map((message) => messageDocument(conversation, message)),
-    ]),
+    ...workspace.conversations.flatMap((conversation) => conversation.messages.length > 0 ? [
+      conversationDocument(conversation),
+      ...conversation.messages.map((message) => messageDocument(conversation, message)),
+    ] : []),
     ...readingCards.map(readingCardDocument),
   ];
 }

@@ -138,6 +138,12 @@ export function saveWorkspaceState(workspace: WorkspaceState) {
   return activeSave;
 }
 
+export async function clearWorkspaceHistory(replacement: WorkspaceState) {
+  await saveWorkspaceState(replacement);
+  await browser.storage.local.remove(WORKSPACE_STORAGE_KEY);
+  await yemaiDatabase.meta.delete(LEGACY_UI_BACKUP_META_KEY);
+}
+
 export async function loadLocalStorageUsage(): Promise<LocalStorageUsage> {
   const storageEstimate = typeof navigator !== 'undefined'
     ? navigator.storage?.estimate?.().catch(() => undefined)

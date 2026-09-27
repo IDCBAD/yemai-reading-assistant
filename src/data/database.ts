@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import type {
   AssistantArtifact,
   ChatMessage,
+  CollectionMaterial,
   ContextItem,
   Conversation,
   ConversationBranch,
@@ -9,10 +10,9 @@ import type {
   PageContext,
 } from '../sidepanel/types';
 import type { WorkosTransportKind } from '../services/workosTransport';
-import type { CognitionProjectionRow } from '../cognition/cognitionLoop';
 
 export const YEMAI_DATABASE_NAME = 'yemai-reading-assistant';
-export const YEMAI_DATABASE_VERSION = 3;
+export const YEMAI_DATABASE_VERSION = 4;
 
 export interface ConversationRow {
   id: string;
@@ -32,6 +32,7 @@ export interface ConversationRow {
   page: PageContext;
   draftInput: string;
   draftContextItems: ContextItem[];
+  draftCollectionMaterials?: CollectionMaterial[];
 }
 
 export interface MessageRow extends Omit<ChatMessage, 'artifacts'> {
@@ -71,6 +72,8 @@ export interface ReadingCardRow {
   kind?: ReadingCardKind;
   sourceConversationId: string;
   sourceMessageId: string;
+  /** Latest user question before the answer; older cards may not have a snapshot. */
+  question?: string;
   title: string;
   excerpt: string;
   bodyMarkdown: string;
@@ -98,7 +101,6 @@ export class YemaiDatabase extends Dexie {
   conversationSources!: Table<ConversationSourceRow, string>;
   artifacts!: Table<ArtifactRow, string>;
   readingCards!: Table<ReadingCardRow, string>;
-  cognitionProjection!: Table<CognitionProjectionRow, string>;
   meta!: Table<MetaRow, string>;
 
   constructor(name = YEMAI_DATABASE_NAME) {
@@ -115,10 +117,15 @@ export class YemaiDatabase extends Dexie {
       ...workspaceStores,
       readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
     });
-    this.version(YEMAI_DATABASE_VERSION).stores({
+    this.version(3).stores({
       ...workspaceStores,
       readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
       cognitionProjection: '&id,filename,type,status,updatedAt',
+    });
+    this.version(YEMAI_DATABASE_VERSION).stores({
+      ...workspaceStores,
+      readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
+      cognitionProjection: null,
     });
   }
 }

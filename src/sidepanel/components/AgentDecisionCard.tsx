@@ -3,7 +3,6 @@ import type { AgentDecision } from '../types';
 import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 import { initialAgentDecisionAnswers } from '../agentDecision';
 import { KoboyoIcon } from './KoboyoIcon';
-import { COGNITION_CONFIRMATION_PROMPTS, COGNITION_TYPE_LABELS } from '../../cognition/candidate';
 
 interface AgentDecisionCardProps {
   decision: AgentDecision;
@@ -29,28 +28,21 @@ function decisionStatusCopy(decision: AgentDecision, active: boolean) {
 export function AgentDecisionCard({ decision, active, onReply, onReject }: AgentDecisionCardProps) {
   const initialAnswers = useMemo(() => initialAgentDecisionAnswers(decision.fields), [decision.fields]);
   const [answers, setAnswers] = useState<WorkosInterruptAnswers>(() => decision.answers ?? initialAnswers);
-  const [candidateTouched, setCandidateTouched] = useState(Boolean(decision.answers || decision.cognitionReceipt));
   const interactive = active && (decision.status === 'pending' || decision.status === 'failed');
   const busy = decision.status === 'submitting' || decision.status === 'submitted';
-  const candidate = decision.cognitionCandidate;
-  const primaryField = decision.fields[0];
-  const primaryAnswer = primaryField && typeof answers[primaryField.label] === 'string'
-    ? answers[primaryField.label] as string
-    : '';
-  const candidateReady = !candidate || Boolean(decision.cognitionReceipt) || (candidateTouched && primaryAnswer.trim());
 
   useEffect(() => {
     if (decision.status === 'replied' && decision.answers) setAnswers(decision.answers);
   }, [decision.answers, decision.status]);
 
   return (
-    <section className={`agent-decision${candidate ? ' agent-decision--cognition' : ''} is-${decision.status}`} aria-labelledby={`decision-title-${decision.id}`}>
+    <section className={`agent-decision is-${decision.status}`} aria-labelledby={`decision-title-${decision.id}`}>
       <header className="agent-decision__header">
         <span className="agent-decision__icon" aria-hidden="true">
           <KoboyoIcon name="selection" size={15} />
         </span>
         <div>
-          <h3 id={`decision-title-${decision.id}`}>{candidate ? '可能形成了新的理解' : decision.title}</h3>
+          <h3 id={`decision-title-${decision.id}`}>{decision.title}</h3>
           <span className="agent-decision__status" role="status">
             {busy && <i className="activity-spinner" aria-hidden="true" />}
             {decisionStatusCopy(decision, active)}
@@ -65,30 +57,19 @@ export function AgentDecisionCard({ decision, active, onReply, onReject }: Agent
           if (interactive) onReply(answers);
         }}
       >
-        {candidate && (
-          <div className="cognition-candidate__proposal">
-            <span className="cognition-candidate__type">{COGNITION_TYPE_LABELS[candidate.type]}</span>
-            <h4>{candidate.title}</h4>
-            <p>{candidate.currentUnderstanding}</p>
-            {candidate.changedFrom && <p className="cognition-candidate__changed">过去：{candidate.changedFrom}</p>}
-          </div>
-        )}
         {decision.fields.map((field, fieldIndex) => {
           const fieldId = `${decision.id}-${fieldIndex}`;
           if (field.type === 'text') {
             return (
               <label className="agent-decision__field" htmlFor={fieldId} key={fieldId}>
-                <span>{candidate && fieldIndex === 0 ? COGNITION_CONFIRMATION_PROMPTS[candidate.type] : field.label}</span>
+                <span>{field.label}</span>
                 <textarea
                   id={fieldId}
                   value={typeof answers[field.label] === 'string' ? answers[field.label] as string : ''}
                   rows={2}
                   maxLength={4_000}
                   disabled={!interactive}
-                  onChange={(event) => {
-                    if (candidate && fieldIndex === 0) setCandidateTouched(true);
-                    setAnswers((current) => ({ ...current, [field.label]: event.target.value }));
-                  }}
+                  onChange={(event) => setAnswers((current) => ({ ...current, [field.label]: event.target.value }))}
                 />
               </label>
             );
@@ -139,16 +120,6 @@ export function AgentDecisionCard({ decision, active, onReply, onReject }: Agent
           );
         })}
 
-        {candidate && (
-          <details className="cognition-candidate__details">
-            <summary>查看 Agent 的判断依据与待验证项</summary>
-            <dl>
-              <div><dt>为什么值得沉淀</dt><dd>{candidate.rationale}</dd></div>
-              <div><dt>建议边界</dt><dd>{candidate.boundary}</dd></div>
-              {candidate.unresolved && <div><dt>仍待验证</dt><dd>{candidate.unresolved}</dd></div>}
-            </dl>
-          </details>
-        )}
 
         {decision.errorMessage && (
           <p className="agent-decision__error" role="alert">{decision.errorMessage}</p>
@@ -156,10 +127,10 @@ export function AgentDecisionCard({ decision, active, onReply, onReject }: Agent
 
         <footer className="agent-decision__actions">
           <button className="agent-decision__skip pressable" type="button" disabled={!interactive} onClick={onReject}>
-            {candidate ? '这次不沉淀' : '跳过'}
+            跳过
           </button>
-          <button className="agent-decision__confirm pressable" type="submit" disabled={!interactive || !candidateReady}>
-            {candidate ? (decision.cognitionReceipt?.remotePending ? '重试恢复 Agent' : '形成认知') : '确认'}
+          <button className="agent-decision__confirm pressable" type="submit" disabled={!interactive}>
+            确认
           </button>
         </footer>
       </form>
@@ -179,9 +150,7 @@ export function AgentDecisionReceipt({ decision }: AgentDecisionReceiptProps) {
     const value = decision.answers?.[field.label];
     return Array.isArray(value) ? value.length > 0 : Boolean(value?.trim());
   }).length;
-  const summary = decision.cognitionCandidate
-    ? replied ? decision.cognitionReceipt?.available === false ? '认知文件不可用' : '已形成认知' : '这次没有沉淀'
-    : replied ? `已确认 ${answeredFields} 项` : '已跳过';
+  const summary = replied ? `已确认 ${answeredFields} 项` : '已跳过';
   const detailId = `decision-receipt-${decision.id}`;
 
   return (
@@ -196,7 +165,7 @@ export function AgentDecisionReceipt({ decision }: AgentDecisionReceiptProps) {
         <span className="agent-decision-receipt__state" aria-hidden="true">
           <KoboyoIcon name={replied ? 'solid-checkmark' : 'cross'} size={13} />
         </span>
-        <span className="agent-decision-receipt__title">{decision.cognitionCandidate?.title ?? decision.title}</span>
+        <span className="agent-decision-receipt__title">{decision.title}</span>
         <span className="agent-decision-receipt__meta">{summary}</span>
         <i className="agent-decision-receipt__chevron" aria-hidden="true" />
       </button>
@@ -204,11 +173,6 @@ export function AgentDecisionReceipt({ decision }: AgentDecisionReceiptProps) {
         <div className="agent-decision-receipt__details" id={detailId}>
           {replied ? (
             <>
-            {decision.cognitionReceipt && (
-              <p>{decision.cognitionReceipt.available === false
-                ? `文件不可用：${decision.cognitionReceipt.filename}（可重新连接目录或恢复文件后扫描）`
-                : `已写入 ${decision.cognitionReceipt.filename}`}</p>
-            )}
             <dl>
               {decision.fields.map((field) => (
                 <div className="agent-decision-receipt__answer" key={`${decision.id}-${field.label}`}>

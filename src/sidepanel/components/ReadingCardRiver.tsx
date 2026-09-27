@@ -22,6 +22,7 @@ import {
 } from '../readingCardRiver';
 import { readingCardKind } from '../readingCards';
 import { PageFavicon } from './PageFavicon';
+import { KoboyoIcon } from './KoboyoIcon';
 
 export type ReadingCardOpenModality = 'pointer' | 'keyboard' | 'programmatic';
 
@@ -30,6 +31,7 @@ interface ReadingCardRiverProps {
   selectedCardId: string | null;
   paused?: boolean;
   onOpenCard: (cardId: string, modality: ReadingCardOpenModality) => void;
+  onRemoveCard: (card: ReadingCardRow) => void;
 }
 
 interface RiverRuntime {
@@ -50,7 +52,7 @@ function cardKindLabel(card: ReadingCardRow) {
   return readingCardKind(card) === 'excerpt' ? '回答片段' : '完整回答';
 }
 
-export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpenCard }: ReadingCardRiverProps) {
+export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpenCard, onRemoveCard }: ReadingCardRiverProps) {
   const initialPosition = initialReadingCardRiverPosition(cards.length);
   const initialCenter = Math.round(initialPosition);
   const looping = canLoopReadingCardRiver(cards.length);
@@ -395,7 +397,7 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
 
     const onPointerDown = (event: PointerEvent) => {
       const runtime = runtimeRef.current;
-      if ((event.target as Element).closest('.reading-card-river__position')) return;
+      if ((event.target as Element).closest('.reading-card-river__position, .reading-card-river__remove')) return;
       if (pausedRef.current || selectedIdRef.current || event.button !== 0 || runtime.dragging) return;
       runtime.dragging = true;
       runtime.dragMoved = false;
@@ -541,6 +543,12 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
             aria-setsize={cards.length}
             data-reading-card-id={card.id}
             key={card.id}
+            onPointerEnter={() => {
+              if (!selectedIdRef.current && Math.abs(runtimeRef.current.velocity) <= 0.045) hoveredIdRef.current = card.id;
+            }}
+            onPointerLeave={() => {
+              if (hoveredIdRef.current === card.id) hoveredIdRef.current = null;
+            }}
             ref={(node) => {
               if (node) cardNodesRef.current.set(card.id, node);
               else cardNodesRef.current.delete(card.id);
@@ -555,12 +563,6 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
               className="reading-card-river__open"
               type="button"
               aria-label={`阅读收藏：${card.title}`}
-              onPointerEnter={() => {
-                if (!selectedIdRef.current && Math.abs(runtimeRef.current.velocity) <= 0.045) hoveredIdRef.current = card.id;
-              }}
-              onPointerLeave={() => {
-                if (hoveredIdRef.current === card.id) hoveredIdRef.current = null;
-              }}
               onFocus={(event) => {
                 const returningFromReader = event.currentTarget.dataset.riverFocusReturn === 'true';
                 if (!shouldRepositionRiverOnFocus(
@@ -601,6 +603,26 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
                 <span>{card.sources[0]?.site || card.sources[0]?.title || '当前会话'}</span>
                 <time dateTime={new Date(card.createdAt).toISOString()}>{formatMessageTimestamp(card.createdAt).label}</time>
               </span>
+            </button>
+            <button
+              className="reading-card-river__remove"
+              type="button"
+              aria-label={`取消收藏：${card.title}`}
+              title="取消收藏"
+              onClick={() => {
+                const nextCard = cards[index + 1] ?? cards[index - 1];
+                const panel = viewportRef.current?.closest('.reading-cards-panel');
+                onRemoveCard(card);
+                window.requestAnimationFrame(() => {
+                  if (nextCard) {
+                    cardNodesRef.current.get(nextCard.id)?.querySelector<HTMLButtonElement>('.reading-card-river__open')?.focus({ preventScroll: true });
+                  } else {
+                    panel?.querySelector<HTMLButtonElement>('.reading-cards-close')?.focus({ preventScroll: true });
+                  }
+                });
+              }}
+            >
+              <KoboyoIcon name="bookmark-minus" size={15} />
             </button>
           </article>
           );

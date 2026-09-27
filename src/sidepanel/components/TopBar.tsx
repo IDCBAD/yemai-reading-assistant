@@ -8,8 +8,6 @@ interface TopBarProps {
   onPrepareReadingCards: () => void;
   onOpenSettings: () => void;
   onPrepareSettings: () => void;
-  onOpenCognitionSignal?: () => void;
-  cognitionSignalCount?: number;
   readingCardsOpen?: boolean;
   searchPreparing?: boolean;
   readingCardsPreparing?: boolean;
@@ -27,8 +25,6 @@ export function TopBar({
   searchPreparing = false,
   readingCardsPreparing = false,
   readingCardFeedbackCount = 0,
-  onOpenCognitionSignal,
-  cognitionSignalCount = 0,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -52,18 +48,6 @@ export function TopBar({
         >
           <KoboyoIcon name="search" size={18} />
         </button>
-        {cognitionSignalCount > 0 && (
-          <button
-            className="icon-button topbar-cognition-signal pressable"
-            type="button"
-            onClick={onOpenCognitionSignal}
-            aria-label={`当前页面命中 ${cognitionSignalCount} 条个人认知`}
-            title="相关个人认知"
-          >
-            <KoboyoIcon name="link" size={17} />
-            <span aria-hidden="true">{cognitionSignalCount}</span>
-          </button>
-        )}
         <button
           className={`icon-button topbar-reading-cards pressable${readingCardsOpen || readingCardsPreparing ? ' is-active' : ''}${readingCardsPreparing ? ' is-preparing' : ''}`}
           type="button"

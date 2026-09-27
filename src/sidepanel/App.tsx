@@ -40,8 +40,16 @@ import {
   type WorkosInterruptAnswers,
 } from '../services/workosTransport';
 import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
-import { loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
+import { clearWorkspaceHistory, loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
 import { loadReadingCards, removeReadingCard, saveReadingCard } from '../services/readingCardStorage';
+import { saveQaCards, type QaDirectory, type QaSaveResult } from '../services/obsidianQa';
+import {
+  authorizeQaDirectory,
+  chooseQaDirectory,
+  disconnectQaDirectory,
+  loadQaDirectory,
+  type QaDirectoryState,
+} from '../services/obsidianQaBrowser';
 import type {
   LocalBackupExportReceipt,
   LocalBackupImportMode,
@@ -51,19 +59,7 @@ import type {
 } from '../services/localBackup';
 import type { LocalStorageUsage } from '../services/storageUsage';
 import type { ReadingCardRow } from '../data/database';
-import {
-  CognitionLoopService,
-  type CognitionComparisonResult,
-  type CognitionDirectoryState,
-  type CognitionProjectionRow,
-} from '../cognition/cognitionLoop';
-import {
-  DexieCognitionDirectoryRegistry,
-  DexieCognitionProjection,
-  pickCognitionDirectory,
-  supportsCognitionDirectory,
-} from '../cognition/browserAdapters';
-import { WorkosCognitionComparisonGateway } from '../cognition/workosComparison';
+import { collectionContextText, collectionMaterials, collectionMessagePrompt, collectionQuestionPrompt, MAX_COLLECTION_MATERIAL_CHARACTERS, MAX_COLLECTION_PROMPT_CHARACTERS } from '../data/collectionActions';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -84,10 +80,8 @@ import {
 } from './agentQueue';
 import type { AnswerContextSource } from './answerContext';
 import { Composer } from './components/Composer';
-import { CognitionReencounterNotice } from './components/CognitionReencounterNotice';
 import type { ReadingCardFeedbackOrigin } from './components/MessageList';
 import { TopBar } from './components/TopBar';
-import type { CognitionDetails } from './components/CognitionWorkbench';
 import {
   attachmentContextItem,
   cloneContextItems,
@@ -106,6 +100,7 @@ import {
   updatePageContextSnapshot,
 } from './contextItems';
 import { openCommandPaletteResult } from './commandPalette';
+import { collectionDeliveryState, createCollectionConversation, isCollectionConversation } from './collectionConversation';
 import {
   historyDeletionPresentation,
   removeReadingCardForUndo,
@@ -184,7 +179,6 @@ const loadCommandPalette = () => {
   }
   return commandPaletteLoad;
 };
-const loadCognitionWorkbench = () => import('./components/CognitionWorkbench');
 const loadMessageList = () => import('./components/MessageList')
   .then((module) => ({ default: module.MessageList }));
 const loadOverlays = () => import('./components/Overlays');
@@ -204,11 +198,8 @@ const loadReadingCardsPanel = () => {
   return readingCardsLoad;
 };
 const prepareCommandPalette = () => { void loadCommandPalette(); };
-const prepareCognitionWorkbench = () => { void loadCognitionWorkbench(); };
 const prepareOverlays = () => { void loadOverlays(); };
 const prepareReadingCardsPanel = () => { void loadReadingCardsPanel(); };
-const CognitionLocalView = lazy(() => loadCognitionWorkbench().then((module) => ({ default: module.CognitionLocalView })));
-const CognitionWorkbench = lazy(() => loadCognitionWorkbench().then((module) => ({ default: module.CognitionWorkbench })));
 const ConfirmDialog = lazy(() => loadOverlays().then((module) => ({ default: module.ConfirmDialog })));
 const HistoryPopover = lazy(() => loadOverlays().then((module) => ({ default: module.HistoryPopover })));
 const MessageList = lazy(loadMessageList);
@@ -303,8 +294,12 @@ function cloneMessagesForBranch(messages: ChatMessage[]) {
 }
 
 function recentSubtitle(conversation: Conversation) {
+  const collectionCount = conversation.draftCollectionMaterials?.length
+    ?? conversation.messages.find((message) => message.collectionMaterials)?.collectionMaterials?.length;
   return conversation.branch
     ? `分支 ${conversation.branch.ordinal} · 刚刚`
+    : collectionCount && conversation.pages.every((page) => !page.url)
+      ? `基于 ${collectionCount} 条收藏 · 刚刚`
     : `${conversation.pages.length} 个页面 · 刚刚`;
 }
 
@@ -372,6 +367,13 @@ export default function App() {
   const [readingCardsLoaded, setReadingCardsLoaded] = useState(false);
   const [readingCardsIssue, setReadingCardsIssue] = useState<string | undefined>();
   const [readingCardsPreparing, setReadingCardsPreparing] = useState(false);
+  const [qaDirectoryState, setQaDirectoryState] = useState<QaDirectoryState>({ kind: 'unconfigured' });
+  const qaDirectoryRef = useRef<QaDirectory | null>(null);
+  const [collectionSend, setCollectionSend] = useState<{
+    conversationId: string;
+    cardIds: string[];
+    status: 'draft' | 'pending' | 'received' | 'uncertain';
+  } | null>(null);
   const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
   const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
   const [searchSession, setSearchSession] = useState<WorkspaceSearchSession | null>(null);
@@ -404,28 +406,6 @@ export default function App() {
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
-  const [cognitionDirectoryState, setCognitionDirectoryState] = useState<CognitionDirectoryState>({ kind: 'unconfigured' });
-  const [cognitionIndexIssues, setCognitionIndexIssues] = useState<Array<{ filename: string; message: string }>>([]);
-  const [cognitionAvailableIds, setCognitionAvailableIds] = useState<string[] | null>(null);
-  const [cognitionReencounters, setCognitionReencounters] = useState<Array<CognitionProjectionRow & {
-    score: number;
-    level: 'weak' | 'strong' | 'conflict';
-    matchedTerms: string[];
-    matchedFields: string[];
-    reason: string;
-  }>>([]);
-  const [cognitionWorkbench, setCognitionWorkbench] = useState<{
-    cognition: CognitionProjectionRow;
-    state: 'comparing' | 'ready' | 'saving' | 'saved' | 'error';
-    result?: CognitionComparisonResult;
-    issue?: string;
-    details?: CognitionDetails;
-  } | null>(null);
-  const [cognitionPreview, setCognitionPreview] = useState<{
-    cognition: CognitionProjectionRow;
-    details?: CognitionDetails;
-    issue?: string;
-  } | null>(null);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
   const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
@@ -447,7 +427,6 @@ export default function App() {
   const pendingPageSnapshotsRef = useRef(new Map<string, PageSnapshot>());
   const pendingPagePreparationsRef = useRef(new Map<string, Promise<PagePreparationResult>>());
   const pendingDecisionRequestsRef = useRef(new Set<string>());
-  const cognitionComparisonAbortRef = useRef<AbortController | null>(null);
   const attachmentPreviewUrlsRef = useRef(new Set<string>());
   const attachmentFilesRef = useRef(new Map<string, File>());
   const attachmentUploadsRef = useRef(new Set<string>());
@@ -455,8 +434,6 @@ export default function App() {
     async () => undefined,
   );
   const requestCoordinatorRef = useRef<ConversationRequestCoordinator<QueuedAgentRequest> | null>(null);
-  const cognitionRegistryRef = useRef(new DexieCognitionDirectoryRegistry());
-  const cognitionProjectionRef = useRef(new DexieCognitionProjection());
   useEffect(() => {
     if (!DIAGNOSTICS_ENABLED) return;
     setDiagnosticResources(() => ({
@@ -471,7 +448,6 @@ export default function App() {
       attachmentFiles: attachmentFilesRef.current.size,
       attachmentUploads: attachmentUploadsRef.current.size,
       previewUrls: attachmentPreviewUrlsRef.current.size,
-      cognitionComparison: Boolean(cognitionComparisonAbortRef.current),
     }));
     recordDiagnosticResources();
   });
@@ -480,13 +456,6 @@ export default function App() {
     requestCoordinatorRef.current = new ConversationRequestCoordinator((request, signal) =>
       requestRunnerRef.current(request, signal));
   }
-  const cognitionLoop = useMemo(() => new CognitionLoopService({
-    registry: cognitionRegistryRef.current,
-    projection: cognitionProjectionRef.current,
-    ...(workosConnection && isActiveWorkosConnectionConfigured(workosConnection)
-      ? { comparison: new WorkosCognitionComparisonGateway(workosConnection) }
-      : {}),
-  }), [workosConnection]);
 
   const activeOpenTab = useMemo(
     () => workspace.openTabs.find((tab) => tab.id === workspace.activeOpenTabId) ?? workspace.openTabs[0]!,
@@ -527,56 +496,25 @@ export default function App() {
       ? { ...currentPage, ...sentPage, title: currentPage.title, site: currentPage.site, status: 'read' as const }
       : { ...currentPage, status: currentPage.status === 'changed' ? 'changed' as const : 'not-read' as const };
   }, [activeConversation.pages, currentPage]);
+  const collectionOrigin = isCollectionConversation(activeConversation);
   const draftContextItems = useMemo(
-    () => syncCurrentPageContextItem(activeConversation.draftContextItems, displayedPage, pageIssue ?? undefined),
-    [activeConversation.draftContextItems, displayedPage, pageIssue],
+    () => collectionOrigin
+      ? activeConversation.draftContextItems
+      : syncCurrentPageContextItem(activeConversation.draftContextItems, displayedPage, pageIssue ?? undefined),
+    [collectionOrigin, activeConversation.draftContextItems, displayedPage, pageIssue],
   );
   const currentPageItem = useMemo(
     () => draftContextItems.find((item) => item.kind === 'page' && item.role === 'current'),
     [draftContextItems],
   );
   const pageReferenceIncluded = Boolean(currentPageItem?.included && currentPage.url);
-  const currentPageSelection = useMemo(() => draftContextItems
-    .filter((item) => item.kind === 'selection' && item.selection.pageUrl === currentPage.url)
-    .map((item) => item.kind === 'selection' ? item.selection.text : '')
-    .filter(Boolean)
-    .join('\n')
-    .slice(0, 4_000), [currentPage.url, draftContextItems]);
   const activeConnectionConfigured = workosConnection
     ? isActiveWorkosConnectionConfigured(workosConnection)
     : false;
   currentPageRef.current = currentPage;
 
-  const applyCognitionScan = useCallback((scan: { issues: Array<{ filename: string; message: string }>; availableIds: string[] }) => {
-    setCognitionIndexIssues(scan.issues);
-    setCognitionAvailableIds(scan.availableIds);
-  }, []);
-
   useEffect(() => {
-    if (!workspaceHydrated || cognitionAvailableIds === null) return;
-    const availableIds = new Set(cognitionAvailableIds);
-    setWorkspace((current) => ({
-      ...current,
-      conversations: current.conversations.map((conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => ({
-          ...message,
-          interactions: message.interactions?.map((interaction) => interaction.cognitionReceipt
-            ? {
-                ...interaction,
-                cognitionReceipt: {
-                  ...interaction.cognitionReceipt,
-                  available: availableIds.has(interaction.cognitionReceipt.id),
-                },
-              }
-            : interaction),
-        })),
-      })),
-    }));
-  }, [cognitionAvailableIds, workspaceHydrated]);
-
-  useEffect(() => {
-    if (!workspaceHydrated || !currentPage.url) return;
+    if (!workspaceHydrated || !currentPage.url || collectionOrigin) return;
     setWorkspace((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => {
@@ -591,7 +529,7 @@ export default function App() {
         };
       }),
     }));
-  }, [activeConversation.id, currentPage, pageIssue, workspaceHydrated]);
+  }, [activeConversation.id, collectionOrigin, currentPage, pageIssue, workspaceHydrated]);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -634,53 +572,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    if (!supportsCognitionDirectory()) {
-      setCognitionDirectoryState({ kind: 'unsupported' });
-      setCognitionReencounters([]);
-      return () => { mounted = false; };
-    }
-    void cognitionLoop.getDirectoryState().then(async (state) => {
-      if (!mounted) return;
-      if (state.kind !== 'ready') {
-        setCognitionDirectoryState(state);
-        setCognitionReencounters([]);
-        return;
-      }
-      const scan = await cognitionLoop.rebuildProjection();
-      applyCognitionScan(scan);
-      if (mounted) setCognitionDirectoryState(state);
-    }).catch((error: unknown) => {
-      if (mounted) setCognitionDirectoryState({
-        kind: 'error',
-        message: error instanceof Error ? error.message : '无法读取认知目录。',
-      });
-    });
-    return () => { mounted = false; };
-  }, [applyCognitionScan, cognitionLoop]);
-
-  useEffect(() => {
-    let mounted = true;
-    if (cognitionDirectoryState.kind !== 'ready' || !currentPage.url) {
-      setCognitionReencounters([]);
-      return () => { mounted = false; };
-    }
-    void cognitionLoop.findReencounters({
-      title: currentPage.title,
-      url: currentPage.url,
-      site: currentPage.site,
-      description: currentPage.manifest?.description ?? currentPage.manifest?.leading_excerpt,
-      headings: currentPage.manifest?.outline.map((heading) => heading.text),
-      selection: currentPageSelection || undefined,
-    }).then((matches) => {
-      if (mounted) setCognitionReencounters(matches);
-    }).catch(() => {
-      if (mounted) setCognitionReencounters([]);
-    });
-    return () => { mounted = false; };
-  }, [cognitionDirectoryState.kind, cognitionLoop, currentPage.manifest?.description, currentPage.manifest?.leading_excerpt, currentPage.manifest?.outline, currentPage.site, currentPage.title, currentPage.url, currentPageSelection]);
-
   useLayoutEffect(() => {
     let mounted = true;
     const task = loadReadingCards()
@@ -700,6 +591,18 @@ export default function App() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadQaDirectory().then(({ directory, state }) => {
+      if (!mounted) return;
+      qaDirectoryRef.current = directory ?? null;
+      setQaDirectoryState(state);
+    }).catch((error: unknown) => {
+      if (mounted) setQaDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法读取问答目录连接。' });
+    });
+    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -729,7 +632,6 @@ export default function App() {
 
     const idleId = window.requestIdleCallback(() => {
       prepareCommandPalette();
-      prepareCognitionWorkbench();
       prepareOverlays();
       prepareReadingCardsPanel();
     }, { timeout: 1_500 });
@@ -860,10 +762,6 @@ export default function App() {
         messages: conversation.messages.map((message) => {
           if (message.id !== messageId) return message;
           const currentInteractions = messageDecisionInteractions(message);
-          if (interrupt.cognitionCandidate && (
-            !message.content.trim()
-            || currentInteractions.some((interaction) => Boolean(interaction.cognitionCandidate))
-          )) return message;
           return {
             ...message,
             status: 'streaming',
@@ -1725,11 +1623,13 @@ export default function App() {
       });
     }
 
-    const content = buildAgentContent({
-      question: userMessage.content,
-      quotes: messageSelections,
-      ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
-    });
+    const content = userMessage.collectionMaterials
+      ? collectionMessagePrompt(userMessage)
+      : buildAgentContent({
+          question: userMessage.content,
+          quotes: messageSelections,
+          ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
+        });
     const consumeBranchContext = () => {
       if (!pendingBranchContext || branchContextConsumed) return;
       branchContextConsumed = true;
@@ -1917,14 +1817,13 @@ export default function App() {
     const message = conversation?.messages.find((item) => item.id === messageId);
     const decision = messageDecisionInteractions(message ?? {}).find((interaction) => interaction.id === decisionId);
     if (!conversation?.remoteUuid || !message || !decision) return;
-    if (message.status !== 'running' && message.status !== 'streaming' && !decision.cognitionCandidate) return;
+    if (message.status !== 'running' && message.status !== 'streaming') return;
     if (decision.status !== 'pending' && decision.status !== 'failed') return;
     const pendingKey = `${conversationId}:${decision.id}`;
     if (pendingDecisionRequestsRef.current.has(pendingKey)) return;
     pendingDecisionRequestsRef.current.add(pendingKey);
 
     const answers = normalizeAgentDecisionAnswers(decision.fields, candidateAnswers);
-    const cognitionSavedLocally = Boolean(decision.cognitionReceipt);
     updateConversation(conversationId, (current) => ({
       ...current,
       messages: current.messages.map((item) => {
@@ -1970,9 +1869,6 @@ export default function App() {
               ? {
                   ...interaction,
                   status: 'submitted' as const,
-                  ...(interaction.cognitionReceipt
-                    ? { cognitionReceipt: { ...interaction.cognitionReceipt, remotePending: false } }
-                    : {}),
                 }
               : interaction),
             decision: undefined,
@@ -1981,9 +1877,7 @@ export default function App() {
       }));
     } catch (error) {
       const detail = error instanceof Error ? error.message : '无法提交当前选择，请重试。';
-      const errorMessage = cognitionSavedLocally
-        ? `已保存到本地，Agent 尚未恢复：${detail}`
-        : detail;
+      const errorMessage = detail;
       updateConversation(conversationId, (current) => ({
         ...current,
         messages: current.messages.map((item) => {
@@ -1998,9 +1892,6 @@ export default function App() {
                   ...interaction,
                   status: 'failed' as const,
                   errorMessage,
-                  ...(cognitionSavedLocally && interaction.cognitionReceipt
-                    ? { cognitionReceipt: { ...interaction.cognitionReceipt, remotePending: true } }
-                    : {}),
                 }
               : interaction),
             decision: undefined,
@@ -2028,6 +1919,13 @@ export default function App() {
       return false;
     }
     const question = draftInput.trim();
+    const pendingCollectionMaterials = activeConversation.draftCollectionMaterials;
+    if (pendingCollectionMaterials?.length && !question) return false;
+    if (pendingCollectionMaterials?.length
+      && collectionQuestionPrompt(question, pendingCollectionMaterials).length > MAX_COLLECTION_PROMPT_CHARACTERS) {
+      setConnectionIssue(`问题和所选问答合计超过 ${MAX_COLLECTION_PROMPT_CHARACTERS} 字，请缩短问题或重新选择收藏。`);
+      return false;
+    }
     const readyAttachments = contextAttachments(draftContextItems).filter((attachment) => attachment.url);
     const readySelections = contextSelections(draftContextItems);
     const hasContent = question
@@ -2039,7 +1937,7 @@ export default function App() {
     const conversationAtSend = activeConversation;
     const pageAtSend = contextPage(draftContextItems)?.page ?? displayedPage;
     const includeCurrentPage = shouldPreparePageReference(pageReferenceIncluded, pageAtSend);
-    const presentation = question === PAGE_OVERVIEW_PROMPT
+    const presentation = !pendingCollectionMaterials?.length && question === PAGE_OVERVIEW_PROMPT
       ? 'page-overview' as const
       : undefined;
     const needsPageRead = includeCurrentPage && shouldDeliverFullCurrentPage({
@@ -2052,6 +1950,10 @@ export default function App() {
       id: makeId('message'),
       role: 'user',
       content: question,
+      ...(pendingCollectionMaterials?.length ? {
+        collectionMaterials: pendingCollectionMaterials,
+        collectionMode: 'question' as const,
+      } : {}),
       createdAt: now,
       status: 'complete',
       presentation,
@@ -2074,20 +1976,24 @@ export default function App() {
       activities: [],
       artifacts: [],
       presentation,
+      ...(pendingCollectionMaterials?.length ? { collectionSend: true as const } : {}),
     };
 
-    updateConversation(conversationAtSend.id, (conversation) => ({
-      ...conversation,
-      title: conversation.isDraft && question
-        ? question.slice(0, 18)
-        : conversation.title,
-      subtitle: recentSubtitle(conversation),
-      isDraft: false,
-      updatedAt: now,
-      messages: [...conversation.messages, userMessage, assistantMessage],
-      draftInput: '',
-      draftContextItems: retainContextAfterSend(conversation.draftContextItems),
-    }));
+    updateConversation(conversationAtSend.id, (conversation) => {
+      const { draftCollectionMaterials: _sentMaterials, ...base } = conversation;
+      return {
+        ...base,
+        title: conversation.isDraft && question
+          ? question.slice(0, 18)
+          : conversation.title,
+        subtitle: recentSubtitle(conversation),
+        isDraft: false,
+        updatedAt: now,
+        messages: [...conversation.messages, userMessage, assistantMessage],
+        draftInput: '',
+        draftContextItems: retainContextAfterSend(conversation.draftContextItems),
+      };
+    });
 
     const pageSnapshotPromise = queuedSnapshot
       ? Promise.resolve<PagePreparationResult>({ snapshot: queuedSnapshot })
@@ -2104,6 +2010,48 @@ export default function App() {
     });
     return true;
   };
+
+  const startCollectionConversation = (cards: ReadingCardRow[]) => {
+    if (!workspaceHydrated) return '本地会话仍在加载，请稍后再试。';
+    if (workspaceRef.current.openTabs.length >= MAX_OPEN_TABS) return `已打开 ${MAX_OPEN_TABS} 个工作页，请先关闭一个。`;
+    const materials = collectionMaterials(cards, workspaceRef.current.conversations);
+    if (!materials.length) return '请先选择收藏。';
+    if (collectionContextText(materials).length > MAX_COLLECTION_MATERIAL_CHARACTERS) {
+      return `所选问答资料超过 ${MAX_COLLECTION_MATERIAL_CHARACTERS} 字，请缩小选择。`;
+    }
+    const now = Date.now();
+    const conversationId = makeId('conversation');
+    const { conversation, tab } = createCollectionConversation(materials, {
+      conversationId,
+      tabId: makeId('open-tab'),
+    }, now);
+    const current = workspaceRef.current;
+    const next = {
+      ...current,
+      conversations: [conversation, ...current.conversations],
+      openTabs: [...current.openTabs, tab],
+      activeOpenTabId: tab.id,
+    };
+    workspaceRef.current = next;
+    setWorkspace(next);
+    setCollectionSend({ conversationId, cardIds: materials.map((material) => material.cardId), status: 'draft' });
+    closeReadingCards();
+    setComposerFocusRequest((request) => request + 1);
+    return undefined;
+  };
+
+  useEffect(() => {
+    if (!collectionSend || collectionSend.status === 'received') return;
+    const conversation = workspace.conversations.find((item) => item.id === collectionSend.conversationId);
+    const answer = conversation?.messages.find((message) => message.role === 'assistant');
+    if (!answer) return;
+    const status = collectionDeliveryState(answer);
+    if (status !== 'pending' && status !== collectionSend.status) {
+      setCollectionSend({ ...collectionSend, status });
+    } else if (status === 'pending' && collectionSend.status === 'draft') {
+      setCollectionSend({ ...collectionSend, status: 'pending' });
+    }
+  }, [collectionSend, workspace.conversations]);
 
   const retryMessage = (message: ChatMessage) => {
     if (!workspaceHydrated || !activeConnectionConfigured) return;
@@ -2421,108 +2369,58 @@ export default function App() {
     });
   };
 
-  const connectCognitionDirectory = async () => {
+  const selectQaDirectory = async () => {
     try {
-      const directory = await pickCognitionDirectory();
-      let state = await cognitionLoop.connectDirectory(directory);
-      if (state.kind === 'error' && state.message.startsWith('这个目录已有内容')) {
-        const accepted = window.confirm(`${state.message}\n\n是否继续连接？`);
-        if (accepted) state = await cognitionLoop.connectDirectory(directory, { acceptNonEmpty: true });
-      }
-      setCognitionDirectoryState(state);
-      if (state.kind === 'ready') applyCognitionScan(await cognitionLoop.rebuildProjection());
+      const { directory, state } = await chooseQaDirectory();
+      qaDirectoryRef.current = directory;
+      setQaDirectoryState(state);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      setCognitionDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法连接认知目录。' });
+      setQaDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法选择问答目录。' });
+      throw error;
     }
   };
 
-  const reconnectCognitionDirectory = async () => {
+  const reconnectQaDirectory = async () => {
+    const directory = qaDirectoryRef.current;
+    if (!directory) return selectQaDirectory();
     try {
-      const state = await cognitionLoop.reconnectDirectory();
-      setCognitionDirectoryState(state);
-      if (state.kind === 'ready') applyCognitionScan(await cognitionLoop.rebuildProjection());
+      const state = await authorizeQaDirectory(directory);
+      setQaDirectoryState(state);
     } catch (error) {
-      setCognitionDirectoryState({ kind: 'error', message: error instanceof Error ? error.message : '无法重新连接认知目录。' });
+      setQaDirectoryState({ kind: 'error', name: directory.name, message: error instanceof Error ? error.message : '无法重新授权问答目录。' });
+      throw error;
     }
   };
 
-  const disconnectCognitionDirectory = async () => {
-    await cognitionLoop.disconnectDirectory();
-    setCognitionDirectoryState({ kind: 'unconfigured' });
-    setCognitionReencounters([]);
-    setCognitionIndexIssues([]);
-    setCognitionAvailableIds([]);
+  const disconnectQa = async () => {
+    await disconnectQaDirectory();
+    qaDirectoryRef.current = null;
+    setQaDirectoryState({ kind: 'unconfigured' });
   };
 
-  const startCognitionComparison = async (cognition: CognitionProjectionRow) => {
-    setCognitionPreview(null);
-    cognitionComparisonAbortRef.current?.abort();
-    const controller = new AbortController();
-    cognitionComparisonAbortRef.current = controller;
-    setCognitionWorkbench({ cognition, state: 'comparing' });
+  const saveSelectedCards = async (cards: ReadingCardRow[]): Promise<QaSaveResult[]> => {
+    let directory = qaDirectoryRef.current;
+    if (!directory || qaDirectoryState.kind === 'unconfigured' || qaDirectoryState.kind === 'error') {
+      const chosen = await chooseQaDirectory();
+      directory = chosen.directory;
+      qaDirectoryRef.current = directory;
+      setQaDirectoryState(chosen.state);
+    } else if (qaDirectoryState.kind === 'needs-permission') {
+      const state = await authorizeQaDirectory(directory);
+      setQaDirectoryState(state);
+      if (state.kind !== 'ready') throw new Error('需要授权访问问答目录。');
+    }
+    if (!directory) throw new Error('尚未选择问答目录。');
     try {
-      const result = await cognitionLoop.compareWithPage(cognition.id, {
-        title: currentPage.title,
-        url: currentPage.url,
-        site: currentPage.site,
-        description: currentPage.manifest?.description ?? currentPage.manifest?.leading_excerpt,
-        headings: currentPage.manifest?.outline.map((heading) => heading.text),
-        selection: currentPageSelection || undefined,
-      }, controller.signal);
-      if (controller.signal.aborted) return;
-      setCognitionWorkbench({ cognition, state: 'ready', result });
+      return await saveQaCards(directory, cards, workspaceRef.current.conversations);
     } catch (error) {
-      if (controller.signal.aborted) return;
-      setCognitionWorkbench({ cognition, state: 'error', issue: error instanceof Error ? error.message : '认知对照失败。' });
-    } finally {
-      if (cognitionComparisonAbortRef.current === controller) cognitionComparisonAbortRef.current = null;
+      if (error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'SecurityError')) {
+        setQaDirectoryState({ kind: 'needs-permission', name: directory.name });
+      }
+      throw error;
     }
   };
-
-  const openCognitionPreview = async (cognition: CognitionProjectionRow) => {
-    setCognitionPreview({ cognition });
-    try {
-      const details = await cognitionLoop.getCognitionDetails(cognition.id);
-      setCognitionPreview((current) => current?.cognition.id === cognition.id ? { cognition, details } : current);
-    } catch (error) {
-      setCognitionPreview((current) => current?.cognition.id === cognition.id
-        ? { cognition, issue: error instanceof Error ? error.message : '无法读取本地认知。' }
-        : current);
-    }
-  };
-
-  const resolveCognitionComparison = async (
-    outcome: CognitionComparisonResult['outcome'],
-    revisedUnderstanding?: string,
-    revisedBoundary?: string,
-    userReason = '',
-  ) => {
-    const workbench = cognitionWorkbench;
-    if (!workbench?.result) return;
-    setCognitionWorkbench({ ...workbench, state: 'saving', issue: undefined });
-    try {
-      await cognitionLoop.recordComparisonOutcome(workbench.cognition.id, {
-        ...workbench.result,
-        outcome,
-        userReason,
-        ...(outcome === 'revise' ? { revisedUnderstanding: revisedUnderstanding?.trim() } : { revisedUnderstanding: undefined }),
-        ...(outcome === 'revise' ? { revisedBoundary: revisedBoundary?.trim() } : { revisedBoundary: undefined }),
-      });
-      const details = await cognitionLoop.getCognitionDetails(workbench.cognition.id);
-      setCognitionWorkbench({ ...workbench, state: 'saved', details });
-      applyCognitionScan(await cognitionLoop.rebuildProjection());
-      setCognitionReencounters((matches) => matches.filter((match) => match.id !== workbench.cognition.id));
-    } catch (error) {
-      setCognitionWorkbench({ ...workbench, state: 'error', issue: error instanceof Error ? error.message : '认知更新失败。' });
-    }
-  };
-  const closeCognitionWorkbench = useCallback(() => {
-    cognitionComparisonAbortRef.current?.abort();
-    cognitionComparisonAbortRef.current = null;
-    setCognitionWorkbench(null);
-  }, [closeCommandPalette, openReadingCards]);
-  const closeCognitionPreview = useCallback(() => setCognitionPreview(null), []);
 
   const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
     await saveWorkspaceState(workspaceRef.current);
@@ -2598,8 +2496,13 @@ export default function App() {
     const next = { conversations: [conversation], openTabs: [tab], activeOpenTabId: tab.id };
     workspaceRef.current = next;
     setWorkspace(next);
+    closeCommandPalette();
     setSettingsOpen(false);
     setHistoryOpen(false);
+    void clearWorkspaceHistory(next).catch(() => {
+      setConnectionIssue('无法完成本地历史清理，请检查扩展存储权限后重试。');
+      setSettingsOpen(true);
+    });
   };
 
   const confirmHistoryDeletion = () => {
@@ -2671,11 +2574,6 @@ export default function App() {
         readingCardsPreparing={readingCardsPreparing}
         readingCardsOpen={readingCardsOpen}
         readingCardFeedbackCount={readingCardFeedback?.count ?? 0}
-        cognitionSignalCount={cognitionReencounters.length}
-        onOpenCognitionSignal={() => {
-          const cognition = cognitionReencounters[0];
-          if (cognition) void openCognitionPreview(cognition);
-        }}
         onOpenSettings={() => {
           setSettingsOpen(true);
           setReadingCardsOpen(false);
@@ -2704,21 +2602,11 @@ export default function App() {
           <span className="reading-card-flight-token"><span /></span>
         </span>
       )}
-      <CognitionReencounterNotice
-        matches={cognitionReencounters.filter((match) => match.level !== 'weak')}
-        onCompare={(cognition) => void startCognitionComparison(cognition)}
-        onDismiss={() => setCognitionReencounters([])}
-      />
-      {cognitionIndexIssues.length > 0 && (
-        <aside className="cognition-index-issue" role="status">
-          <span>认知目录有 {cognitionIndexIssues.length} 个文件暂时只读：{cognitionIndexIssues[0]?.filename}</span>
-          <button type="button" className="pressable" onClick={() => void cognitionLoop.rebuildProjection().then(applyCognitionScan)}>重新扫描</button>
-        </aside>
-      )}
       <Suspense fallback={<div className="message-stage" aria-busy="true"><main className="messages" /></div>}>
         <MessageList
           key={activeConversation.id}
           messages={activeConversation.messages}
+          pendingCollectionCount={activeConversation.draftCollectionMaterials?.length}
           savedMessageIds={savedMessageIds}
           navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
             ? searchNavigationTarget
@@ -2769,6 +2657,7 @@ export default function App() {
         activeTabId={activeOpenTab.id}
         pendingTabId={tabSwitchPending ? pendingOpenTabId ?? undefined : undefined}
         input={activeConversation.draftInput}
+        collectionMaterials={activeConversation.draftCollectionMaterials}
         focusRequestId={composerFocusRequest}
         contextItems={draftContextItems}
         activeConversationIds={activeConversationIds}
@@ -2790,6 +2679,7 @@ export default function App() {
           setHistoryOpen((value) => !value);
         }}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
+        onRemoveCollectionMaterials={() => patchActiveConversation({ draftCollectionMaterials: undefined })}
         onContextIncludedChange={changeContextItemIncluded}
         onRetryAttachment={retryAttachment}
         onRemoveContextItem={(id) => {
@@ -2870,6 +2760,9 @@ export default function App() {
           onOpenSource={openReadingCardSource}
           onExportCard={exportCardMarkdown}
           onExportAll={exportAllCardsMarkdown}
+          onStartConversation={startCollectionConversation}
+          onSaveSelected={saveSelectedCards}
+          collectionSend={collectionSend}
         />
       )}
       {settingsOpen && (
@@ -2883,7 +2776,7 @@ export default function App() {
             storageUsageIssue={localStorageUsageIssue}
             backupStatus={localBackupStatus}
             backupStatusIssue={localBackupStatusIssue}
-            cognitionDirectoryState={cognitionDirectoryState}
+            qaDirectoryState={qaDirectoryState}
             onSaveConnection={saveConnection}
             onTestConnection={testConnection}
             onImportWorkosCredentials={importWorkosLoginCredentials}
@@ -2894,33 +2787,9 @@ export default function App() {
             onImportBackup={importBackup}
             onClose={() => setSettingsOpen(false)}
             onClearHistory={clearLocalHistory}
-            onConnectCognitionDirectory={connectCognitionDirectory}
-            onReconnectCognitionDirectory={reconnectCognitionDirectory}
-            onDisconnectCognitionDirectory={disconnectCognitionDirectory}
-          />
-        </Suspense>
-      )}
-      {cognitionWorkbench && (
-        <Suspense fallback={null}>
-          <CognitionWorkbench
-            cognition={cognitionWorkbench.cognition}
-            state={cognitionWorkbench.state}
-            result={cognitionWorkbench.result}
-            issue={cognitionWorkbench.issue}
-            details={cognitionWorkbench.details}
-            onResolve={(outcome, revision, boundary, reason) => void resolveCognitionComparison(outcome, revision, boundary, reason)}
-            onClose={closeCognitionWorkbench}
-          />
-        </Suspense>
-      )}
-      {cognitionPreview && (
-        <Suspense fallback={null}>
-          <CognitionLocalView
-            cognition={cognitionPreview.cognition}
-            details={cognitionPreview.details}
-            issue={cognitionPreview.issue}
-            onCompare={() => void startCognitionComparison(cognitionPreview.cognition)}
-            onClose={closeCognitionPreview}
+            onChooseQaDirectory={selectQaDirectory}
+            onReconnectQaDirectory={reconnectQaDirectory}
+            onDisconnectQaDirectory={disconnectQa}
           />
         </Suspense>
       )}
