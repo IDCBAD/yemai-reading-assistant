@@ -110,7 +110,7 @@ npm run dev
 
 安装包不包含任何默认 Agent UUID。每位用户必须填写自己的 Agent UUID。设置页同时提供可复制的 `Agent.md` 推荐模板，用于约束上下文协议、回答方式和安全边界。保存连接后，第一条消息才会创建远端会话。
 
-实验性实时连接可以通过“从 WorkOS 获取”读取当前 Chrome 中已登录的影刀 AI WorkOS 会话。该操作只在用户主动点击后，从 `https://aipower.yingdao.com` 读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定字段并填入设置草稿；不会扫描其他本地存储、自动保存凭据或发送聊天消息。用户仍需测试连接并手动保存。
+实验性实时连接可以通过“从 WorkOS 获取”读取当前 Chrome 中已登录的影刀 AI WorkOS 会话。该操作只在用户主动点击后，从 `https://workos.yingdao.com` 读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定字段并填入设置草稿；不会扫描其他本地存储、自动保存凭据或发送聊天消息。用户仍需测试连接并手动保存。
 
 ## 附件支持
 

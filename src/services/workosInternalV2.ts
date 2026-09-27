@@ -6,7 +6,7 @@ import {
   isAbortError,
   parseJsonEnvelope,
   requireEventStream,
-  WORKOS_API_ORIGIN,
+  WORKOS_INTERNAL_V2_BASE_URL,
   WorkosApiError,
   type ExecuteRequest,
   type WorkosInterruptAnswers,
@@ -90,6 +90,7 @@ export function internalV2Headers(
 ) {
   return {
     Authorization: `Bearer ${credentials.accessToken}`,
+    'xybot-authorization': credentials.accessToken,
     'x-organization-uuid': encryptIdentity(credentials.organizationUuid),
     'x-user-uuid': encryptIdentity(credentials.userUuid),
     'Content-Type': 'application/json; charset=utf-8',
@@ -108,7 +109,7 @@ export class InternalV2Transport implements WorkosTransport {
   async createConversation(signal?: AbortSignal) {
     let response: Response;
     try {
-      response = await fetch(`${WORKOS_API_ORIGIN}/api/agent/v2/conversations/create`, {
+      response = await fetch(`${WORKOS_INTERNAL_V2_BASE_URL}/conversations/create`, {
         method: 'POST',
         headers: internalV2Headers(this.credentials),
         body: JSON.stringify({
@@ -122,7 +123,18 @@ export class InternalV2Transport implements WorkosTransport {
       throw connectionError(error);
     }
 
-    const body = await parseJsonEnvelope<{ conversationUuid?: unknown }>(response, this.kind);
+    let body: Awaited<ReturnType<typeof parseJsonEnvelope<{ conversationUuid?: unknown }>>>;
+    try {
+      body = await parseJsonEnvelope<{ conversationUuid?: unknown }>(response, this.kind);
+    } catch (error) {
+      if (error instanceof WorkosApiError && error.status === 404) {
+        throw new WorkosApiError(
+          'WorkOS 创建会话失败（404）。请核对 Agent UUID、登录账号权限和接口地址。',
+          404,
+        );
+      }
+      throw error;
+    }
     const conversationUuid = body.data?.conversationUuid;
     if (typeof conversationUuid !== 'string' || !conversationUuid) {
       throw new WorkosApiError('WorkOS v2 返回了无法识别的会话数据。');
@@ -147,7 +159,7 @@ export class InternalV2Transport implements WorkosTransport {
       let subscriptionResponse: Response;
       try {
         subscriptionResponse = await fetch(
-          `${WORKOS_API_ORIGIN}/api/agent/v2/conversations/${encodedUuid}/events/messages/subscribe`,
+          `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/events/messages/subscribe`,
           {
             method: 'GET',
             headers: {
@@ -176,7 +188,7 @@ export class InternalV2Transport implements WorkosTransport {
       let submitResponse: Response;
       try {
         submitResponse = await fetch(
-          `${WORKOS_API_ORIGIN}/api/agent/v2/conversations/${encodedUuid}/queue/submit`,
+          `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/queue/submit`,
           {
             method: 'POST',
             headers: internalV2Headers(this.credentials),
@@ -238,7 +250,7 @@ export class InternalV2Transport implements WorkosTransport {
     let response: Response;
     try {
       response = await fetch(
-        `${WORKOS_API_ORIGIN}/api/agent/v2/conversations/${encodedUuid}/interrupt/${encodedRequestId}/${action}`,
+        `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/interrupt/${encodedRequestId}/${action}`,
         {
           method: 'POST',
           headers: internalV2Headers(this.credentials),

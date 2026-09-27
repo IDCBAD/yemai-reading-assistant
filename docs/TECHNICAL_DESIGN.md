@@ -48,7 +48,7 @@ src/sidepanel/
 - 在 Side Panel 已打开时上报新选区
 - 提取页面正文和页面元数据
 - 使用通用网页抽取与降级策略；当前没有 X / Twitter 专用抽取器
-- 仅在 `https://aipower.yingdao.com` 且收到明确导入请求时读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定键
+- 仅在 `https://workos.yingdao.com` 且收到明确导入请求时读取 `accessToken`、`uuid` 和 `organizationUuid` 三个固定键
 
 不得负责：
 
@@ -109,6 +109,7 @@ interface LocalConversation {
   remoteUuid?: string;
   remoteTransport?: 'public-v1' | 'internal-v2';
   remoteAgentUuid?: string;
+  remoteApiBase?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -343,8 +344,8 @@ SSE `data` 中还包含序列化后的第二层 JSON。解析器需要：
 
 v2 将消息提交和流式订阅拆开。每轮必须：
 
-1. `GET /api/agent/v2/conversations/{conversationUuid}/events/messages/subscribe` 建立 SSE；
-2. `POST /api/agent/v2/conversations/{conversationUuid}/queue/submit` 提交本轮消息；
+1. `GET /api/workos-agent-server/v2/conversations/{conversationUuid}/events/messages/subscribe` 建立 SSE；
+2. `POST /api/workos-agent-server/v2/conversations/{conversationUuid}/queue/submit` 提交本轮消息；
 3. 从提交响应递归读取 `runId`；
 4. 忽略明确携带其他 `runId` 的历史事件；
 5. 只由当前 `runId` 的完成事件结束本轮。
@@ -373,7 +374,7 @@ WorkOS 当前接口没有“克隆会话”能力。插件将分支点之前的�
 
 分支本地记录额外保存 `rootConversationId / parentConversationId / sourceMessageId / ordinal`，用于历史定位和展示；这些字段不作为对话正文发送给 Agent。
 
-远程 Conversation 还保存创建它的 `remoteTransport` 与 `remoteAgentUuid`。用户切换通道或 Agent UUID 后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送最近 6 条有效消息。交接内容只保留最近活动页面的来源身份，不复制页面 Manifest，且整体不超过 12,000 字符；旧版本中缺少 `remoteAgentUuid` 的远程会话视为目标不明，下一轮会安全地重建远程会话。
+远程 Conversation 还保存创建它的 `remoteTransport`、`remoteAgentUuid` 与内部 v2 的 `remoteApiBase`。用户切换通道、Agent UUID 或内部 v2 服务地址后不会复用旧目标的 `remoteUuid`；下一轮在新目标创建远程会话，并通过 `<conversation_transport_handoff_context>` 一次性发送最近 6 条有效消息。交接内容只保留最近活动页面的来源身份，不复制页面 Manifest，且整体不超过 12,000 字符；旧版本中缺少 Agent 身份或内部 v2 服务地址的远程会话视为目标不明，下一轮会安全地重建远程会话。
 
 当前页卡片的可见性与本轮页面投递深度是两个独立状态。包含网页选区或回答引用时，本轮只发送精确引用，不因卡片仍在输入区而隐式附加整页 Manifest；页面总览或没有精确引用的页面任务才按来源账本决定 `manifest`、`snapshot` 或 `reuse`。因此保留引用卡片不会持续放大多轮请求。
 
@@ -429,8 +430,9 @@ permissions:
 - favicon
 
 host_permissions:
-- https://aipower.yingdao.com/*
+- https://workos.yingdao.com/*
 - https://power-api.yingdao.com/*
+- https://workos-api.yingdao.com/*
 - https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*
 
 content_scripts.matches:
@@ -443,7 +445,7 @@ content_scripts.matches:
 ## 12. 安全边界
 
 - 已保存的 Token 仅存在于可信扩展存储和 Side Panel；导入时由 WorkOS 来源的 Content Script 短暂读取并直接返回，不持久化。
-- 凭据导入必须由用户点击触发，只允许精确来源 `https://aipower.yingdao.com`，只读取 `accessToken`、`uuid` 和 `organizationUuid`，不得遍历 localStorage。
+- 凭据导入必须由用户点击触发，只允许精确来源 `https://workos.yingdao.com`，只读取 `accessToken`、`uuid` 和 `organizationUuid`，不得遍历 localStorage。
 - 导入结果只填入设置草稿，不自动测试、保存或发送消息。
 - 不在日志、错误消息和遥测中输出 Token。
 - API 客户端只允许访问固定影刀端点。

@@ -35,9 +35,11 @@ afterEach(() => {
 
 describe('InternalV2Transport', () => {
   it('creates a draft custom-agent conversation with encrypted identity headers', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('https://workos-api.yingdao.com/api/workos-agent-server/v2/conversations/create');
       const requestHeaders = init?.headers as Record<string, string>;
       expect(requestHeaders.Authorization).toBe('Bearer login-token');
+      expect(requestHeaders['xybot-authorization']).toBe('login-token');
       expect(requestHeaders['x-user-uuid']).not.toBe('user-1');
       expect(requestHeaders['x-organization-uuid']).not.toBe('org-1');
       expect(JSON.parse(String(init?.body))).toMatchObject({
@@ -59,11 +61,27 @@ describe('InternalV2Transport', () => {
     });
   });
 
+  it('does not describe a failed conversation creation as a missing conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      code: 404,
+      msg: 'Not Found',
+    }), { status: 404, headers: { 'Content-Type': 'application/json' } })));
+
+    const transport = new InternalV2Transport(credentials, agentUuid);
+    await expect(transport.createConversation()).rejects.toEqual(expect.objectContaining({
+      message: 'WorkOS 创建会话失败（404）。请核对 Agent UUID、登录账号权限和接口地址。',
+      status: 404,
+    }));
+  });
+
   it('subscribes before submit and ignores stale completion events', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/events/messages/subscribe')) {
+        expect(url).toContain('https://workos-api.yingdao.com/api/workos-agent-server/v2/conversations/');
         expect(init?.method).toBe('GET');
+        expect((init?.headers as Record<string, string>)['xybot-authorization']).toBe('login-token');
         return eventStream([
           sseEvent('xybot-stream-complete', { runId: 'run-old' }),
           messageEvent('run-current', {
@@ -78,6 +96,7 @@ describe('InternalV2Transport', () => {
         ]);
       }
       if (url.endsWith('/queue/submit')) {
+        expect(url).toContain('https://workos-api.yingdao.com/api/workos-agent-server/v2/conversations/');
         expect(init?.method).toBe('POST');
         expect(JSON.parse(String(init?.body))).toEqual({
           parts: [{ type: 'text', text: '继续提问' }],
@@ -133,6 +152,7 @@ describe('InternalV2Transport', () => {
     await transport.rejectInterrupt('conversation-v2', 'int_request2');
 
     expect(requests[0]?.url).toContain('/conversations/conversation-v2/interrupt/int_request1/reply');
+    expect(requests[0]?.url).toContain('https://workos-api.yingdao.com/api/workos-agent-server/v2/');
     expect(requests[0]?.init?.method).toBe('POST');
     expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
       补充说明: '使用科技蓝',

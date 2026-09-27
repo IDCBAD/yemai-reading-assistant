@@ -212,6 +212,7 @@ export interface Conversation {
   remoteUuid?: string;
   remoteTransport?: WorkosTransportKind;
   remoteAgentUuid?: string;
+  remoteApiBase?: string;
   pendingBranchContext?: string;
   title: string;
   subtitle: string;

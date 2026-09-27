@@ -1,4 +1,4 @@
-export const WORKOS_APP_ORIGIN = 'https://aipower.yingdao.com';
+export const WORKOS_APP_ORIGIN = 'https://workos.yingdao.com';
 export const WORKOS_APP_URL_PATTERN = `${WORKOS_APP_ORIGIN}/*`;
 
 export const WORKOS_LOGIN_STORAGE_KEYS = {

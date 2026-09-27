@@ -14,12 +14,13 @@ export default defineConfig({
       minimum_chrome_version: '116',
       permissions: ['sidePanel', 'storage', 'favicon'],
       host_permissions: [
-        'https://aipower.yingdao.com/*',
+        'https://workos.yingdao.com/*',
         'https://power-api.yingdao.com/*',
+        'https://workos-api.yingdao.com/*',
         'https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*',
       ],
       content_security_policy: {
-        extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
+        extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com https://workos-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
       },
       action: {
         default_title: development ? '打开页脉 DEV' : '打开页脉',

@@ -1,6 +1,6 @@
 # WorkOS 网页端流式接口接入文档
 
-> 核验基线：页脉 `internal-v2` 实现，2026-09-09
+> 核验基线：页脉 `internal-v2` 实现；2026-09-27 从新 WorkOS 页面请求核对创建、消息订阅和提交路径，扩展的连接测试及原有本地对话收发由用户在 Chrome 中验证通过。
 > 接口性质：WorkOS 网页端内部协议，非官方开放 API
 > 适用目标：在另一个受控项目中复用 WorkOS 网页端的多轮流式调用
 
@@ -37,15 +37,17 @@ Client                    WorkOS
 - 只有属于当前 `runId` 的完成事件才能结束本轮。
 - 提交成功后的断流、超时或本地停止都不能自动重提，否则可能重复执行 Agent 或工具。
 
+新工作台还会建立 `events/changes/subscribe` 订阅；页脉当前只消费回答所需的 `events/messages/subscribe`。新增订阅是否影响其他页面能力，尚未验证。
+
 ## 2. 风险边界与推荐部署方式
 
 接口根地址：
 
 ```text
-https://power-api.yingdao.com
+https://workos-api.yingdao.com
 ```
 
-这套 `/api/agent/v2` 协议来自 WorkOS 网页端，不是 `/oapi` 官方开放接口。它依赖登录态凭证、网页端 RSA 公钥和内部路径，WorkOS 更新后可能随时失效。
+这套 `/api/workos-agent-server/v2` 协议来自 WorkOS 网页端，不是 `/oapi` 官方开放接口。它依赖登录态凭证、网页端 RSA 公钥和内部路径，WorkOS 更新后可能随时失效。
 
 普通网站前端不建议直接调用，原因包括：
 
@@ -54,7 +56,7 @@ https://power-api.yingdao.com
 - 登录 Token 过期、内部 Header 或 RSA 公钥变化时需要统一处理；
 - 前端自动重试容易造成重复运行。
 
-推荐把本协议封装在自有 BFF/后端中，由业务前端只调用你自己的稳定接口。Chrome 扩展可以在声明 `https://power-api.yingdao.com/*` host permission 后直接请求；普通网页不能假设具有相同的跨域能力。
+推荐把本协议封装在自有 BFF/后端中，由业务前端只调用你自己的稳定接口。Chrome 扩展可以在声明 `https://workos-api.yingdao.com/*` host permission 后直接请求；普通网页不能假设具有相同的跨域能力。
 
 如果另一个项目确实是个人使用的 Chrome 扩展或受控桌面 WebView，可以复用本文的前端实现，但仍要把内部协议集中封装在一个 transport 模块中。
 
@@ -70,7 +72,7 @@ https://power-api.yingdao.com
 凭证只应在用户主动授权后，从以下固定 Origin 读取：
 
 ```text
-https://aipower.yingdao.com
+https://workos.yingdao.com
 ```
 
 不要把任何真实凭证写入源码、日志、错误信息、测试快照或版本库。遇到 `401` 或 `403` 时只提示重新登录或更新凭证，不回显响应中的敏感详情。
@@ -81,6 +83,7 @@ https://aipower.yingdao.com
 
 ```http
 Authorization: Bearer <accessToken>
+xybot-authorization: <accessToken>
 x-user-uuid: <RSA_PKCS1_v1_5_BASE64(userUuid)>
 x-organization-uuid: <RSA_PKCS1_v1_5_BASE64(organizationUuid)>
 Content-Type: application/json; charset=utf-8
@@ -147,6 +150,7 @@ function encryptIdentity(value: string): string {
 function authHeaders(credentials: Credentials, accept = 'application/json') {
   return {
     Authorization: `Bearer ${credentials.accessToken}`,
+    'xybot-authorization': credentials.accessToken,
     'x-user-uuid': encryptIdentity(credentials.userUuid),
     'x-organization-uuid': encryptIdentity(credentials.organizationUuid),
     'Content-Type': 'application/json; charset=utf-8',
@@ -189,7 +193,7 @@ type WorkosEnvelope<T> = {
 ### 请求
 
 ```http
-POST /api/agent/v2/conversations/create
+POST /api/workos-agent-server/v2/conversations/create
 Accept: application/json
 Content-Type: application/json; charset=utf-8
 ```
@@ -221,7 +225,7 @@ Content-Type: application/json; charset=utf-8
 ### 7.1 先建立 Conversation 级 SSE 订阅
 
 ```http
-GET /api/agent/v2/conversations/{conversationUuid}/events/messages/subscribe
+GET /api/workos-agent-server/v2/conversations/{conversationUuid}/events/messages/subscribe
 Accept: text/event-stream
 Cache-Control: no-cache
 ```
@@ -237,7 +241,7 @@ Cache-Control: no-cache
 ### 7.2 再提交消息
 
 ```http
-POST /api/agent/v2/conversations/{conversationUuid}/queue/submit
+POST /api/workos-agent-server/v2/conversations/{conversationUuid}/queue/submit
 Accept: application/json
 Content-Type: application/json; charset=utf-8
 ```
@@ -434,7 +438,7 @@ data: {"runId":"run_xxx"}
 下面的骨架覆盖建立订阅、提交消息、按 `runId` 过滤、UTF-8 流式解码和停止。`consumeBusinessEvent` 需要按上一节实现正文 part 聚合。
 
 ```ts
-const API_BASE = 'https://power-api.yingdao.com';
+const API_BASE = 'https://workos-api.yingdao.com';
 
 type ExecuteInput = {
   content: string;
@@ -504,7 +508,7 @@ export async function executeWorkosWebStream(
 
   try {
     const subscription = await fetch(
-      `${API_BASE}/api/agent/v2/conversations/${encodedConversation}/events/messages/subscribe`,
+      `${API_BASE}/api/workos-agent-server/v2/conversations/${encodedConversation}/events/messages/subscribe`,
       {
         method: 'GET',
         headers: {
@@ -532,7 +536,7 @@ export async function executeWorkosWebStream(
       })),
     ];
     const submitted = await fetch(
-      `${API_BASE}/api/agent/v2/conversations/${encodedConversation}/queue/submit`,
+      `${API_BASE}/api/workos-agent-server/v2/conversations/${encodedConversation}/queue/submit`,
       {
         method: 'POST',
         headers: authHeaders(credentials),
@@ -620,7 +624,7 @@ Accept: */*
 Content-Type: application/json
 ```
 
-注意：这个网页端内部路径仍是 `/v1/`，它与对话的 `/api/agent/v2` 版本不是一回事。
+此处记录的是旧工作台的附件申请路径，新 WorkOS 页面尚未核验附件接口。它与对话的 `/api/workos-agent-server/v2` 路径分开处理。
 
 ```json
 {
@@ -662,6 +666,8 @@ https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com
 
 ## 11. A2UI 中断表单（可选）
 
+以下路径已随 v2 基础路径更新，但新工作台的表单回复尚未实测。
+
 如果 Agent 使用提问工具，SSE 中可能出现：
 
 ```json
@@ -679,7 +685,7 @@ https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com
 回复表单：
 
 ```http
-POST /api/agent/v2/conversations/{conversationUuid}/interrupt/{requestId}/reply
+POST /api/workos-agent-server/v2/conversations/{conversationUuid}/interrupt/{requestId}/reply
 Content-Type: application/json
 ```
 
@@ -693,7 +699,7 @@ Content-Type: application/json
 拒绝或跳过：
 
 ```http
-POST /api/agent/v2/conversations/{conversationUuid}/interrupt/{requestId}/reject
+POST /api/workos-agent-server/v2/conversations/{conversationUuid}/interrupt/{requestId}/reject
 Content-Type: application/json
 
 {}
@@ -776,7 +782,7 @@ idle
 
 | 项目 | 网页端内部 v2 | 官方公开 v1 |
 | --- | --- | --- |
-| 创建会话 | `POST /api/agent/v2/conversations/create` | `POST /oapi/agent/v1/agents/{agentUuid}/conversations` |
+| 创建会话 | `POST /api/workos-agent-server/v2/conversations/create` | `POST /oapi/agent/v1/agents/{agentUuid}/conversations` |
 | 流式执行 | 先 GET subscribe，再 POST queue/submit | 单次 POST `execute/stream` |
 | 认证 | 登录 Token + 两个 RSA 身份 Header | `AP_...` API Token |
 | 本轮绑定 | `queue/submit` 返回 `runId` | 当前项目实测多轮存在旧完成事件问题 |

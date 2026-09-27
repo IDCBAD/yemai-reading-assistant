@@ -35,6 +35,7 @@ import type {
 } from '../services/workosSse';
 import {
   hasWorkosRemoteTargetChanged,
+  WORKOS_INTERNAL_V2_BASE_URL,
   WorkosApiError,
   type WorkosInterruptAnswers,
 } from '../services/workosTransport';
@@ -1664,6 +1665,7 @@ export default function App() {
       currentConversation?.remoteAgentUuid,
       transport.kind,
       connection.agentUuid,
+      currentConversation?.remoteApiBase,
     );
     const earlierMessages = currentConversation?.messages.filter(
       (message) => message.id !== userMessage.id && message.id !== messageId,
@@ -1744,6 +1746,7 @@ export default function App() {
           remoteUuid,
           remoteTransport: transport.kind,
           remoteAgentUuid: connection.agentUuid,
+          remoteApiBase: transport.kind === 'internal-v2' ? WORKOS_INTERNAL_V2_BASE_URL : undefined,
         }));
       }
       updateMessage(conversationId, messageId, { stage: 'waiting-first-token' });

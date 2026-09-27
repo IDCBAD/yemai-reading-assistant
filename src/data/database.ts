@@ -20,6 +20,7 @@ export interface ConversationRow {
   remoteUuid?: string;
   remoteTransport?: WorkosTransportKind;
   remoteAgentUuid?: string;
+  remoteApiBase?: string;
   pendingBranchContext?: string;
   title: string;
   subtitle: string;

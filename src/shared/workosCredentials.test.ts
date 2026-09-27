@@ -36,6 +36,10 @@ describe('readWorkosLoginCredentials', () => {
       ok: false,
       error: '当前页面不是影刀 AI WorkOS。',
     });
+    expect(readWorkosLoginCredentials('https://aipower.yingdao.com', getItem)).toEqual({
+      ok: false,
+      error: '当前页面不是影刀 AI WorkOS。',
+    });
     expect(getItem).not.toHaveBeenCalled();
   });
 
