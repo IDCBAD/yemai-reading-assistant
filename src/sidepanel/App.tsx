@@ -827,6 +827,7 @@ export default function App() {
       status: 'stopped',
       stage: undefined,
       errorMessage: undefined,
+      runFinishedAt: Date.now(),
     });
     settleMessageActivities(conversationId, messageId, 'stopped');
     requestCoordinatorRef.current?.stop(conversationId);
@@ -876,6 +877,7 @@ export default function App() {
       });
       return { ...conversation, draftContextItems: nextItems };
     });
+    setComposerFocusRequest((request) => request + 1);
   }, [activeConversation.id, updateConversation]);
 
   const startSmartSelection = useCallback(async () => {
@@ -1546,6 +1548,8 @@ export default function App() {
       status: 'running',
       stage: needsPageRead ? 'reading-page' : 'waiting-first-token',
       errorMessage: undefined,
+      runStartedAt: Date.now(),
+      runFinishedAt: undefined,
     });
     let receivedText = false;
     let receivedArtifact = false;
@@ -1784,6 +1788,7 @@ export default function App() {
         status: 'complete',
         stage: undefined,
         errorMessage: undefined,
+        runFinishedAt: Date.now(),
       });
       settleMessageActivities(conversationId, messageId, 'completed');
       setConnectionIssue(null);
@@ -1794,6 +1799,7 @@ export default function App() {
         status: 'failed',
         stage: undefined,
         errorMessage: message,
+        runFinishedAt: Date.now(),
       });
       settleMessageActivities(conversationId, messageId, 'failed');
       setConnectionIssue(message);
@@ -2061,6 +2067,8 @@ export default function App() {
     updateMessage(activeConversation.id, message.id, {
       content: '',
       respondedAt: undefined,
+      runStartedAt: undefined,
+      runFinishedAt: undefined,
       status: 'queued',
       stage: 'queued',
       errorMessage: undefined,
@@ -2645,6 +2653,7 @@ export default function App() {
                 ? conversation
                 : { ...conversation, draftContextItems: [...conversation.draftContextItems, selectionContextItem(quote)] };
             });
+            setComposerFocusRequest((request) => request + 1);
           }}
           onResolveDecision={(message, decisionId, action, answers) => {
             void resolveAgentDecision(activeConversation.id, message.id, decisionId, action, answers);

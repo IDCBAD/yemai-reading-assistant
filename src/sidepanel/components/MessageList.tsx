@@ -1,4 +1,4 @@
-import { memo, lazy, Suspense, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { memo, lazy, Suspense, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -20,6 +20,11 @@ import { parsePageOverview } from '../pageOverview';
 import { messageDecisionInteractions } from '../agentDecision';
 import { deriveAgentRunSummary, deriveMessageRunNote } from '../agentQueue';
 import { collectionDeliveryState } from '../collectionConversation';
+import { formatRunDuration } from '../runDuration';
+import { canTranslateLocally, translateLocally } from '../localTranslator';
+import { DoubleCtrlShortcut } from '../doubleCtrlShortcut';
+import { describeCodeBlock } from '../codeBlockLanguage';
+import { translationContextAroundSelection, type TranslationContext } from '../translationContext';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
@@ -88,6 +93,19 @@ const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
 interface AssistantSelectionAction {
   messageId: string;
   text: string;
+  context: TranslationContext | null;
+  left: number;
+  top: number;
+}
+
+interface SelectionTranslation {
+  source: string;
+  context: TranslationContext | null;
+  result: string;
+  sentenceResult: string;
+  status: 'loading' | 'ready' | 'error';
+  sentenceStatus: 'idle' | 'loading' | 'ready' | 'error';
+  progress: number | null;
   left: number;
   top: number;
 }
@@ -95,6 +113,31 @@ interface AssistantSelectionAction {
 function selectionInsideMessage(selection: Selection, container: HTMLElement) {
   if (!selection.rangeCount || selection.isCollapsed) return false;
   return container.contains(selection.getRangeAt(0).commonAncestorContainer);
+}
+
+function SpeakerIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 8v4h3l3.5 2.7V5.3L6 8H3Z" />
+      <path d="M12.5 7a4 4 0 0 1 0 6" />
+      <path d="M14.5 4.8a7 7 0 0 1 0 10.4" />
+    </svg>
+  );
+}
+
+function selectedSentence(selection: Selection, selectedText: string): TranslationContext | null {
+  const range = selection.getRangeAt(0);
+  const parent = range.startContainer.nodeType === Node.ELEMENT_NODE
+    ? range.startContainer as Element
+    : range.startContainer.parentElement;
+  const block = parent?.closest('p, li, blockquote, pre');
+  if (!block || !block.contains(range.endContainer)) return null;
+  const content = block.textContent ?? '';
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(block);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const offset = prefix.toString().length;
+  return translationContextAroundSelection(content, offset, selectedText, range.toString().length, block.matches('pre'));
 }
 
 function MessageTime({
@@ -119,23 +162,91 @@ function MessageTime({
   );
 }
 
-function CodeBlock({ children }: { children: string }) {
-  const [copied, setCopied] = useState(false);
+function useCopyFeedback() {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const timerRef = useRef<number | null>(null);
 
-  const copy = async () => {
-    await navigator.clipboard.writeText(children);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+  }, []);
+
+  const copy = async (value: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setState('copied');
+    } catch {
+      setState('failed');
+    }
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      setState('idle');
+      timerRef.current = null;
+    }, 1600);
   };
 
+  return { state, copy };
+}
+
+function MarkdownTable({ children, source }: { children: ReactNode; source: string }) {
+  const { state, copy } = useCopyFeedback();
+  const tableRef = useRef<HTMLTableElement>(null);
+  const feedback = state === 'copied' ? '已复制表格' : state === 'failed' ? '复制失败，请重试' : '复制表格';
+
   return (
-    <div className="code-block">
-      <button className="code-copy pressable" type="button" onClick={copy} aria-label="复制代码">
-        <KoboyoIcon name={copied ? 'solid-checkmark' : 'copy'} size={13} />
-        {copied ? '已复制' : '复制'}
-      </button>
+    <div className="markdown-table-shell">
+      <div className="markdown-table-scroll" role="region" aria-label="回答表格，可横向滚动" tabIndex={0}>
+        <table ref={tableRef}>{children}</table>
+      </div>
+      <IconTooltipButton
+        className="markdown-table-copy pressable"
+        type="button"
+        onClick={() => void copy(source || tableRef.current?.innerText || '')}
+        aria-label={feedback}
+        tooltip={feedback}
+      >
+        <KoboyoIcon name={state === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
+      </IconTooltipButton>
+    </div>
+  );
+}
+
+function CodeBlock({ children, language, streaming }: { children: string; language?: string; streaming: boolean }) {
+  const { state, copy } = useCopyFeedback();
+  const format = useMemo(() => describeCodeBlock(language, children), [language, children]);
+  const [highlighted, setHighlighted] = useState<{ source: string; language: string; nodes: ReactNode } | null>(null);
+
+  useEffect(() => {
+    const codeLanguage = format.language;
+    if (streaming || !codeLanguage || children.length > 20_000) return;
+    let active = true;
+    void import('../codeHighlight').then(({ highlightCode }) => {
+      if (active) setHighlighted({ source: children, language: codeLanguage, nodes: highlightCode(children, codeLanguage) });
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [children, format.language, streaming]);
+
+  const code = !streaming && highlighted?.source === children && highlighted.language === format.language
+    ? highlighted.nodes
+    : children;
+  const feedback = state === 'copied' ? '已复制内容' : state === 'failed' ? '复制失败，请重试' : '复制内容';
+
+  return (
+    <div className="code-block" data-tone={format.tone}>
+      <div className="code-block__header">
+        <span className="code-block__language">{format.label}</span>
+        <IconTooltipButton
+          className="code-copy pressable"
+          type="button"
+          onClick={() => void copy(children)}
+          aria-label={feedback}
+          tooltip={feedback}
+        >
+          <KoboyoIcon name={state === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
+        </IconTooltipButton>
+      </div>
       <pre>
-        <code>{children}</code>
+        <code>{code}</code>
       </pre>
     </div>
   );
@@ -211,6 +322,14 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
 // Keep Markdown parsing independent of navigation, selection and action feedback.
 const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming }: { content: string; streaming: boolean }) {
   const components = useMemo<Components>(() => ({
+    table({ children, node }) {
+      const start = node?.position?.start.offset;
+      const end = node?.position?.end.offset;
+      const source = typeof start === 'number' && typeof end === 'number'
+        ? content.slice(start, end)
+        : '';
+      return <MarkdownTable source={source}>{children}</MarkdownTable>;
+    },
     pre({ children }) {
       const child = isValidElement<{ children?: unknown; className?: string }>(children) ? children : null;
       const value = String(child?.props.children ?? '').replace(/\n$/, '');
@@ -218,12 +337,12 @@ const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming }
       if (language === 'mermaid' && !streaming) {
         return <MermaidDiagram source={value} />;
       }
-      return <CodeBlock>{value}</CodeBlock>;
+      return <CodeBlock language={language} streaming={streaming}>{value}</CodeBlock>;
     },
     code({ children, className }) {
       return <code className={className ?? 'inline-code'}>{children}</code>;
     },
-  }), [streaming]);
+  }), [content, streaming]);
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
       {content}
@@ -261,6 +380,7 @@ function AssistantMessage({
   const bookmarkConfirmationTimerRef = useRef<number | null>(null);
   const runNote = deriveMessageRunNote(message);
   const runSummary = useMemo(() => deriveAgentRunSummary([message]), [message]);
+  const runDuration = formatRunDuration(message.runStartedAt, message.runFinishedAt);
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
     && message.status !== 'streaming'
@@ -289,7 +409,7 @@ function AssistantMessage({
     && collectionDeliveryState(message) === 'received'
     && (message.status === 'failed' || message.status === 'stopped'));
   const actionsAvailable = Boolean(message.content || hasArtifacts) && message.status !== 'streaming' && !uncertainCollectionSend;
-  const footerAvailable = actionsAvailable || (message.status === 'failed' && !uncertainCollectionSend);
+  const footerAvailable = actionsAvailable || (message.status === 'failed' && !uncertainCollectionSend) || Boolean(runDuration);
 
   useEffect(() => () => {
     if (bookmarkConfirmationTimerRef.current !== null) {
@@ -348,7 +468,7 @@ function AssistantMessage({
           data-assistant-selectable="true"
         >
           <Suspense fallback={runSummary ? <div className="agent-run-status" role="status">{runSummary.label}</div> : null}>
-            <AgentRunStatus summary={runSummary} />
+            <AgentRunStatus summary={runSummary} startedAt={message.runStartedAt} />
           </Suspense>
           {!message.content && interactions.length === 0 && runNote && runNote.kind !== 'running' && !uncertainCollectionSend && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
@@ -446,6 +566,11 @@ function AssistantMessage({
                 label="Agent 回答于"
                 className="message-time--assistant"
               />
+            )}
+            {runDuration && (
+              <span className="message-time message-run-duration" aria-label={`本轮${message.status === 'complete' ? '用时' : '已运行'} ${runDuration}`}>
+                {message.status === 'complete' ? '用时' : '已运行'} {runDuration}
+              </span>
             )}
           </div>
         )}
@@ -870,6 +995,11 @@ export function MessageList({
   const previousMessageCountRef = useRef(messages.length);
   const conversationRailItemsRef = useRef<ConversationPreviewRailItem[]>([]);
   const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
+  const [selectionTranslation, setSelectionTranslation] = useState<SelectionTranslation | null>(null);
+  const [translationCopyState, setTranslationCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const translationPanelRef = useRef<HTMLDivElement>(null);
+  const translationRequestRef = useRef(0);
+  const doubleCtrlShortcutRef = useRef(new DoubleCtrlShortcut());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showConversationRail, setShowConversationRail] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState('');
@@ -1071,7 +1201,7 @@ export function MessageList({
           return;
         }
         const rect = selection.getRangeAt(0).getBoundingClientRect();
-        const toolbarWidth = 184;
+        const toolbarWidth = canTranslateLocally(text) ? 260 : 184;
         const toolbarHeight = 44;
         const toolbarTop = rect.top >= toolbarHeight + 16
           ? rect.top - toolbarHeight - 8
@@ -1079,12 +1209,16 @@ export function MessageList({
         setSelectionAction({
           messageId: article.dataset.assistantMessageId ?? '',
           text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
+          context: canTranslateLocally(text) ? selectedSentence(selection, text) : null,
           left: Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)),
           top: Math.max(8, Math.min(toolbarTop, window.innerHeight - toolbarHeight - 8)),
         });
       });
     };
-    const clearSelectionAction = () => setSelectionAction(null);
+    const clearSelectionAction = () => {
+      setSelectionAction(null);
+      setSelectionTranslation(null);
+    };
     const clearCollapsedSelection = () => {
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed) setSelectionAction(null);
@@ -1092,8 +1226,9 @@ export function MessageList({
     const clearFromOutside = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node) || root.contains(target)) return;
-      if (target instanceof Element && target.closest('.assistant-selection-action')) return;
+      if (target instanceof Element && target.closest('.assistant-selection-action, .assistant-selection-translation')) return;
       setSelectionAction(null);
+      setSelectionTranslation(null);
     };
     root.addEventListener('pointerup', updateSelection);
     root.addEventListener('keyup', updateSelection);
@@ -1110,6 +1245,134 @@ export function MessageList({
       window.removeEventListener('resize', clearSelectionAction);
     };
   }, [messages]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectionTranslation(null);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, []);
+
+  useLayoutEffect(() => {
+    const panel = translationPanelRef.current;
+    if (!panel || !selectionTranslation) return;
+    const { width, height } = panel.getBoundingClientRect();
+    const below = selectionTranslation.top + 52;
+    const above = selectionTranslation.top - height - 8;
+    const top = below + height <= window.innerHeight - 12
+      ? below
+      : above >= 12
+        ? above
+        : Math.max(12, Math.min(below, window.innerHeight - height - 12));
+    panel.style.left = `${Math.max(12, Math.min(selectionTranslation.left, window.innerWidth - width - 12))}px`;
+    panel.style.top = `${top}px`;
+  }, [selectionTranslation]);
+
+  const translateSelection = () => {
+    if (!selectionAction) return;
+    const { text, context, left, top } = selectionAction;
+    const requestId = ++translationRequestRef.current;
+    setTranslationCopyState('idle');
+    setSelectionTranslation({
+      source: text,
+      context,
+      result: '',
+      sentenceResult: '',
+      status: 'loading',
+      sentenceStatus: context ? 'loading' : 'idle',
+      progress: null,
+      left,
+      top,
+    });
+    setSelectionAction(null);
+    window.getSelection()?.removeAllRanges();
+    // translateLocally creates the translator immediately, while the click still has user activation.
+    const result = translateLocally(text, (progress) => {
+      if (requestId === translationRequestRef.current) {
+        setSelectionTranslation((current) => current && { ...current, progress });
+      }
+    });
+    void result.then(async (translated) => {
+      if (requestId !== translationRequestRef.current) return;
+      setSelectionTranslation((current) => current && {
+        ...current,
+        result: translated,
+        status: 'ready',
+        progress: null,
+      });
+      if (!context) return;
+      try {
+        const translatedSentence = await translateLocally(context.text);
+        if (requestId === translationRequestRef.current) {
+          setSelectionTranslation((current) => current && {
+            ...current,
+            sentenceResult: translatedSentence,
+            sentenceStatus: 'ready',
+          });
+        }
+      } catch {
+        if (requestId === translationRequestRef.current) {
+          setSelectionTranslation((current) => current && { ...current, sentenceStatus: 'error' });
+        }
+      }
+    }).catch(() => {
+      if (requestId === translationRequestRef.current) {
+        setSelectionTranslation((current) => current && { ...current, status: 'error', progress: null });
+      }
+    });
+  };
+
+  useEffect(() => {
+    const selectionKey = (target: EventTarget | null) => {
+      if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return null;
+      if (!selectionAction || !canTranslateLocally(selectionAction.text)) return null;
+      return `${selectionAction.messageId}:${selectionAction.text}`;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (doubleCtrlShortcutRef.current.keyDown(event, selectionKey(event.target))) {
+        event.preventDefault();
+        translateSelection();
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      doubleCtrlShortcutRef.current.keyUp(event, selectionKey(event.target));
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    const resetOnBlur = () => doubleCtrlShortcutRef.current.reset();
+    window.addEventListener('blur', resetOnBlur);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', resetOnBlur);
+    };
+  }, [selectionAction]);
+
+  const readTranslationSource = () => {
+    if (!selectionTranslation || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(selectionTranslation.source);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.9;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const copyTranslation = async () => {
+    if (!selectionTranslation?.result) return;
+    const requestId = translationRequestRef.current;
+    try {
+      await navigator.clipboard.writeText(selectionTranslation.result);
+      if (requestId === translationRequestRef.current) setTranslationCopyState('copied');
+    } catch {
+      if (requestId === translationRequestRef.current) setTranslationCopyState('failed');
+    }
+  };
+
+  const translationIsTerm = Boolean(selectionTranslation
+    && selectionTranslation.source.length <= 36
+    && selectionTranslation.source.split(/\s+/u).length <= 4
+    && !/[.!?。！？]/u.test(selectionTranslation.source));
 
   useLayoutEffect(() => {
     const root = messagesRef.current;
@@ -1333,6 +1596,90 @@ export function MessageList({
             <KoboyoIcon name="quote" size={12} />
             引用追问
           </button>
+          {canTranslateLocally(selectionAction.text) && (
+            <button
+              className="assistant-selection-action__button pressable"
+              type="button"
+              onClick={translateSelection}
+              title="双击 Ctrl 也可翻译"
+            >
+              翻译
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+      {selectionTranslation && createPortal(
+        <div
+          ref={translationPanelRef}
+          className="assistant-selection-translation"
+          role="region"
+          aria-label="本地翻译"
+          data-kind={translationIsTerm ? 'term' : 'text'}
+          style={{ left: selectionTranslation.left, top: selectionTranslation.top }}
+        >
+          <div className="assistant-selection-translation__heading">
+            <span className="assistant-selection-translation__eyebrow">本地翻译 <span>英 → 中</span></span>
+            <button className="assistant-selection-translation__icon-button" type="button" aria-label="关闭翻译" onClick={() => setSelectionTranslation(null)}>
+              <KoboyoIcon name="cross" size={14} />
+            </button>
+          </div>
+          <div className={translationIsTerm ? 'assistant-selection-translation__headword' : 'assistant-selection-translation__passage'}>
+            {!translationIsTerm && <span className="assistant-selection-translation__label">原文</span>}
+            <div className="assistant-selection-translation__source-row">
+              {translationIsTerm
+                ? <strong className="assistant-selection-translation__source" lang="en">{selectionTranslation.source}</strong>
+                : <p className="assistant-selection-translation__source" lang="en">{selectionTranslation.source}</p>}
+              {typeof SpeechSynthesisUtterance !== 'undefined' && 'speechSynthesis' in window && (
+                <button className="assistant-selection-translation__icon-button" type="button" onClick={readTranslationSource} aria-label="朗读选中的英文" title="朗读英文">
+                  <SpeakerIcon />
+                </button>
+              )}
+            </div>
+          </div>
+          {selectionTranslation.status === 'loading' && (
+            <p className="assistant-selection-translation__status" role="status">{selectionTranslation.progress === null
+              ? '正在翻译…首次使用可能需要下载语言包'
+              : `正在下载语言包 ${selectionTranslation.progress}%`}</p>
+          )}
+          {selectionTranslation.status === 'error' && (
+            <p className="assistant-selection-translation__status" role="status">本地翻译暂不可用。请检查 Chrome 版本和语言包下载状态。</p>
+          )}
+          {selectionTranslation.status === 'ready' && (
+            <div className="assistant-selection-translation__result-row" aria-live="polite">
+              <div>
+                <span className="assistant-selection-translation__label">{translationIsTerm ? '词语译文' : '中文译文'}</span>
+                <p className="assistant-selection-translation__result">{selectionTranslation.result}</p>
+              </div>
+              <button
+                className="assistant-selection-translation__icon-button"
+                type="button"
+                onClick={() => void copyTranslation()}
+                aria-label={translationCopyState === 'copied' ? '已复制译文' : translationCopyState === 'failed' ? '复制失败，请重试' : '复制译文'}
+                title={translationCopyState === 'copied' ? '已复制' : translationCopyState === 'failed' ? '复制失败' : '复制译文'}
+              >
+                <KoboyoIcon name={translationCopyState === 'copied' ? 'solid-checkmark' : 'copy'} size={15} />
+              </button>
+            </div>
+          )}
+          {selectionTranslation.context && selectionTranslation.status !== 'error' && (
+            <div className="assistant-selection-translation__context">
+              <span className="assistant-selection-translation__label">所在句</span>
+              <p lang="en">
+                {selectionTranslation.context.text.slice(0, selectionTranslation.context.highlightStart)}
+                {selectionTranslation.context.highlightEnd > selectionTranslation.context.highlightStart && (
+                  <mark>{selectionTranslation.context.text.slice(
+                    selectionTranslation.context.highlightStart,
+                    selectionTranslation.context.highlightEnd,
+                  )}</mark>
+                )}
+                {selectionTranslation.context.text.slice(selectionTranslation.context.highlightEnd)}
+              </p>
+              {selectionTranslation.sentenceStatus === 'ready' && <p className="assistant-selection-translation__context-result" lang="zh">{selectionTranslation.sentenceResult}</p>}
+              {selectionTranslation.sentenceStatus === 'loading' && <p className="assistant-selection-translation__context-status" role="status">正在翻译整句…</p>}
+              {selectionTranslation.sentenceStatus === 'error' && <p className="assistant-selection-translation__context-status" role="status">整句暂时无法翻译</p>}
+            </div>
+          )}
         </div>,
         document.body,
       )}

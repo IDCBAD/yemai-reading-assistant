@@ -190,6 +190,10 @@ export interface ChatMessage {
   collectionSend?: true;
   createdAt: number;
   respondedAt?: number;
+  /** Local wall-clock time when this attempt began running, excluding queue wait. */
+  runStartedAt?: number;
+  /** Local wall-clock time when this attempt completed, failed, or was stopped. */
+  runFinishedAt?: number;
   status: MessageStatus;
   presentation?: MessagePresentation;
   stage?: MessageStage;
