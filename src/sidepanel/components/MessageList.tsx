@@ -1,7 +1,5 @@
-import { memo, lazy, Suspense, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { collectionMessagePrompt } from '../../data/collectionActions';
 import { buildAnswerContextMap, type AnswerContextSource } from '../answerContext';
 import { contextAttachments, contextItemsFromMessage, contextPage, contextSelections } from '../contextItems';
@@ -23,7 +21,7 @@ import { collectionDeliveryState } from '../collectionConversation';
 import { formatRunDuration } from '../runDuration';
 import { canTranslateLocally, translateLocally } from '../localTranslator';
 import { DoubleCtrlShortcut } from '../doubleCtrlShortcut';
-import { describeCodeBlock } from '../codeBlockLanguage';
+
 import { translationContextAroundSelection, type TranslationContext } from '../translationContext';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
@@ -34,7 +32,8 @@ import { YemaiMark } from './YemaiMark';
 import { AnswerContextTrace } from './AnswerContextTrace';
 import { AssistantArtifacts } from './AssistantArtifacts';
 import { ConversationPreviewRail, type ConversationPreviewRailItem } from './ConversationPreviewRail';
-import { MermaidDiagram } from './MermaidDiagram';
+import { AssistantMarkdown } from './AssistantMarkdown';
+import { ImagePreview } from './ImagePreview';
 import { AgentDecisionCard, AgentDecisionReceipt } from './AgentDecisionCard';
 import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 
@@ -162,96 +161,6 @@ function MessageTime({
   );
 }
 
-function useCopyFeedback() {
-  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const timerRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-  }, []);
-
-  const copy = async (value: string) => {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setState('copied');
-    } catch {
-      setState('failed');
-    }
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      setState('idle');
-      timerRef.current = null;
-    }, 1600);
-  };
-
-  return { state, copy };
-}
-
-function MarkdownTable({ children, source }: { children: ReactNode; source: string }) {
-  const { state, copy } = useCopyFeedback();
-  const tableRef = useRef<HTMLTableElement>(null);
-  const feedback = state === 'copied' ? '已复制表格' : state === 'failed' ? '复制失败，请重试' : '复制表格';
-
-  return (
-    <div className="markdown-table-shell">
-      <div className="markdown-table-scroll" role="region" aria-label="回答表格，可横向滚动" tabIndex={0}>
-        <table ref={tableRef}>{children}</table>
-      </div>
-      <IconTooltipButton
-        className="markdown-table-copy pressable"
-        type="button"
-        onClick={() => void copy(source || tableRef.current?.innerText || '')}
-        aria-label={feedback}
-        tooltip={feedback}
-      >
-        <KoboyoIcon name={state === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
-      </IconTooltipButton>
-    </div>
-  );
-}
-
-function CodeBlock({ children, language, streaming }: { children: string; language?: string; streaming: boolean }) {
-  const { state, copy } = useCopyFeedback();
-  const format = useMemo(() => describeCodeBlock(language, children), [language, children]);
-  const [highlighted, setHighlighted] = useState<{ source: string; language: string; nodes: ReactNode } | null>(null);
-
-  useEffect(() => {
-    const codeLanguage = format.language;
-    if (streaming || !codeLanguage || children.length > 20_000) return;
-    let active = true;
-    void import('../codeHighlight').then(({ highlightCode }) => {
-      if (active) setHighlighted({ source: children, language: codeLanguage, nodes: highlightCode(children, codeLanguage) });
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [children, format.language, streaming]);
-
-  const code = !streaming && highlighted?.source === children && highlighted.language === format.language
-    ? highlighted.nodes
-    : children;
-  const feedback = state === 'copied' ? '已复制内容' : state === 'failed' ? '复制失败，请重试' : '复制内容';
-
-  return (
-    <div className="code-block" data-tone={format.tone}>
-      <div className="code-block__header">
-        <span className="code-block__language">{format.label}</span>
-        <IconTooltipButton
-          className="code-copy pressable"
-          type="button"
-          onClick={() => void copy(children)}
-          aria-label={feedback}
-          tooltip={feedback}
-        >
-          <KoboyoIcon name={state === 'copied' ? 'solid-checkmark' : 'copy'} size={14} />
-        </IconTooltipButton>
-      </div>
-      <pre>
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
-
 const ACTIVITY_STATUS_COPY: Record<RunActivityStatus, string> = {
   pending: '等待运行',
   running: '正在运行',
@@ -318,37 +227,6 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
     </section>
   );
 }
-
-// Keep Markdown parsing independent of navigation, selection and action feedback.
-const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming }: { content: string; streaming: boolean }) {
-  const components = useMemo<Components>(() => ({
-    table({ children, node }) {
-      const start = node?.position?.start.offset;
-      const end = node?.position?.end.offset;
-      const source = typeof start === 'number' && typeof end === 'number'
-        ? content.slice(start, end)
-        : '';
-      return <MarkdownTable source={source}>{children}</MarkdownTable>;
-    },
-    pre({ children }) {
-      const child = isValidElement<{ children?: unknown; className?: string }>(children) ? children : null;
-      const value = String(child?.props.children ?? '').replace(/\n$/, '');
-      const language = child?.props.className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase();
-      if (language === 'mermaid' && !streaming) {
-        return <MermaidDiagram source={value} />;
-      }
-      return <CodeBlock language={language} streaming={streaming}>{value}</CodeBlock>;
-    },
-    code({ children, className }) {
-      return <code className={className ?? 'inline-code'}>{children}</code>;
-    },
-  }), [content, streaming]);
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-      {content}
-    </ReactMarkdown>
-  );
-});
 
 function AssistantMessage({
   message,
@@ -727,23 +605,6 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
     };
   }, [hoveredFile, hoveredImage]);
 
-  useEffect(() => {
-    if (!activeImage) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const closeWithKeyboard = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeImage();
-      }
-    };
-    window.addEventListener('keydown', closeWithKeyboard);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', closeWithKeyboard);
-    };
-  }, [activeImage]);
-
   const markImageFailed = (attachment: DraftAttachment) => {
     setFailedImageIds((current) => new Set(current).add(attachment.id));
     if (hoveredImage?.attachment.id === attachment.id) setHoveredImage(null);
@@ -845,37 +706,13 @@ function SentAttachments({ attachments }: { attachments: DraftAttachment[] }) {
         </div>,
         document.body,
       )}
-      {(activeImage?.previewUrl ?? activeImage?.url) && createPortal(
-        <div
-          className="image-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`图片预览：${activeImage.filename}`}
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) closeImage();
-          }}
-        >
-          <button
-            className="image-lightbox-close pressable"
-            type="button"
-            onClick={closeImage}
-            onKeyDown={(event) => {
-              if (event.key === 'Tab') event.preventDefault();
-            }}
-            aria-label="关闭图片预览"
-            autoFocus
-          >
-            <KoboyoIcon name="cross" size={15} />
-          </button>
-          <img
-            src={activeImage.previewUrl ?? activeImage.url}
-            alt={activeImage.filename}
-            decoding="async"
-            onError={() => markImageFailed(activeImage)}
-          />
-          <span className="image-lightbox-caption">{activeImage.filename}</span>
-        </div>,
-        document.body,
+      {activeImage && (activeImage.previewUrl ?? activeImage.url) && (
+        <ImagePreview
+          src={(activeImage.previewUrl ?? activeImage.url)!}
+          filename={activeImage.filename}
+          downloadUrl={activeImage.url ?? activeImage.previewUrl}
+          onClose={closeImage}
+        />
       )}
     </>
   );
