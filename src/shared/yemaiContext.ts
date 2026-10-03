@@ -37,7 +37,7 @@ export interface PageManifest {
 
 export interface ReferenceSource {
   source_id: string;
-  kind: 'current_page' | 'selected_text' | 'attachment' | 'external_link';
+  kind: 'current_page' | 'selected_text' | 'attachment' | 'external_link' | 'collection';
   title: string;
   url?: string;
   page_type?: YemaiPageType;
@@ -95,11 +95,38 @@ export interface SnapshotReference {
   };
 }
 
+export interface CollectionReference {
+  mode: 'collection';
+  delivery: 'introduce';
+  source: ReferenceSource;
+  collection: {
+    card_id: string;
+    kind: 'answer' | 'excerpt';
+    question?: string;
+    answer: string;
+    sources: Array<{ title: string; url: string; site?: string }>;
+  };
+}
+
+export interface LinkReference {
+  mode: 'link';
+  delivery: 'introduce';
+  source: ReferenceSource;
+}
+
+export interface BatchReadingTask {
+  strategy: 'per_source_then_synthesize';
+  source_ids: string[];
+  parallel: 'if_supported';
+}
+
 export type YemaiReference =
+  | LinkReference
   | ManifestReference
   | ReuseReference
   | SelectionReference
-  | SnapshotReference;
+  | SnapshotReference
+  | CollectionReference;
 
 export interface YemaiContextPolicy {
   prefer_existing_context: boolean;
@@ -116,6 +143,7 @@ export interface YemaiContextEnvelope {
     text: string;
   };
   references: YemaiReference[];
+  reading_task?: BatchReadingTask;
   policy: YemaiContextPolicy;
 }
 

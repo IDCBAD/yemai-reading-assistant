@@ -59,7 +59,9 @@ import type {
 } from '../services/localBackup';
 import type { LocalStorageUsage } from '../services/storageUsage';
 import type { ReadingCardRow } from '../data/database';
-import { collectionContextText, collectionMaterials, collectionMessagePrompt, collectionQuestionPrompt, MAX_COLLECTION_MATERIAL_CHARACTERS, MAX_COLLECTION_PROMPT_CHARACTERS } from '../data/collectionActions';
+import { collectionContextText, collectionMaterials, collectionMessagePrompt, MAX_COLLECTION_MATERIAL_CHARACTERS, MAX_COLLECTION_PROMPT_CHARACTERS } from '../data/collectionActions';
+import { addCollectionReferences, collectionReferenceIncluded, removeCollectionReference, restoreCollectionQuestionDraft, retainCollectionsAfterSend, snapshotIncludedCollections } from './collectionReferences';
+import { addReadingLinks, contextLinks, DEFAULT_BATCH_QUESTION } from './batchReading';
 import type { WorkspaceSearchResult } from '../search/workspaceSearch';
 import { clearArchivedConversations, deleteArchivedConversation } from '../services/workspaceHistory';
 import { MAX_OPEN_TABS } from '../services/workspaceState';
@@ -158,6 +160,8 @@ import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } fr
 
 type CommandPaletteModule = typeof import('./components/CommandPalette');
 type ReadingCardsSurface = typeof import('./components/ReadingCardsPanel').ReadingCardsPanel;
+const CollectionReferencePicker = lazy(() => import('./components/CollectionReferencePicker').then((module) => ({ default: module.CollectionReferencePicker })));
+const BatchReadingDialog = lazy(() => import('./components/BatchReadingDialog').then((module) => ({ default: module.BatchReadingDialog })));
 
 let commandPaletteModule: CommandPaletteModule | null = null;
 let commandPaletteLoad: Promise<CommandPaletteModule> | null = null;
@@ -287,7 +291,9 @@ function cloneMessagesForBranch(messages: ChatMessage[]) {
     references: message.references?.map((reference) => ({ ...reference, id: makeId('quote') })),
     attachments: message.attachments?.map((attachment) => ({ ...attachment, id: makeId('attachment') })),
     contextItems: message.contextItems ? cloneContextItems(message.contextItems, makeId) : undefined,
-    activities: message.activities?.map((activity) => ({ ...activity })),
+    activities: message.activities?.map((activity) => ({ ...activity,
+      ...(activity.subagent ? { subagent: { ...activity.subagent } } : {}),
+    })),
     interactions: messageDecisionInteractions(message).map(cloneAgentDecision),
     decision: undefined,
   }));
@@ -377,6 +383,9 @@ export default function App() {
   const [readingCardSelectionId, setReadingCardSelectionId] = useState<string | undefined>();
   const [readingCardFeedback, setReadingCardFeedback] = useState<ReadingCardFeedback | null>(null);
   const [searchSession, setSearchSession] = useState<WorkspaceSearchSession | null>(null);
+  const [collectionReferenceSession, setCollectionReferenceSession] = useState<(WorkspaceSearchSession & { conversationId: string }) | null>(null);
+  const [collectionReferencesPreparing, setCollectionReferencesPreparing] = useState(false);
+  const [batchReadingConversationId, setBatchReadingConversationId] = useState<string | null>(null);
   const [searchPreparing, setSearchPreparing] = useState(false);
   const [searchEntranceEnabled, setSearchEntranceEnabled] = useState(false);
   const [searchSuspended, setSearchSuspended] = useState(false);
@@ -414,6 +423,8 @@ export default function App() {
   const readingCardsPreparationRequestRef = useRef(0);
   const readingCardsLoadTaskRef = useRef<Promise<void> | null>(null);
   const readingCardsHydratedRef = useRef(false);
+  const readingCardsReadSucceededRef = useRef(false);
+  const collectionReferenceRequestRef = useRef(0);
   const readingCardWritesRef = useRef(new Set<string>());
   const readingCardFeedbackSequenceRef = useRef(0);
   const readingCardFeedbackTimerRef = useRef<number | null>(null);
@@ -578,6 +589,7 @@ export default function App() {
       .then((cards) => {
         if (!mounted) return;
         readingCardsRef.current = cards;
+        readingCardsReadSucceededRef.current = true;
         setReadingCards(cards);
         setReadingCardsIssue(undefined);
       })
@@ -716,7 +728,7 @@ export default function App() {
         ...conversation,
         messages: conversation.messages.map((message) => {
           if (message.id !== messageId) return message;
-          const nextActivity: RunActivity = { ...activity, kind: 'tool' };
+          const nextActivity: RunActivity = { ...activity, kind: activity.kind ?? 'tool' };
           const existing = message.activities ?? [];
           const index = existing.findIndex((item) => item.id === activity.id);
           return {
@@ -1066,6 +1078,65 @@ export default function App() {
     setSearchSession(null);
     setSearchSuspended(false);
   }, []);
+
+  const closeCollectionReferences = useCallback(() => {
+    collectionReferenceRequestRef.current += 1;
+    setCollectionReferencesPreparing(false);
+    setCollectionReferenceSession(null);
+  }, []);
+
+  useEffect(() => closeCollectionReferences(), [activeConversation.id, closeCollectionReferences]);
+  useEffect(() => setBatchReadingConversationId(null), [activeConversation.id]);
+
+  const openCollectionReferences = async () => {
+    if (!workspaceHydrated) return;
+    const requestId = ++collectionReferenceRequestRef.current;
+    const conversationId = activeConversation.id;
+    setCollectionReferencesPreparing(true);
+    try {
+      await readingCardsLoadTaskRef.current;
+      if (!readingCardsReadSucceededRef.current) {
+        const cards = await loadReadingCards();
+        readingCardsRef.current = cards;
+        readingCardsReadSucceededRef.current = true;
+        setReadingCards(cards);
+        setReadingCardsIssue(undefined);
+      }
+      // Load the surface before making the rest of the panel inert.
+      await import('./components/CollectionReferencePicker');
+      if (collectionReferenceRequestRef.current !== requestId) return;
+      closeCommandPalette();
+      setHistoryOpen(false);
+      setReadingCardsOpen(false);
+      setSettingsOpen(false);
+      setCollectionReferenceSession({ workspace: workspaceRef.current, readingCards: readingCardsRef.current,
+        initialScope: 'reading-cards', conversationId });
+    } catch {
+      if (collectionReferenceRequestRef.current === requestId) setConnectionIssue('无法读取本地收藏，请稍后重试引用收藏。');
+    } finally {
+      if (collectionReferenceRequestRef.current === requestId) setCollectionReferencesPreparing(false);
+    }
+  };
+
+  const addCollectionsToCurrentQuestion = (cardIds: string[]) => {
+    const targetId = collectionReferenceSession?.conversationId;
+    const target = workspaceRef.current.conversations.find((conversation) => conversation.id === targetId);
+    if (!target || activeConversation.id !== target.id) return '当前会话已切换，请重新打开收藏搜索。';
+    const cardsById = new Map(readingCardsRef.current.map((card) => [card.id, card]));
+    const cards = cardIds.map((id) => cardsById.get(id));
+    if (!cards.length || cards.some((card) => !card)) return '所选收藏已移除，请重新搜索。';
+    const incoming = collectionMaterials(cards.filter((card): card is ReadingCardRow => Boolean(card)), workspaceRef.current.conversations);
+    const merged = addCollectionReferences(target.draftCollectionMaterials, incoming);
+    if (collectionContextText(snapshotIncludedCollections(merged)).length > MAX_COLLECTION_MATERIAL_CHARACTERS) {
+      return `所选收藏合计超过 ${MAX_COLLECTION_MATERIAL_CHARACTERS} 字，请减少选择，或先收藏需要的回答片段。`;
+    }
+    updateConversation(target.id, (conversation) => ({ ...conversation, draftCollectionMaterials: merged,
+      collectionOrigin: isCollectionConversation(conversation) ? 'isolated' : 'reading',
+    }));
+    closeCollectionReferences();
+    setComposerFocusRequest((value) => value + 1);
+    return undefined;
+  };
 
   const closeReadingCards = useCallback(() => {
     readingCardsPreparationRequestRef.current += 1;
@@ -1627,13 +1698,27 @@ export default function App() {
       });
     }
 
-    const content = userMessage.collectionMaterials
+    const content = userMessage.collectionMaterials && userMessage.collectionMode !== 'question'
       ? collectionMessagePrompt(userMessage)
       : buildAgentContent({
           question: userMessage.content,
           quotes: messageSelections,
+          links: contextLinks(messageContextItems),
+          collectionMaterials: userMessage.collectionMaterials,
           ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
         });
+    const requestContent = prependBranchContext(continuationContext, content);
+    if ((userMessage.collectionMaterials?.length || contextLinks(messageContextItems).length) && requestContent.length > MAX_COLLECTION_PROMPT_CHARACTERS) {
+      const issue = `问题与引用材料合计超过 ${MAX_COLLECTION_PROMPT_CHARACTERS} 字，本次未发送。材料已放回输入区，请排除部分内容后重新提问。`;
+      updateConversation(conversationId, (conversation) => ({ ...conversation,
+        ...restoreCollectionQuestionDraft(conversation, userMessage),
+      }));
+      updateMessage(conversationId, messageId, { status: 'failed', stage: undefined, collectionSend: undefined,
+        errorMessage: issue, runFinishedAt: Date.now() });
+      settleMessageActivities(conversationId, messageId, 'failed');
+      setConnectionIssue(issue);
+      return;
+    }
     const consumeBranchContext = () => {
       if (!pendingBranchContext || branchContextConsumed) return;
       branchContextConsumed = true;
@@ -1657,7 +1742,7 @@ export default function App() {
       await transport.executeStream(
         remoteUuid,
         {
-          content: prependBranchContext(continuationContext, content),
+          content: requestContent,
           attachments: messageAttachments
             .filter((attachment) => attachment.status === 'ready' && attachment.url)
             .map((attachment) => ({
@@ -1924,12 +2009,13 @@ export default function App() {
       setConnectionIssue('附件仍在上传，请等待完成后再发送。');
       return false;
     }
-    const question = draftInput.trim();
-    const pendingCollectionMaterials = activeConversation.draftCollectionMaterials;
+    const readyLinks = contextLinks(draftContextItems);
+    const question = draftInput.trim() || (readyLinks.length ? DEFAULT_BATCH_QUESTION : '');
+    const pendingCollectionMaterials = snapshotIncludedCollections(activeConversation.draftCollectionMaterials);
     if (pendingCollectionMaterials?.length && !question) return false;
-    if (pendingCollectionMaterials?.length
-      && collectionQuestionPrompt(question, pendingCollectionMaterials).length > MAX_COLLECTION_PROMPT_CHARACTERS) {
-      setConnectionIssue(`问题和所选问答合计超过 ${MAX_COLLECTION_PROMPT_CHARACTERS} 字，请缩短问题或重新选择收藏。`);
+    if ((pendingCollectionMaterials?.length || readyLinks.length)
+      && buildAgentContent({ question, quotes: contextSelections(draftContextItems), links: readyLinks, collectionMaterials: pendingCollectionMaterials }).length > MAX_COLLECTION_PROMPT_CHARACTERS) {
+      setConnectionIssue(`问题和引用材料合计超过 ${MAX_COLLECTION_PROMPT_CHARACTERS} 字，请缩短问题或减少材料。`);
       return false;
     }
     const readyAttachments = contextAttachments(draftContextItems).filter((attachment) => attachment.url);
@@ -1986,9 +2072,9 @@ export default function App() {
     };
 
     updateConversation(conversationAtSend.id, (conversation) => {
-      const { draftCollectionMaterials: _sentMaterials, ...base } = conversation;
       return {
-        ...base,
+        ...conversation,
+        draftCollectionMaterials: retainCollectionsAfterSend(conversation.draftCollectionMaterials),
         title: conversation.isDraft && question
           ? question.slice(0, 18)
           : conversation.title,
@@ -2614,7 +2700,7 @@ export default function App() {
         <MessageList
           key={activeConversation.id}
           messages={activeConversation.messages}
-          pendingCollectionCount={activeConversation.draftCollectionMaterials?.length}
+          pendingCollectionCount={collectionOrigin ? activeConversation.draftCollectionMaterials?.length : undefined}
           savedMessageIds={savedMessageIds}
           navigationTarget={searchNavigationTarget?.conversationId === activeConversation.id
             ? searchNavigationTarget
@@ -2688,7 +2774,15 @@ export default function App() {
           setHistoryOpen((value) => !value);
         }}
         onInputChange={(value) => patchActiveConversation({ draftInput: value })}
-        onRemoveCollectionMaterials={() => patchActiveConversation({ draftCollectionMaterials: undefined })}
+        onOpenCollectionReferences={() => { void openCollectionReferences(); }}
+        onOpenBatchReading={() => setBatchReadingConversationId(activeConversation.id)}
+        collectionReferencesPreparing={collectionReferencesPreparing}
+        onCollectionIncludedChange={(id, included) => patchActiveConversation({
+          draftCollectionMaterials: collectionReferenceIncluded(activeConversation.draftCollectionMaterials, id, included),
+        })}
+        onRemoveCollectionMaterial={(id) => patchActiveConversation({
+          draftCollectionMaterials: removeCollectionReference(activeConversation.draftCollectionMaterials, id),
+        })}
         onContextIncludedChange={changeContextItemIncluded}
         onRetryAttachment={retryAttachment}
         onRemoveContextItem={(id) => {
@@ -2740,6 +2834,23 @@ export default function App() {
           />
         </Suspense>
       )}
+      {batchReadingConversationId === activeConversation.id && <Suspense fallback={null}>
+        <BatchReadingDialog existingCount={draftContextItems.filter((item) => item.kind === 'link').length}
+          onClose={() => setBatchReadingConversationId(null)} onAdd={(links) => {
+            const target = workspaceRef.current.conversations.find((conversation) => conversation.id === batchReadingConversationId);
+            if (!target) return '会话已关闭，请重新选择网页。';
+            const result = addReadingLinks(target.draftContextItems, links);
+            if (result.error) return result.error;
+            updateConversation(target.id, (conversation) => ({ ...conversation, draftContextItems: result.items }));
+            setBatchReadingConversationId(null); setComposerFocusRequest((value) => value + 1);
+            return undefined;
+          }} />
+      </Suspense>}
+      {collectionReferenceSession && <Suspense fallback={null}>
+        <CollectionReferencePicker key={collectionReferenceSession.conversationId} session={collectionReferenceSession}
+          existingMaterials={activeConversation.draftCollectionMaterials ?? []}
+          onAdd={addCollectionsToCurrentQuestion} onClose={closeCollectionReferences} />
+      </Suspense>}
       {searchSession && ReadyCommandPalette && (
         <ReadyCommandPalette
           session={searchSession}

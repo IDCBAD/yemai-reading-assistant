@@ -1,6 +1,7 @@
 import type { PageManifest, YemaiAccessHint, YemaiPageType } from '../shared/yemaiContext';
 import type { WorkosA2uiField, WorkosA2uiInterrupt } from '../services/workosSse';
 import type { WorkosTransportKind } from '../services/workosTransport';
+import type { SubagentSnapshot } from '../shared/agentActivity';
 
 export type PageStatus = 'not-read' | 'reading' | 'ready' | 'read' | 'changed';
 
@@ -150,11 +151,12 @@ export interface AgentRunSummary {
 
 export interface RunActivity {
   id: string;
-  kind: 'tool';
+  kind: 'tool' | 'subagent';
   title: string;
   status: RunActivityStatus;
   startedAt?: number;
   completedAt?: number;
+  subagent?: SubagentSnapshot;
 }
 
 export type AgentDecisionStatus = 'pending' | 'submitting' | 'submitted' | 'replied' | 'rejected' | 'failed';
@@ -174,6 +176,8 @@ export interface CollectionMaterial {
   answer: string;
   sources: Array<{ title: string; url: string; site?: string }>;
   savedAt: number;
+  /** Draft-only inclusion choice. Older materials default to included. */
+  included?: boolean;
 }
 
 export type AgentDecisionField = WorkosA2uiField;
@@ -238,7 +242,9 @@ export interface Conversation {
   messages: ChatMessage[];
   draftInput: string;
   draftContextItems: ContextItem[];
-  /** Selected cards waiting for the user's first question in a new conversation. */
+  /** Distinguish page-free collection chats from collections added to ordinary reading. */
+  collectionOrigin?: 'isolated' | 'reading';
+  /** Frozen collections waiting to be included in the next question. */
   draftCollectionMaterials?: CollectionMaterial[];
 }
 

@@ -188,9 +188,15 @@ function recoverContextItem(item: ContextItem): ContextItem {
 function isActivity(value: unknown): value is RunActivity {
   return isRecord(value)
     && typeof value.id === 'string'
-    && value.kind === 'tool'
+    && (value.kind === 'tool' || value.kind === 'subagent')
     && typeof value.title === 'string'
-    && typeof value.status === 'string';
+    && typeof value.status === 'string'
+    && (value.subagent === undefined || (isRecord(value.subagent)
+      && (value.subagent.sessionId === undefined || (typeof value.subagent.sessionId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value.subagent.sessionId)))
+      && (value.subagent.agentType === undefined || (typeof value.subagent.agentType === 'string' && value.subagent.agentType.length <= 80))
+      && (value.subagent.prompt === undefined || (typeof value.subagent.prompt === 'string' && value.subagent.prompt.length <= 12_000))
+      && (value.subagent.answer === undefined || (typeof value.subagent.answer === 'string' && value.subagent.answer.length <= 24_000))
+      && (value.subagent.truncated === undefined || typeof value.subagent.truncated === 'boolean')));
 }
 
 function isSafeStoredArtifactUrl(value: unknown) {
@@ -273,6 +279,7 @@ function isCollectionMaterial(value: unknown) {
     && (value.question === undefined || typeof value.question === 'string')
     && typeof value.answer === 'string'
     && typeof value.savedAt === 'number'
+    && (value.included === undefined || typeof value.included === 'boolean')
     && Array.isArray(value.sources)
     && value.sources.every((source) => isRecord(source)
       && typeof source.title === 'string'
@@ -332,6 +339,7 @@ function isConversationBase(value: unknown): value is UnknownRecord {
     && Array.isArray(value.messages)
     && value.messages.every(isMessage)
     && typeof value.draftInput === 'string'
+    && (value.collectionOrigin === undefined || value.collectionOrigin === 'isolated' || value.collectionOrigin === 'reading')
     && (value.draftCollectionMaterials === undefined || (Array.isArray(value.draftCollectionMaterials)
       && value.draftCollectionMaterials.every(isCollectionMaterial)));
 }

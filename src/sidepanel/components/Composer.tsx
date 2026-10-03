@@ -30,7 +30,11 @@ interface ComposerProps {
   onNewConversation: () => void;
   onToggleHistory: () => void;
   onInputChange: (value: string) => void;
-  onRemoveCollectionMaterials?: () => void;
+  onOpenCollectionReferences?: () => void;
+  onOpenBatchReading?: () => void;
+  collectionReferencesPreparing?: boolean;
+  onCollectionIncludedChange?: (id: string, included: boolean) => void;
+  onRemoveCollectionMaterial?: (id: string) => void;
   onContextIncludedChange: (id: string, included: boolean) => void;
   onRemoveContextItem: (id: string) => void;
   onRetryAttachment: (id: string) => void;
@@ -69,7 +73,11 @@ export function Composer({
   onNewConversation,
   onToggleHistory,
   onInputChange,
-  onRemoveCollectionMaterials,
+  onOpenCollectionReferences,
+  onOpenBatchReading,
+  collectionReferencesPreparing,
+  onCollectionIncludedChange,
+  onRemoveCollectionMaterial,
   onContextIncludedChange,
   onRemoveContextItem,
   onRetryAttachment,
@@ -120,9 +128,12 @@ export function Composer({
   const attachments = contextItems
     .filter((item): item is Extract<ContextItem, { kind: 'file' | 'image' }> => item.kind === 'file' || item.kind === 'image')
     .map((item) => item.attachment);
-  const hasContent = collectionMaterials?.length
-    ? localInput.trim().length > 0
+  const includedCollectionCount = collectionMaterials?.filter((material) => material.included !== false).length ?? 0;
+  const includedLinkCount = contextItems.filter((item) => item.kind === 'link' && item.included && item.status === 'ready').length;
+  const hasContent = includedCollectionCount
+    ? localInput.trim().length > 0 || includedLinkCount > 0
     : localInput.trim().length > 0 ||
+      includedLinkCount > 0 ||
       selections.length > 0 ||
       contextItems.some((item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'ready');
   const hasUploadingAttachments = contextItems.some(
@@ -354,17 +365,11 @@ export function Composer({
           </div>
         </div>
 
-        {Boolean(collectionMaterials?.length) && (
-          <div className="composer-collection-context">
-            <details>
-              <summary>已加入 {collectionMaterials!.length} 条收藏问答 · 提问时发送</summary>
-              <ul>{collectionMaterials!.map((material) => <li key={material.cardId}>{material.title}</li>)}</ul>
-            </details>
-            <button type="button" onClick={onRemoveCollectionMaterials} aria-label="移除已加入的收藏问答">移除</button>
-          </div>
-        )}
         <ContextWorkbench
           items={contextItems}
+          collectionMaterials={collectionMaterials}
+          onCollectionIncludedChange={onCollectionIncludedChange}
+          onRemoveCollectionMaterial={onRemoveCollectionMaterial}
           onIncludedChange={onContextIncludedChange}
           onRemove={onRemoveContextItem}
           onRetryAttachment={onRetryAttachment}
@@ -409,8 +414,9 @@ export function Composer({
             }}
             placeholder={waitingForDecision
               ? '请先完成上方选择…'
-              : collectionMaterials?.length
-                ? `针对这 ${collectionMaterials.length} 条收藏提问…`
+              : includedLinkCount ? '围绕这些网页，你想了解什么？'
+              : includedCollectionCount
+                ? `针对这 ${includedCollectionCount} 条收藏提问…`
               : selections.length > 0
                 ? `针对已引用的 ${selections.length} 段内容提问…`
                 : '继续追问，或粘贴图片提问…'}
@@ -458,6 +464,19 @@ export function Composer({
               >
                 <KoboyoIcon name="selection" size={17} />
               </IconTooltipButton>
+              {onOpenBatchReading && <IconTooltipButton className="composer-tool pressable" type="button"
+                aria-haspopup="dialog" aria-label="批量阅读" tooltip="批量阅读"
+                onClick={() => { inputBuffer.flush((latest) => inputCommitCallbackRef.current(latest)); onOpenBatchReading(); }}>
+                <KoboyoIcon name="batch-reading" size={17} />
+              </IconTooltipButton>}
+              {onOpenCollectionReferences && <IconTooltipButton className="composer-tool pressable" type="button"
+                disabled={collectionReferencesPreparing} aria-busy={collectionReferencesPreparing || undefined}
+                aria-haspopup="dialog" aria-label="引用收藏"
+                tooltip={collectionReferencesPreparing ? '正在准备收藏' : '引用收藏'}
+                onClick={() => {
+                  inputBuffer.flush((latest) => inputCommitCallbackRef.current(latest));
+                  onOpenCollectionReferences();
+                }}><KoboyoIcon name="bookmark-reference" size={17} /></IconTooltipButton>}
               {connectionState === 'missing' && (
                 <span className="composer-scope composer-scope--missing" role="status">
                   <i aria-hidden="true" />

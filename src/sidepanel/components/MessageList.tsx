@@ -39,6 +39,8 @@ import type { WorkosInterruptAnswers } from '../../services/workosTransport';
 
 const AgentRunStatus = lazy(() => import('./AgentRunStatus')
   .then((module) => ({ default: module.AgentRunStatus })));
+const SubagentDetailsDialog = lazy(() => import('./SubagentDetailsDialog')
+  .then((module) => ({ default: module.SubagentDetailsDialog })));
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -185,16 +187,22 @@ function ActivityStatusIcon({ status }: { status: RunActivityStatus }) {
 }
 
 function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expansionChoice, setExpansionChoice] = useState<boolean | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const visibleActivities = activities.filter((activity) => activity.title.trim().toLowerCase() !== 'question');
+  const children = visibleActivities.filter((activity) => activity.kind === 'subagent');
+  const expanded = expansionChoice ?? children.length > 0;
+  const selectedIndex = children.findIndex((activity) => activity.id === selectedId);
+  const selected = children[selectedIndex];
   if (visibleActivities.length === 0) return null;
   const activeCount = visibleActivities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
   const failedCount = visibleActivities.filter((activity) => activity.status === 'failed').length;
+  const objectLabel = children.length === visibleActivities.length ? '子任务' : '工具';
   const summary = activeCount > 0
-    ? `正在运行 ${visibleActivities.length} 个工具`
+    ? `正在运行 ${visibleActivities.length} 个${objectLabel}`
     : failedCount > 0
-      ? `${visibleActivities.length} 个工具中有 ${failedCount} 个失败`
-      : `运行了 ${visibleActivities.length} 个工具`;
+      ? `${visibleActivities.length} 个${objectLabel}中有 ${failedCount} 个失败`
+      : `运行了 ${visibleActivities.length} 个${objectLabel}`;
 
   return (
     <section className="run-activity" aria-label="Agent 运行过程">
@@ -202,16 +210,27 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
         className="run-activity-toggle pressable"
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setExpansionChoice(!expanded)}
       >
         <span className={`disclosure-caret${expanded ? ' is-open' : ''}`} aria-hidden="true" />
-        <KoboyoIcon name="file" size={13} />
+        <KoboyoIcon name={children.length ? 'bot' : 'file'} size={13} />
         <span>{summary}</span>
       </button>
       {expanded && (
         <div className="run-activity-list">
           {visibleActivities.map((activity) => {
             const duration = formatDuration(activity);
+            if (activity.kind === 'subagent') return (
+              <button type="button" key={activity.id} className={`subagent-card is-${activity.status}`}
+                aria-label={`查看子任务：${activity.title}`} aria-haspopup="dialog" onClick={() => setSelectedId(activity.id)}>
+                <span className="subagent-card-icon"><KoboyoIcon name="bot" size={17} /></span>
+                <span className="subagent-card-text"><strong>{activity.title}</strong>
+                  <small>{activity.subagent?.agentType ?? '子智能体'} · {ACTIVITY_STATUS_COPY[activity.status]}{duration ? ` · ${duration}` : ''}</small>
+                </span>
+                <span className="activity-status-icon"><ActivityStatusIcon status={activity.status} /></span>
+                <span aria-hidden="true" className="subagent-card-chevron">›</span>
+              </button>
+            );
             return (
               <div className={`run-activity-item is-${activity.status}`} key={activity.id}>
                 <span className="activity-status-icon" aria-label={ACTIVITY_STATUS_COPY[activity.status]}>
@@ -224,6 +243,10 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
           })}
         </div>
       )}
+      {selected && <Suspense fallback={null}><SubagentDetailsDialog activity={selected} index={selectedIndex} count={children.length}
+        onPrevious={() => setSelectedId(children[selectedIndex - 1]?.id ?? selectedId)}
+        onNext={() => setSelectedId(children[selectedIndex + 1]?.id ?? selectedId)} onClose={() => setSelectedId(null)} />
+      </Suspense>}
     </section>
   );
 }

@@ -33,6 +33,7 @@ export interface ConversationRow {
   draftInput: string;
   draftContextItems: ContextItem[];
   draftCollectionMaterials?: CollectionMaterial[];
+  collectionOrigin?: Conversation['collectionOrigin'];
 }
 
 export interface MessageRow extends Omit<ChatMessage, 'artifacts'> {

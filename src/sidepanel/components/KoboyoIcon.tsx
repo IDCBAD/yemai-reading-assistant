@@ -2,9 +2,11 @@ import type { CSSProperties } from 'react';
 
 export type KoboyoIconName =
   | 'archive'
+  | 'batch-reading'
   | 'bot'
   | 'bookmark'
   | 'bookmark-minus'
+  | 'bookmark-reference'
   | 'card-download'
   | 'copy'
   | 'cross'

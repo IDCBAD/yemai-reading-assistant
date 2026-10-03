@@ -1,4 +1,7 @@
 
+import { projectSubagent } from './subagentProjection';
+import type { SubagentSnapshot } from '../shared/agentActivity';
+
 export interface WorkosSseCallbacks {
   onText: (text: string) => void;
   onActivity?: (activity: WorkosToolActivity) => void;
@@ -25,6 +28,8 @@ export interface WorkosToolActivity {
   status: WorkosToolStatus;
   startedAt?: number;
   completedAt?: number;
+  kind?: 'subagent';
+  subagent?: SubagentSnapshot;
 }
 
 export type WorkosArtifactKind = 'image' | 'html' | 'markdown' | 'document' | 'archive' | 'file';
@@ -643,7 +648,10 @@ export class WorkosSseParser {
         ? part.time
         : undefined;
     const id = firstString(part, ['callID', 'callId', 'toolCallId']) ?? partId;
-    const title = this.readToolTitle(part, state);
+    const subagent = projectSubagent(part);
+    const input = state && isRecord(state.input) ? state.input : undefined;
+    const title = (subagent && input ? safeLabel(firstString(input, ['description'])) : undefined)
+      ?? this.readToolTitle(part, state);
     const rawStatus = state
       ? firstString(state, ['status', 'state'])
       : firstString(part, ['status', 'state']);
@@ -651,7 +659,8 @@ export class WorkosSseParser {
     const completedAt = normalizeTimestamp(time ? firstNumber(time, ['end', 'completedAt', 'endTime']) : undefined);
     const status = toolStatus(rawStatus, completedAt ? 'completed' : 'running');
     if (!this.isQuestionTool(part, state)) {
-      this.emitToolActivity({ id, title, status, startedAt, completedAt });
+      this.emitToolActivity({ id, title, status, startedAt, completedAt,
+        ...(subagent ? { kind: 'subagent', subagent } : {}) });
     }
 
     // WorkOS v2 delivers generated files inside a completed tool part rather
@@ -714,7 +723,13 @@ export class WorkosSseParser {
         : lowered.includes('before') || lowered.includes('start')
           ? 'running'
           : 'pending';
-    const status = toolStatus(firstString(properties, ['status', 'state']), fallback);
+    const eventState = isRecord(properties.state) ? properties.state : tool && isRecord(tool.state) ? tool.state : undefined;
+    const status = toolStatus(firstString(properties, ['status', 'state'])
+      ?? (eventState ? firstString(eventState, ['status']) : undefined), fallback);
+    const subagent = projectSubagent({ ...properties,
+      tool: firstString(properties, ['tool']) ?? (tool ? firstString(tool, ['tool', 'name']) : undefined),
+      state: eventState,
+    });
     const now = Date.now();
     this.emitToolActivity({
       id,
@@ -722,6 +737,7 @@ export class WorkosSseParser {
       status,
       startedAt: status === 'running' ? now : undefined,
       completedAt: status === 'completed' || status === 'failed' ? now : undefined,
+      ...(subagent ? { kind: 'subagent', subagent } : {}),
     });
   }
 
@@ -749,6 +765,7 @@ export class WorkosSseParser {
       title: update.title === '运行工具' && previous ? previous.title : update.title,
       startedAt: update.startedAt ?? previous?.startedAt,
       completedAt: update.completedAt ?? previous?.completedAt,
+      ...((previous?.subagent || update.subagent) ? { subagent: { ...previous?.subagent, ...update.subagent } } : {}),
     };
     this.toolActivities.set(next.id, next);
     this.callbacks.onActivity?.(next);

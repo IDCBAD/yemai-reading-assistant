@@ -68,6 +68,16 @@ function workspace(): WorkspaceState {
 }
 
 describe('workspace state v6', () => {
+  it('restores batch links and returned subagent details without credentials', () => {
+    const state = workspace();
+    state.conversations[0]!.draftContextItems.push({ id: 'context-link-1', kind: 'link', included: true, status: 'ready', createdAt: 10,
+      link: { title: '第一篇', url: 'https://example.com/a?q=1#part' } });
+    state.conversations[0]!.messages[0]!.activities = [{ id: 'task-1', kind: 'subagent', title: '阅读第一篇', status: 'completed',
+      subagent: { sessionId: 'ses_child1', agentType: 'general', prompt: '提炼要点', answer: '实际返回的结果' } }];
+    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(state, 100), 200);
+    expect(restored?.conversations[0]?.draftContextItems.at(-1)).toMatchObject({ kind: 'link', link: { url: 'https://example.com/a?q=1#part' } });
+    expect(restored?.conversations[0]?.messages[0]?.activities?.[0]).toMatchObject({ kind: 'subagent', subagent: { answer: '实际返回的结果' } });
+  });
   it('preserves conversations, remote UUIDs, drafts and open tabs', () => {
     const snapshot = createWorkspaceSnapshot(workspace(), 100);
     const restored = normalizeWorkspaceSnapshot(snapshot, 200);

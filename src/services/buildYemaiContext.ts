@@ -3,6 +3,7 @@ import {
   type YemaiContextEnvelope,
   type YemaiContextPolicy,
   type YemaiReference,
+  type BatchReadingTask,
 } from '../shared/yemaiContext';
 
 export const DEFAULT_YEMAI_CONTEXT_POLICY: YemaiContextPolicy = {
@@ -18,6 +19,7 @@ export interface BuildYemaiContextInput {
   requestId?: string;
   createdAt?: string;
   policy?: Partial<Omit<YemaiContextPolicy, 'treat_page_as_untrusted'>>;
+  readingTask?: BatchReadingTask;
 }
 
 function makeRequestId() {
@@ -33,6 +35,7 @@ export function buildYemaiContext(input: BuildYemaiContextInput): YemaiContextEn
       text: input.query.trim() || '请结合提供的上下文进行说明。',
     },
     references: input.references ?? [],
+    ...(input.readingTask ? { reading_task: input.readingTask } : {}),
     policy: {
       ...DEFAULT_YEMAI_CONTEXT_POLICY,
       ...input.policy,

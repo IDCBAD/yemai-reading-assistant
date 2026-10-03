@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
-import type { ContextItem } from '../types';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import type { CollectionMaterial, ContextItem } from '../types';
 import { attachmentFormatLabel, uploadChannelLabel } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 
+const CollectionMaterialDialog = lazy(() => import('./CollectionMaterialDialog').then((module) => ({ default: module.CollectionMaterialDialog })));
+
 interface ContextWorkbenchProps {
   items: ContextItem[];
   onIncludedChange: (id: string, included: boolean) => void;
   onRemove: (id: string) => void;
   onRetryAttachment: (id: string) => void;
+  collectionMaterials?: CollectionMaterial[];
+  onCollectionIncludedChange?: (id: string, included: boolean) => void;
+  onRemoveCollectionMaterial?: (id: string) => void;
 }
 
 const KIND_LABEL: Record<ContextItem['kind'], string> = {
@@ -186,29 +191,35 @@ function ContextToken({
   );
 }
 
-export function ContextWorkbench({ items, onIncludedChange, onRemove, onRetryAttachment }: ContextWorkbenchProps) {
+export function ContextWorkbench({ items, onIncludedChange, onRemove, onRetryAttachment,
+  collectionMaterials = [], onCollectionIncludedChange, onRemoveCollectionMaterial }: ContextWorkbenchProps) {
   const [expanded, setExpanded] = useState(false);
   const [inspectingId, setInspectingId] = useState<string | null>(null);
-  const includedCount = items.filter((item) => item.included).length;
+  const [inspectingCollectionId, setInspectingCollectionId] = useState<string | null>(null);
+  const inspectingCollection = collectionMaterials.find((material) => material.cardId === inspectingCollectionId);
+  const count = items.length + collectionMaterials.length;
+  const includedCount = items.filter((item) => item.included).length
+    + collectionMaterials.filter((material) => material.included !== false).length;
   const currentPage = items.find((item) => item.kind === 'page' && item.role === 'current');
   const latestOther = [...items].reverse().find((item) => item.id !== currentPage?.id);
-  const collapsedItems = [currentPage, latestOther].filter((item): item is ContextItem => Boolean(item));
-  const visibleItems = expanded ? items : collapsedItems;
+  const collapsedItems = [currentPage, collectionMaterials.length ? undefined : latestOther].filter((item): item is ContextItem => Boolean(item));
+  const visibleItems = expanded || count <= 2 ? items : collapsedItems;
+  const visibleCollections = expanded || count <= 2 ? collectionMaterials : collectionMaterials.slice(-1);
 
   useEffect(() => {
-    if (items.length <= 2) setExpanded(false);
+    if (count <= 2) setExpanded(false);
     if (inspectingId && !items.some((item) => item.id === inspectingId)) setInspectingId(null);
-  }, [inspectingId, items]);
+  }, [count, inspectingId, items]);
 
-  if (!items.length) return null;
+  if (!count) return null;
 
   return (
     <section className={`context-workbench${expanded ? ' is-expanded' : ''}`} aria-label="本次问题的上下文">
-      {items.length > 2 && (
+      {count > 2 && (
         <div className="context-workbench-header">
           <span>
             上下文
-            <b>{includedCount}/{items.length}</b>
+            <b>{includedCount}/{count}</b>
           </span>
           <button
             className="context-workbench-toggle pressable"
@@ -216,7 +227,7 @@ export function ContextWorkbench({ items, onIncludedChange, onRemove, onRetryAtt
             onClick={() => setExpanded((value) => !value)}
             aria-expanded={expanded}
           >
-            {expanded ? '收起' : `查看全部 ${items.length}`}
+            {expanded ? '收起' : `查看全部 ${count}`}
           </button>
         </div>
       )}
@@ -232,7 +243,29 @@ export function ContextWorkbench({ items, onIncludedChange, onRemove, onRetryAtt
             key={item.id}
           />
         ))}
+        {visibleCollections.map((material) => {
+          const included = material.included !== false;
+          return <div className={`context-token is-collection is-ready${included ? '' : ' is-excluded'}`} key={material.cardId}>
+            <span className="context-token-glyph"><KoboyoIcon name="archive" size={13} /></span>
+            <button className="context-token-main" type="button" onClick={() => setInspectingCollectionId(material.cardId)}
+              aria-label={`查看收藏引用：${material.title}`} aria-haspopup="dialog">
+              <span className="context-token-title"><small>收藏</small><strong>{material.title}</strong></span>
+            </button>
+            <span className="context-token-status is-ready" aria-label={included ? '已包含' : '已排除'} />
+            <IconTooltipButton className="context-token-action pressable" type="button"
+              onClick={() => onCollectionIncludedChange?.(material.cardId, !included)} aria-pressed={included}
+              aria-label={`${included ? '排除' : '包含'}：${material.title}`} tooltip={included ? '本次不引用' : '重新引用'}>
+              <KoboyoIcon name={included ? 'link' : 'link-off'} size={13} />
+            </IconTooltipButton>
+            <IconTooltipButton className="context-token-action context-token-remove pressable" type="button"
+              onClick={() => onRemoveCollectionMaterial?.(material.cardId)} aria-label={`删除：${material.title}`} tooltip="移除引用">
+              <KoboyoIcon name="cross" size={10} />
+            </IconTooltipButton>
+          </div>;
+        })}
       </div>
+      {inspectingCollection && <Suspense fallback={null}><CollectionMaterialDialog
+        material={inspectingCollection} onClose={() => setInspectingCollectionId(null)} /></Suspense>}
     </section>
   );
 }

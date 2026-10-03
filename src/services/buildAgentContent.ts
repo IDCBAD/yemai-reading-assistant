@@ -9,7 +9,8 @@ import type {
   SnapshotReference,
   YemaiReference,
 } from '../shared/yemaiContext';
-import type { PageContext, QuoteReference } from '../sidepanel/types';
+import type { CollectionMaterial, LinkContextItem, PageContext, QuoteReference } from '../sidepanel/types';
+import { safeReadingUrl } from '../sidepanel/batchReading';
 import { buildYemaiContext } from './buildYemaiContext';
 import type { CurrentPageDeliveryDecision, PreparedPageReference } from './contextDeliveryPolicy';
 import { renderYemaiContextMarkdown } from './renderYemaiContext';
@@ -135,6 +136,8 @@ function quoteReference(quote: QuoteReference, page?: PreparedPageReference): Se
 export interface BuildAgentContentInput {
   question: string;
   quotes: QuoteReference[];
+  collectionMaterials?: CollectionMaterial[];
+  links?: LinkContextItem[];
   page?: {
     prepared: PreparedPageReference;
     decision: CurrentPageDeliveryDecision;
@@ -145,13 +148,41 @@ export interface BuildAgentContentInput {
 
 export function buildAgentContent(input: BuildAgentContentInput) {
   const references: YemaiReference[] = [];
+  const links = input.links?.filter((item) => item.included && item.status === 'ready' && safeReadingUrl(item.link.url)) ?? [];
+  const linkReferences = links.map((item) => ({ mode: 'link' as const, delivery: 'introduce' as const, source: {
+    source_id: item.id, kind: 'external_link' as const, title: item.link.title,
+    url: item.link.url, access_hint: 'unknown' as const, captured_at: new Date(item.createdAt).toISOString(),
+  } }));
+  references.push(...linkReferences);
   if (input.page && input.page.decision.mode !== 'none') {
     references.push(pageReference(input.page.prepared, input.page.decision));
   }
   input.quotes.forEach((quote) => references.push(quoteReference(quote, input.page?.prepared)));
+  input.collectionMaterials?.filter((material) => material.included !== false).forEach((material) => {
+    references.push({
+      mode: 'collection',
+      delivery: 'introduce',
+      source: {
+        source_id: `collection-${material.cardId}`,
+        kind: 'collection',
+        title: material.title,
+        access_hint: 'local_document',
+        captured_at: new Date(material.savedAt).toISOString(),
+      },
+      collection: {
+        card_id: material.cardId,
+        kind: material.kind,
+        ...(material.question !== undefined ? { question: material.question } : {}),
+        answer: material.answer,
+        sources: material.sources.map((source) => ({ ...source })),
+      },
+    });
+  });
   return renderYemaiContextMarkdown(buildYemaiContext({
     query: input.question,
     references,
+    ...(linkReferences.length ? { readingTask: { strategy: 'per_source_then_synthesize' as const,
+      source_ids: linkReferences.map((reference) => reference.source.source_id), parallel: 'if_supported' as const } } : {}),
     requestId: input.requestId,
     createdAt: input.createdAt,
   }));

@@ -1,7 +1,8 @@
 import { contextItemsFromMessage } from './contextItems';
-import type { ChatMessage, DraftAttachment, PageContext, QuoteReference } from './types';
+import type { ChatMessage, CollectionMaterial, DraftAttachment, PageContext, QuoteReference } from './types';
 
 export type AnswerContextSource =
+  | { kind: 'collection'; id: string; material: CollectionMaterial }
   | {
       kind: 'page';
       id: string;
@@ -35,7 +36,7 @@ export type AnswerContextSource =
 export function getMessageContextSources(message: ChatMessage | undefined): AnswerContextSource[] {
   if (!message || message.role !== 'user') return [];
 
-  return contextItemsFromMessage(message).map((item): AnswerContextSource => {
+  const sources = contextItemsFromMessage(message).map((item): AnswerContextSource => {
     if (item.kind === 'page') {
       return {
         kind: 'page',
@@ -54,6 +55,8 @@ export function getMessageContextSources(message: ChatMessage | undefined): Answ
     }
     return { kind: 'link', id: item.id, title: item.link.title, url: item.link.url };
   });
+  message.collectionMaterials?.forEach((material) => sources.push({ kind: 'collection', id: `collection-${material.cardId}`, material }));
+  return sources;
 }
 
 /**

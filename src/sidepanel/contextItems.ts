@@ -85,7 +85,7 @@ export function syncCurrentPageContextItem(
   const current = items.find((item) => item.kind === 'page' && item.role === 'current');
   const nextPage = pageContextItem(
     page,
-    current?.kind === 'page' && current.page.url === page.url ? current.included : true,
+    current?.kind === 'page' && (current.page.url === page.url || items.some((item) => item.kind === 'link')) ? current.included : true,
     issue,
     {
       id: current?.id,
@@ -200,5 +200,5 @@ export function cloneContextItems(items: ContextItem[], makeId: (prefix: string)
 }
 
 export function retainContextAfterSend(items: ContextItem[]) {
-  return items.filter((item) => item.kind === 'page' || !item.included || item.status === 'failed');
+  return items.filter((item) => item.kind === 'page' || item.kind === 'link' || !item.included || item.status === 'failed');
 }

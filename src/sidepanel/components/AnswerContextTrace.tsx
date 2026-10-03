@@ -18,6 +18,7 @@ function sourceTitle(source: AnswerContextSource) {
   if (source.kind === 'page') return source.page.title || source.page.site || source.page.url;
   if (source.kind === 'quote') return source.quote.pageTitle || compactText(source.quote.text, 36);
   if (source.kind === 'attachment') return source.attachment.filename;
+  if (source.kind === 'collection') return source.material.title;
   return source.title;
 }
 
@@ -45,7 +46,7 @@ function ContextSourceIcon({ source }: { source: AnswerContextSource }) {
       </span>
     );
   }
-  if (source.kind === 'memory' || source.kind === 'link') {
+  if (source.kind === 'memory' || source.kind === 'link' || source.kind === 'collection') {
     return (
       <span className="answer-context-quote-icon" aria-hidden="true">
         <KoboyoIcon name={source.kind === 'link' ? 'link' : 'archive'} size={14} />
@@ -63,6 +64,12 @@ function ContextSourceIcon({ source }: { source: AnswerContextSource }) {
 }
 
 function ContextSourceRow({ source }: { source: AnswerContextSource }) {
+  if (source.kind === 'collection') return <div className="answer-context-source">
+    <ContextSourceIcon source={source} />
+    <span className="answer-context-source-copy"><strong>{source.material.title}</strong>
+      <small title={source.material.question}>收藏问答 · {source.material.question ? compactText(source.material.question) : '原始问题缺失（旧收藏）'}</small></span>
+    <span className="answer-context-source-status">已提供</span>
+  </div>;
   if (source.kind === 'page') {
     const detail = source.issue
       ? source.issue
