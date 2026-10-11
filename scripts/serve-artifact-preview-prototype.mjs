@@ -20,6 +20,8 @@ const fixtures = {
   'report.json': '{"项目":"阅读服务","交付数量":12,"状态":["已完成","待处理"]}',
   'broken.json': '{broken: true',
   'notes.txt': '交付说明\n\n文件可以直接在线查看，也可以保留原始文件下载。',
+  'client.py': '# 中文注释：只预览，不执行\nimport os\n\ndef greet(name: str) -> str:\n    return f"你好，{name}"\n\nprint(greet("页脉"))\nos.environ["YEMAI_PREVIEW_EXECUTED"] = "yes"\n# <script>window.__unsafeSourceRan = true</script>\n',
+  'long.py': '# ' + '长行测试'.repeat(80) + '\r\n\r\n' + Array.from({ length: 1800 }, (_, index) => `value_${index} = ${index}\r\n`).join(''),
 };
 for (const [name, contents] of Object.entries(fixtures)) await writeFile(`${directory}/${name}`, contents);
 await writeFile(`${directory}/prototype.html`, '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>页脉 · 产物预览原型</title></head><body><div id="root"></div><script type="module" src="/output/artifact-preview/prototype.tsx"></script></body></html>');
@@ -59,7 +61,7 @@ window.fetch = (input, init) => {
   }
   return originalFetch(input, init);
 };
-const artifacts = ['report.md','report.html','report.xlsx','report.csv','report.json','notes.txt','broken.json','expired.md','slow.md','report.pdf'].map((filename, index) => ({
+const artifacts = ['report.md','report.html','client.py','long.py','report.xlsx','report.csv','report.json','notes.txt','broken.json','expired.md','slow.md','report.pdf'].map((filename, index) => ({
   id: filename, kind: 'file', filename, url: 'https://preview.example.test/' + filename, status: 'available', size: 1600,
 }));
 artifacts.unshift({ id:'image', kind:'image', filename:'流程图.svg', url:'https://preview.example.test/diagram.svg', status:'available', size:12000 });

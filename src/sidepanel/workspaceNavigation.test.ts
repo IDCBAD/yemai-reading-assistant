@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Conversation, WorkspaceState } from './types';
-import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
+import { closeWorkspaceTab, openConversationInWorkspace, openNotificationConversation, selectWorkspaceTab } from './workspaceNavigation';
 
 const page = { title: '文章', site: 'example.com', url: 'https://example.com', status: 'read' as const };
 
@@ -30,6 +30,25 @@ function workspace(): WorkspaceState {
 }
 
 describe('workspace conversation navigation', () => {
+  it('opens notification results at capacity while keeping displaced conversation data', () => {
+    const current = workspace();
+    current.conversations[0]!.draftInput = '保留草稿';
+    const next = openNotificationConversation(current, 'three', 2, (conversationId) => ({ id: 'notification-tab', conversationId, openedAt: 3 }));
+    expect(next.openTabs).toHaveLength(2);
+    expect(next.openTabs.map((tab) => tab.conversationId)).toEqual(['three', 'two']);
+    expect(next.activeOpenTabId).toBe('notification-tab');
+    expect(next.conversations.find((conversation) => conversation.id === 'one')?.draftInput).toBe('保留草稿');
+  });
+
+  it('restores an archived notification target and leaves a deleted target unchanged', () => {
+    const current = workspace();
+    current.conversations[2]!.archivedAt = 2;
+    const next = openNotificationConversation(current, 'three', 10, (conversationId) => ({ id: 'notification-tab', conversationId, openedAt: 3 }));
+    expect(next.activeOpenTabId).toBe('notification-tab');
+    expect(next.conversations.find((conversation) => conversation.id === 'three')?.archivedAt).toBeUndefined();
+    expect(openNotificationConversation(current, 'deleted', 10, () => { throw new Error('missing target'); })).toBe(current);
+  });
+
   it('keeps each remote conversation identity stable across an A → B → A switch', () => {
     const current = workspace();
     current.conversations[0]!.remoteUuid = 'remote-a';

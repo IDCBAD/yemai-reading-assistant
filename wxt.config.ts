@@ -12,7 +12,7 @@ export default defineConfig({
       version: '0.6.1',
       version_name: diagnostic ? '0.6.1 DIAGNOSTIC' : development ? '0.6.1 DEV' : '0.6.1',
       minimum_chrome_version: '116',
-      permissions: ['sidePanel', 'storage', 'favicon'],
+      permissions: ['sidePanel', 'storage', 'favicon', 'notifications'],
       host_permissions: [
         'https://workos.yingdao.com/*',
         'https://power-api.yingdao.com/*',

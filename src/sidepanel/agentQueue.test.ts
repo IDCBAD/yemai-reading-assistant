@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { WORKOS_USER_STOP_REASON } from '../services/workosTransport';
 import {
   ConversationRequestCoordinator,
   deriveActiveConversationIds,
@@ -126,6 +127,109 @@ function deferred() {
 }
 
 describe('ConversationRequestCoordinator', () => {
+  it('retains the conversation lock across cleanup until a pending manual stop settles', async () => {
+    const remoteStop = deferred();
+    const started: string[] = [];
+    const coordinator = new ConversationRequestCoordinator<TestRequest>(async (request, signal) => {
+      started.push(request.messageId);
+      if (request.messageId !== 'm1') return;
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      await remoteStop.promise;
+    });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm1' });
+    coordinator.stop('c1', 'm1');
+    coordinator.clear();
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm2' });
+    expect(coordinator.stop('c1', 'stale-message')).toBe(false);
+    await Promise.resolve();
+    expect(started).toEqual(['m1']);
+    remoteStop.resolve();
+    await remoteStop.promise;
+    await Promise.resolve();
+    expect(started).toEqual(['m1', 'm2']);
+  });
+
+  it('does not release a replacement execution when an older cleared runner settles', async () => {
+    const oldRun = deferred();
+    const newRun = deferred();
+    let attempts = 0;
+    const started: string[] = [];
+    const coordinator = new ConversationRequestCoordinator<TestRequest>(async (request) => {
+      started.push(request.messageId);
+      attempts += 1;
+      if (attempts === 1) await oldRun.promise;
+      else if (attempts === 2) await newRun.promise;
+    });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'same-message' });
+    coordinator.clear();
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'same-message' });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'next-message' });
+    oldRun.resolve();
+    await oldRun.promise;
+    await Promise.resolve();
+    expect(started).toEqual(['same-message', 'same-message']);
+    newRun.resolve();
+    await newRun.promise;
+    await Promise.resolve();
+    expect(started).toEqual(['same-message', 'same-message', 'next-message']);
+  });
+
+  it('waits for remote stop settlement before starting another request and ignores repeat stops', async () => {
+    const remoteStop = deferred();
+    const started: string[] = [];
+    let stopCount = 0;
+    const coordinator = new ConversationRequestCoordinator<TestRequest>(async (request, signal) => {
+      started.push(request.messageId);
+      if (request.messageId !== 'm1') return;
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => {
+        expect(signal.reason).toBe(WORKOS_USER_STOP_REASON);
+        stopCount += 1;
+        resolve();
+      }, { once: true }));
+      await remoteStop.promise;
+    });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm1' });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm2' });
+    expect(coordinator.stop('c1')).toBe(true);
+    expect(coordinator.stop('c1')).toBe(false);
+    await Promise.resolve();
+    expect(started).toEqual(['m1']);
+    expect(stopCount).toBe(1);
+    remoteStop.resolve();
+    await remoteStop.promise;
+    await Promise.resolve();
+    expect(started).toEqual(['m1', 'm2']);
+  });
+
+  it('can discard one conversation queue after an unconfirmed remote stop', async () => {
+    const gate = deferred();
+    const started: string[] = [];
+    const coordinator = new ConversationRequestCoordinator<TestRequest>(async (request) => {
+      started.push(request.messageId);
+      if (request.messageId === 'm1') await gate.promise;
+    });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm1' });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm2' });
+    coordinator.enqueue({ conversationId: 'c2', messageId: 'm3' });
+    expect(coordinator.discardQueued('c1').map((request) => request.messageId)).toEqual(['m2']);
+    gate.resolve();
+    await gate.promise;
+    await Promise.resolve();
+    expect(started).toEqual(['m1', 'm3']);
+  });
+
+  it('keeps ordinary cleanup distinct from a user stop', () => {
+    let reason: unknown;
+    const coordinator = new ConversationRequestCoordinator<TestRequest>(async (_request, signal) => {
+      signal.addEventListener('abort', () => { reason = signal.reason; }, { once: true });
+      await new Promise<void>(() => undefined);
+    });
+    coordinator.enqueue({ conversationId: 'c1', messageId: 'm1' });
+    coordinator.clear();
+    expect(reason).not.toBe(WORKOS_USER_STOP_REASON);
+    expect(reason).toMatchObject({ name: 'AbortError' });
+  });
+
   it('runs requests sequentially within one conversation', async () => {
     const first = deferred();
     const second = deferred();

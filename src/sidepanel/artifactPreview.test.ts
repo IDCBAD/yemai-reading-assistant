@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { artifactPreviewKind, clampImageView, decodePreviewText, fitImageScale, formatPreviewJson, readPreviewBytes, safeArtifactUrl, zoomImageView } from './artifactPreview';
+import { artifactCodeLanguage, artifactPreviewKind, clampImageView, decodePreviewText, fitImageScale, formatPreviewJson, readPreviewBytes, safeArtifactUrl, zoomImageView } from './artifactPreview';
 
 describe('artifact preview boundaries', () => {
   it('only opens HTTPS URLs without embedded credentials', () => {
@@ -13,6 +13,18 @@ describe('artifact preview boundaries', () => {
       expect(artifactPreviewKind({ filename: `report.${extension}` })).toBeDefined();
     }
     for (const extension of ['pdf', 'docx', 'pptx', 'zip']) expect(artifactPreviewKind({ filename: `report.${extension}` })).toBeUndefined();
+  });
+  it('previews source files by extension even with generic download MIME types', () => {
+    for (const mime of [undefined, 'application/octet-stream', 'text/plain; charset=utf-8', 'text/x-python']) {
+      expect(artifactPreviewKind({ filename: 'CLIENT.PY', mime })).toBe('code');
+      expect(artifactCodeLanguage({ filename: 'CLIENT.PY' })).toBe('python');
+    }
+    for (const extension of ['js', 'ts', 'sh', 'sql', 'yaml']) {
+      expect(artifactPreviewKind({ filename: `source.${extension}` })).toBe('code');
+    }
+    expect(artifactPreviewKind({ filename: 'source.exe', mime: 'application/octet-stream' })).toBeUndefined();
+    expect(artifactPreviewKind({ filename: 'source.json' })).toBe('json');
+    expect(artifactPreviewKind({ filename: 'source.html' })).toBe('html');
   });
   it('rejects a streamed body that exceeds the limit without Content-Length', async () => {
     const response = new Response(new ReadableStream({ start(controller) {

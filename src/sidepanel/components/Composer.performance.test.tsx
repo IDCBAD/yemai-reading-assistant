@@ -17,7 +17,8 @@ describe('Composer tab switching feedback', () => {
         input=""
         focusRequestId={0}
         contextItems={[]}
-        activeConversationIds={new Set()}
+        activeConversationIds={new Set([secondConversation.id])}
+        unreadConversationIds={new Set([secondConversation.id])}
         runSummary={null}
         historyOpen={false}
         connectionState="configured"
@@ -43,16 +44,20 @@ describe('Composer tab switching feedback', () => {
 
     expect(html).toContain('class="workspace-tab pressable is-pending"');
     expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('class="tab-unread-dot" role="img" aria-label="有未读任务结果"');
+    expect(html).toContain('class="tab-stream-dot" aria-label="正在生成"');
+    expect(html).toContain('第二个会话 · 有未读任务结果，右键关闭');
   });
 });
 
 
 describe('Composer running actions', () => {
   it.each([
-    ['', true, false],
-    ['下一问', true, true],
-    ['', false, true],
-  ])('shows the relevant actions for input=%s running=%s', (input, running, sendVisible) => {
+    ['', true, false, undefined],
+    ['下一问', true, true, undefined],
+    ['', false, true, undefined],
+    ['保留的下一问', false, true, '这个 WorkOS 会话的任务状态未确认，暂不继续发送。新问题可另开对话。'],
+  ])('shows the relevant actions for input=%s running=%s', (input, running, sendVisible, submissionIssue) => {
     const summary = running ? { activeMessageId: 'answer', status: 'streaming' as const, stage: 'streaming' as const, label: '正在组织回答', orbState: 'shaping' as const, queuedCount: 1 } : null;
     const html = renderToStaticMarkup(<Composer
         tabs={INITIAL_WORKSPACE.openTabs}
@@ -65,6 +70,7 @@ describe('Composer running actions', () => {
         runSummary={summary}
         historyOpen={false}
         connectionState="configured"
+        submissionIssue={submissionIssue}
         fileUploadEnabled={false}
         fileAccept=""
         maxTabs={10}
@@ -88,5 +94,11 @@ describe('Composer running actions', () => {
     expect(html).not.toContain('正在组织回答');
     if (running) expect(html).toContain('1 条排队');
     if (running && input) expect(html).toContain('aria-label="加入队列"');
+    if (submissionIssue) {
+      expect(html).toContain(submissionIssue);
+      expect(html).toMatch(/<button[^>]+disabled=""[^>]+aria-label="任务状态未确认，暂不发送"/u);
+      expect(html).toMatch(/<textarea[^>]+aria-describedby="[^"]*composer-submission-status"[^>]*>保留的下一问<\/textarea>/u);
+      expect(html).not.toMatch(/<textarea[^>]+disabled/u);
+    }
   });
 });

@@ -13,6 +13,7 @@ import type {
 import type { QuoteReference } from '../src/sidepanel/types';
 import { hasDefiniteUrlMismatch, isDefinitelyUnsupportedPage } from '../src/shared/tabTarget';
 import { WORKOS_APP_URL_PATTERN } from '../src/shared/workosCredentials';
+import { registerTaskRuntime } from '../src/background/registerTaskRuntime';
 
 const PENDING_QUOTES_KEY = 'pendingSelectionQuotes';
 const SELECTION_BUBBLE_KEY = 'selectionBubbleEnabled';
@@ -172,6 +173,8 @@ export default defineBackground(() => {
     }
     return { page: null, error: '无法连接当前网页，请刷新页面后重试。' };
   };
+
+  registerTaskRuntime((target) => sendToTab({ type: 'page:extract' }, target));
 
   const importWorkosCredentials = async (): Promise<WorkosCredentialsResponse> => {
     const tabs = await browser.tabs.query({ url: WORKOS_APP_URL_PATTERN }).catch(() => []);

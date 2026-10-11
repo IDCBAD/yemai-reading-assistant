@@ -135,6 +135,7 @@ export type ContextItem =
   | LinkContextItem;
 
 export type MessageStatus = 'queued' | 'running' | 'streaming' | 'complete' | 'stopped' | 'failed';
+export type MessageStopStatus = 'pending' | 'accepted' | 'failed' | 'local-only';
 export type MessageStage = 'queued' | 'reading-page' | 'creating-conversation' | 'waiting-first-token' | 'waiting-user-input' | 'streaming';
 export type MessagePresentation = 'page-overview';
 export type AgentOrbState = 'searching' | 'listening' | 'working' | 'composing' | 'shaping';
@@ -156,6 +157,8 @@ export interface RunActivity {
   status: RunActivityStatus;
   startedAt?: number;
   completedAt?: number;
+  /** Only progress reception stopped; the remote tool outcome remains unknown. */
+  progressUnconfirmed?: true;
   subagent?: SubagentSnapshot;
 }
 
@@ -199,6 +202,17 @@ export interface ChatMessage {
   /** Local wall-clock time when this attempt completed, failed, or was stopped. */
   runFinishedAt?: number;
   status: MessageStatus;
+  /** Outcome of an explicit stop; an accepted request is not proof that every remote tool has stopped. */
+  stopStatus?: MessageStopStatus;
+  /** Progress reception ended after submission; this is not a confirmed remote failure or pause. */
+  remoteRunUnconfirmed?: {
+    conversationUuid: string;
+    runId: string;
+    transport: 'internal-v2';
+    agentUuid: string;
+    apiBase: string;
+    disconnectedAt: number;
+  };
   presentation?: MessagePresentation;
   stage?: MessageStage;
   errorMessage?: string;

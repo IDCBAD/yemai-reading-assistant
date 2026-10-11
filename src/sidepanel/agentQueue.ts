@@ -1,4 +1,5 @@
 import type { AgentRunSummary, ChatMessage, Conversation, MessageStage } from './types';
+import { WORKOS_USER_STOP_REASON } from '../services/workosTransport';
 
 interface CoordinatedRequest {
   conversationId: string;
@@ -42,13 +43,34 @@ export class ConversationRequestCoordinator<TRequest extends CoordinatedRequest>
     void this.drain(request.conversationId);
   }
 
-  stop(conversationId: string) {
+  stop(conversationId: string, expectedMessageId?: string) {
+    const execution = this.active.get(conversationId);
+    if (expectedMessageId && execution?.request.messageId !== expectedMessageId) return false;
+    const controller = execution?.controller;
+    if (!controller || controller.signal.aborted) return false;
+    controller.abort(WORKOS_USER_STOP_REASON);
+    return true;
+  }
+
+  discardQueued(conversationId: string): TRequest[] {
+    const requests = this.queues.get(conversationId) ?? [];
+    this.queues.delete(conversationId);
+    return requests;
+  }
+
+  cancel(conversationId: string) {
+    // Ordinary history cleanup is local cancellation. Preserve an explicitly
+    // requested remote pause already in flight until its result settles.
     this.active.get(conversationId)?.controller.abort();
   }
 
   clear() {
-    this.active.forEach(({ controller }) => controller.abort());
-    this.active.clear();
+    this.active.forEach(({ controller }, conversationId) => {
+      controller.abort();
+      // A conversation-level remote abort must settle before reusing this queue,
+      // even if settings/history are cleared while its response is pending.
+      if (controller.signal.reason !== WORKOS_USER_STOP_REASON) this.active.delete(conversationId);
+    });
     this.queues.clear();
   }
 
@@ -62,7 +84,8 @@ export class ConversationRequestCoordinator<TRequest extends CoordinatedRequest>
     }
 
     const controller = new AbortController();
-    this.active.set(conversationId, { request, controller });
+    const execution = { request, controller };
+    this.active.set(conversationId, execution);
     try {
       await this.run(request, controller.signal);
     } catch {
@@ -70,10 +93,10 @@ export class ConversationRequestCoordinator<TRequest extends CoordinatedRequest>
       // only guarantees that a settled request cannot block the next one.
     } finally {
       const current = this.active.get(conversationId);
-      if (current?.request.messageId === request.messageId) {
+      if (current === execution) {
         this.active.delete(conversationId);
+        void this.drain(conversationId);
       }
-      void this.drain(conversationId);
     }
   }
 }
@@ -107,6 +130,20 @@ export function deriveMessageRunNote(message: ChatMessage) {
           ? '等待你的选择…'
           : 'Agent 正在思考…';
   return { kind: 'running', copy } as const;
+}
+
+export function deriveMessageStopNotice(message: ChatMessage) {
+  if (message.remoteRunUnconfirmed) return {
+    kind: 'stopped',
+    copy: message.errorMessage ?? '进度连接已断开，WorkOS 任务状态未确认，任务可能仍在运行。请在 WorkOS 查看进度。',
+  } as const;
+  switch (message.stopStatus) {
+    case 'pending': return { kind: 'stopped', copy: '已停止接收，正在请求 WorkOS 暂停…' } as const;
+    case 'accepted': return { kind: 'stopped', copy: '已停止接收，WorkOS 已接受暂停请求。' } as const;
+    case 'local-only': return { kind: 'stopped', copy: message.errorMessage ?? '已停止接收，未向 WorkOS 发送暂停请求。' } as const;
+    case 'failed': return { kind: 'failed', copy: message.errorMessage ?? '已停止接收，无法确认 WorkOS 是否暂停。' } as const;
+    default: return null;
+  }
 }
 
 export function deriveAgentRunSummary(messages: ChatMessage[]): AgentRunSummary | null {

@@ -22,7 +22,7 @@ export function SubagentDetailsDialog({ activity, index, count, onPrevious, onNe
   return <CollectionReferenceDialog label="子任务详情" className="subagent-detail-dialog" onClose={onClose}>
     <header className="subagent-detail-header">
       <KoboyoIcon name="bot" size={18} />
-      <div><strong>{activity.title}</strong><span>{child?.agentType ?? '子智能体'} · {statusCopy[activity.status]}</span></div>
+      <div><strong>{activity.title}</strong><span>{child?.agentType ?? '子智能体'} · {activity.progressUnconfirmed ? '状态未确认' : statusCopy[activity.status]}</span></div>
       <button ref={closeButtonRef} data-collection-initial-focus type="button" className="preview-icon-button" aria-label="关闭子任务详情" onClick={onClose}>
         <KoboyoIcon name="cross" size={15} />
       </button>
@@ -31,7 +31,7 @@ export function SubagentDetailsDialog({ activity, index, count, onPrevious, onNe
       {child?.prompt && <section><h3>任务</h3><p className="subagent-task-prompt">{child.prompt}</p></section>}
       <section><h3>结果</h3>{child?.answer
         ? <div className="assistant-content"><AssistantMarkdown content={child.answer} streaming={false} /></div>
-        : <p className="subagent-detail-empty">{activity.status === 'pending' || activity.status === 'running'
+        : <p className="subagent-detail-empty">{activity.progressUnconfirmed ? '进度连接已断开，尚未收到子任务结果。' : activity.status === 'pending' || activity.status === 'running'
           ? '等待子任务返回结果。' : '当前接口未返回子任务结果。'}</p>}
       </section>
       {child?.truncated && <p className="subagent-detail-empty">内容较长，当前显示部分内容。</p>}

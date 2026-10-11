@@ -5,6 +5,7 @@ import { createWorkosTransport } from './workosTransportFactory';
 const internalTransport = vi.hoisted(() => ({
   construct: vi.fn(),
   createConversation: vi.fn(async () => 'conversation-id'),
+  abortConversation: vi.fn(async (_conversationUuid: string, _signal?: AbortSignal) => undefined),
 }));
 
 vi.mock('./workosInternalV2', () => ({
@@ -16,6 +17,7 @@ vi.mock('./workosInternalV2', () => ({
     }
 
     createConversation = internalTransport.createConversation;
+    abortConversation = internalTransport.abortConversation;
   },
 }));
 
@@ -35,6 +37,7 @@ describe('workos transport loading', () => {
   beforeEach(() => {
     internalTransport.construct.mockClear();
     internalTransport.createConversation.mockClear();
+    internalTransport.abortConversation.mockClear();
   });
 
   it('loads the internal-v2 implementation only when its first request starts', async () => {
@@ -47,5 +50,13 @@ describe('workos transport loading', () => {
 
     expect(internalTransport.construct).toHaveBeenCalledOnce();
     expect(internalTransport.createConversation).toHaveBeenCalledOnce();
+  });
+
+  it('forwards pause requests through the lazy transport without creating another conversation', async () => {
+    const transport = createWorkosTransport(settings);
+    const controller = new AbortController();
+    await transport.abortConversation?.('current-conversation', controller.signal);
+    expect(internalTransport.abortConversation).toHaveBeenCalledExactlyOnceWith('current-conversation', controller.signal);
+    expect(internalTransport.createConversation).not.toHaveBeenCalled();
   });
 });

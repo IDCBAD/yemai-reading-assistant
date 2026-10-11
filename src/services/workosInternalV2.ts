@@ -1,29 +1,25 @@
-import { JSEncrypt } from 'jsencrypt';
+import { encryptWorkosIdentity } from './workosIdentityEncryption';
 import type { InternalV2Credentials } from './workosConnection';
 import { WorkosSseParser, type WorkosSseCallbacks } from './workosSse';
 import {
   connectionError,
+  errorMessageForStatus,
   isAbortError,
   parseJsonEnvelope,
   requireEventStream,
   WORKOS_INTERNAL_V2_BASE_URL,
+  WORKOS_USER_STOP_REASON,
   WorkosApiError,
+  WorkosProgressDisconnected,
+  WorkosRemoteStopAccepted,
+  WorkosRemoteStopError,
   type ExecuteRequest,
   type WorkosInterruptAnswers,
   type WorkosTransport,
 } from './workosTransport';
 
-const INTERNAL_V2_RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw+qviO5tdUjk00eaTkcE
-9x8c7fEZ8LLaV7p9IzFHnNXxPW+ynQFrbEDaGJ6Oi7RZowY3BFyEHrsEkI7NXN/s
-Xo3jccdaqZop5rQTFxMk4Y1LF7bJFKkcIIqRnRQ/y//RNMB4l15LK3ugrNCvHauC
-6Q8bXIcCq/glNPnlK+ZQY4ezQnyLm2r856IHsEeZ3uZfcYRlMm12xHt9XDMZLG6o
-VT/jdgS3h0L5c5S459DL9YiqQuDOQEojhjzvhAUljGVB6op0PqyUgL4VjvXPI0Jf
-YWk7HCl6dDnEIiXy/R8FtG5bAdP4uKR+aea+AIxjnhCwvoEa1GG+L6T0OPdzZcKy
-1QIDAQAB
------END PUBLIC KEY-----`;
-
 type UnknownRecord = Record<string, unknown>;
+const STOP_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -49,14 +45,6 @@ function findRunId(value: unknown): string | undefined {
     }
   }
   return undefined;
-}
-
-function encryptIdentity(value: string) {
-  const encryptor = new JSEncrypt();
-  encryptor.setPublicKey(INTERNAL_V2_RSA_PUBLIC_KEY);
-  const encrypted = encryptor.encrypt(value);
-  if (!encrypted) throw new WorkosApiError('无法生成 WorkOS v2 身份凭证，请更新连接配置。');
-  return encrypted;
 }
 
 function encodedPathIdentifier(value: string, label: string) {
@@ -91,8 +79,8 @@ export function internalV2Headers(
   return {
     Authorization: `Bearer ${credentials.accessToken}`,
     'xybot-authorization': credentials.accessToken,
-    'x-organization-uuid': encryptIdentity(credentials.organizationUuid),
-    'x-user-uuid': encryptIdentity(credentials.userUuid),
+    'x-organization-uuid': encryptWorkosIdentity(credentials.organizationUuid),
+    'x-user-uuid': encryptWorkosIdentity(credentials.userUuid),
     'Content-Type': 'application/json; charset=utf-8',
     Accept: accept,
   };
@@ -149,12 +137,33 @@ export class InternalV2Transport implements WorkosTransport {
     signal?: AbortSignal,
   ) {
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
+    const submitController = new AbortController();
+    const encodedUuid = encodedPathIdentifier(conversationUuid, 'WorkOS 会话');
+    const submission: { status: 'not-started' | 'pending' | 'accepted' | 'rejected' | 'unknown' } = { status: 'not-started' };
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectSubmitWait: (reason: Error) => void = () => {};
+    // Only races an in-flight submit after a manual stop. Keep its rejection handled
+    // even when cancellation happens outside that phase.
+    const submitWaitTimeout = new Promise<never>((_, reject) => { rejectSubmitWait = reject; });
+    void submitWaitTimeout.catch(() => {});
+    const isUserStop = () => signal?.aborted && signal.reason === WORKOS_USER_STOP_REASON;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const onAbort = () => {
+      controller.abort();
+      void reader?.cancel().catch(() => {});
+      if (isUserStop() && submission.status === 'pending') {
+        // Do not send abort before the server has had a chance to accept submit.
+        stopTimer = setTimeout(() => {
+          submitController.abort();
+          rejectSubmitWait(new WorkosApiError('无法确认 WorkOS 是否已接收问题。'));
+        }, STOP_TIMEOUT_MS);
+      } else {
+        submitController.abort();
+      }
+    };
     if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
     signal?.addEventListener('abort', onAbort, { once: true });
 
-    const encodedUuid = encodeURIComponent(conversationUuid);
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       let subscriptionResponse: Response;
       try {
@@ -174,6 +183,7 @@ export class InternalV2Transport implements WorkosTransport {
       }
       const stream = await requireEventStream(subscriptionResponse, this.kind);
       reader = stream.getReader();
+      if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
 
       const parts: Array<Record<string, string>> = [{ type: 'text', text: request.content }];
       for (const attachment of request.attachments ?? []) {
@@ -186,42 +196,142 @@ export class InternalV2Transport implements WorkosTransport {
       }
 
       let submitResponse: Response;
+      submission.status = 'pending';
       try {
-        submitResponse = await fetch(
-          `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/queue/submit`,
-          {
-            method: 'POST',
-            headers: internalV2Headers(this.credentials),
-            body: JSON.stringify({ parts }),
-            signal: controller.signal,
+        const submit = async () => {
+          submitResponse = await fetch(
+            `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/queue/submit`,
+            {
+              method: 'POST',
+              headers: internalV2Headers(this.credentials),
+              body: JSON.stringify({ parts }),
+              signal: submitController.signal,
+            },
+          );
+          const responseCopy = submitResponse.clone();
+          try {
+            const body = await parseJsonEnvelope<unknown>(submitResponse, this.kind);
+            submission.status = 'accepted';
+            return body;
+          } catch (error) {
+            // A definite rejection must not cancel another run in this conversation.
+            let rejected = !submitResponse.ok;
+            try {
+              const body: unknown = await responseCopy.json();
+              if (isRecord(body)) {
+                const code = typeof body.code === 'number' ? body.code : Number(body.code);
+                rejected ||= body.success === false || (Number.isFinite(code) && code !== 0 && code !== 200);
+              }
+            } catch { /* A malformed success response leaves submission uncertain. */ }
+            submission.status = rejected ? 'rejected' : 'unknown';
+            throw error;
+          }
+        };
+        const submitBody = await Promise.race([submit(), submitWaitTimeout]);
+        if (stopTimer !== undefined) clearTimeout(stopTimer);
+        if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
+        const expectedRunId = findRunId(submitBody.data);
+        if (!expectedRunId) throw new WorkosApiError('WorkOS v2 已接收问题，但没有返回运行标识。');
+
+        let remoteError: string | undefined;
+        const parser = new WorkosSseParser({
+          ...callbacks,
+          onError(message) {
+            remoteError = message;
+            callbacks.onError?.(message);
           },
-        );
+        }, { expectedRunId });
+        const decoder = new TextDecoder('utf-8');
+        while (!parser.isComplete) {
+          let next: ReadableStreamReadResult<Uint8Array>;
+          try {
+            next = await reader.read();
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            if (remoteError !== undefined) throw new WorkosApiError(remoteError);
+            throw new WorkosProgressDisconnected(conversationUuid, expectedRunId);
+          }
+          const { done, value } = next;
+          if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
+          if (done) break;
+          parser.push(decoder.decode(value, { stream: true }));
+        }
+        parser.push(decoder.decode());
+        parser.finish();
+        if (!parser.isComplete) {
+          if (remoteError !== undefined) throw new WorkosApiError(remoteError);
+          throw new WorkosProgressDisconnected(conversationUuid, expectedRunId);
+        }
       } catch (error) {
+        if (submission.status === 'pending') submission.status = 'unknown';
         throw connectionError(error);
       }
-      const submitBody = await parseJsonEnvelope<unknown>(submitResponse, this.kind);
-      const expectedRunId = findRunId(submitBody.data);
-      if (!expectedRunId) throw new WorkosApiError('WorkOS v2 已接收问题，但没有返回运行标识。');
-
-      const parser = new WorkosSseParser(callbacks, { expectedRunId });
-      const decoder = new TextDecoder('utf-8');
-      while (!parser.isComplete) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parser.push(decoder.decode(value, { stream: true }));
-      }
-      parser.push(decoder.decode());
-      parser.finish();
-      if (!parser.isComplete) {
-        throw new WorkosApiError('WorkOS v2 消息订阅意外断开，请重试。');
-      }
     } catch (error) {
+      if (isUserStop()) {
+        if (submission.status === 'accepted' || submission.status === 'unknown') {
+          const uncertain = submission.status === 'unknown';
+          await this.abortConversation(conversationUuid);
+          if (uncertain) {
+            throw new WorkosRemoteStopError('已发送 WorkOS 暂停请求，但问题提交结果不明，无法确认任务已暂停。');
+          }
+          throw new WorkosRemoteStopAccepted();
+        }
+        throw new DOMException('Stopped', 'AbortError');
+      }
       if (isAbortError(error)) throw error;
       throw connectionError(error);
     } finally {
       controller.abort();
+      submitController.abort();
+      if (stopTimer !== undefined) clearTimeout(stopTimer);
       signal?.removeEventListener('abort', onAbort);
       reader?.releaseLock();
+    }
+  }
+
+  async abortConversation(conversationUuid: string, signal?: AbortSignal) {
+    const encodedUuid = encodedPathIdentifier(conversationUuid, 'WorkOS 会话');
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    let rejectWait: (error: Error) => void = () => {};
+    const deadline = new Promise<never>((_, reject) => { rejectWait = reject; });
+    const timer = setTimeout(() => {
+      controller.abort();
+      rejectWait(new WorkosRemoteStopError('WorkOS 暂停请求超时，无法确认任务已暂停。'));
+    }, STOP_TIMEOUT_MS);
+    if (signal?.aborted) controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      await Promise.race([deadline, (async () => {
+        const response = await fetch(
+          `${WORKOS_INTERNAL_V2_BASE_URL}/conversations/${encodedUuid}/action/abort`,
+          { method: 'POST', headers: internalV2Headers(this.credentials), signal: controller.signal },
+        );
+        const body = await response.text();
+        if (!response.ok) {
+          throw new WorkosRemoteStopError(
+            errorMessageForStatus(response.status, this.kind) ?? `WorkOS 暂停请求失败（HTTP ${response.status}）。`,
+            response.status,
+          );
+        }
+        if (!body.trim()) return;
+        try {
+          await parseJsonEnvelope(new Response(body, { status: response.status }), this.kind);
+        } catch (error) {
+          const status = error instanceof WorkosApiError ? error.status : undefined;
+          throw new WorkosRemoteStopError(
+            errorMessageForStatus(status, this.kind) ?? 'WorkOS 未确认暂停请求，无法确认任务已暂停。',
+            status,
+          );
+        }
+      })()]);
+    } catch (error) {
+      if (error instanceof WorkosRemoteStopError) throw error;
+      throw new WorkosRemoteStopError('无法发送 WorkOS 暂停请求，请检查网络；任务可能仍在执行。');
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      signal?.removeEventListener('abort', onAbort);
     }
   }
 

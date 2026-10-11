@@ -1,10 +1,11 @@
-import { useState, type CSSProperties, type MouseEvent } from 'react';
-import { formatMessageTimestamp } from '../messageTimestamp';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { conversationPreviewTop } from '../conversationRail';
 
 export interface ConversationPreviewRailItem {
   id: string;
   label: string;
   createdAt: number;
+  answerSummary?: string;
 }
 
 interface ConversationPreviewRailProps {
@@ -21,20 +22,52 @@ type TickStyle = CSSProperties & {
   '--conversation-tick-scale': number;
 };
 
-type PreviewStyle = CSSProperties & {
-  '--conversation-preview-ratio': number;
-};
-
 export function ConversationPreviewRail({ items, activeId, onSelect }: ConversationPreviewRailProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [previewTop, setPreviewTop] = useState(0);
+  const rootRef = useRef<HTMLElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const previewId = hoveredId ?? focusedId;
   const highlightedId = previewId ?? activeId;
   const highlightedIndex = items.findIndex((item) => item.id === highlightedId);
   const previewIndex = previewId ? items.findIndex((item) => item.id === previewId) : -1;
   const previewItem = previewIndex >= 0 ? items[previewIndex] : undefined;
-  const previewRatio = items.length <= 1 ? 0.5 : previewIndex / (items.length - 1);
   const rootStyle: RailStyle = { '--conversation-turn-count': items.length };
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const popup = previewRef.current;
+    const stage = root?.closest<HTMLElement>('.message-stage');
+    const tick = root?.querySelectorAll<HTMLButtonElement>('.conversation-preview-rail__item')[previewIndex];
+    if (!root || !popup || !stage || !tick) return;
+
+    const placePreview = () => {
+      const stageBounds = stage.getBoundingClientRect();
+      // Constrain the card before measuring so a short message area cannot cover the composer.
+      popup.style.setProperty('--conversation-preview-max-height', `${Math.max(0, stageBounds.height - 16)}px`);
+      const rootBounds = root.getBoundingClientRect();
+      const tickBounds = tick.getBoundingClientRect();
+      const popupBounds = popup.getBoundingClientRect();
+      setPreviewTop(conversationPreviewTop(
+        tickBounds.top + tickBounds.height / 2,
+        popupBounds.height,
+        stageBounds.top,
+        stageBounds.bottom,
+      ) - rootBounds.top);
+    };
+
+    placePreview();
+    const observer = new ResizeObserver(placePreview);
+    observer.observe(root);
+    observer.observe(popup);
+    observer.observe(stage);
+    window.addEventListener('resize', placePreview);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', placePreview);
+    };
+  }, [previewIndex, previewItem?.id, previewItem?.label, previewItem?.answerSummary, items.length, items[0]?.id]);
 
   const selectItem = (event: MouseEvent<HTMLButtonElement>, id: string) => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -44,6 +77,7 @@ export function ConversationPreviewRail({ items, activeId, onSelect }: Conversat
 
   return (
     <nav
+      ref={rootRef}
       className="conversation-preview-rail"
       style={rootStyle}
       aria-label="会话轮次导航"
@@ -60,6 +94,7 @@ export function ConversationPreviewRail({ items, activeId, onSelect }: Conversat
           const tickStyle: TickStyle = { '--conversation-tick-scale': scale };
           return (
             <button
+              key={item.id}
               className="conversation-preview-rail__item"
               type="button"
               style={tickStyle}
@@ -79,13 +114,14 @@ export function ConversationPreviewRail({ items, activeId, onSelect }: Conversat
       </div>
       {previewItem && (
         <div
+          ref={previewRef}
           className="conversation-preview-rail__preview"
-          style={{ '--conversation-preview-ratio': previewRatio } as PreviewStyle}
+          style={{ top: previewTop }}
           aria-hidden="true"
         >
           <div className="conversation-preview-rail__card">
-            <span>第 {previewIndex + 1} 轮 · {formatMessageTimestamp(previewItem.createdAt).label}</span>
             <strong>{previewItem.label}</strong>
+            {previewItem.answerSummary && <p>{previewItem.answerSummary}</p>}
           </div>
         </div>
       )}

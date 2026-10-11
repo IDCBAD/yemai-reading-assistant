@@ -68,6 +68,39 @@ function workspace(): WorkspaceState {
 }
 
 describe('workspace state v6', () => {
+  it('retains disconnected run identity and unknown tool state across restoration', () => {
+    const state = workspace();
+    const run = { conversationUuid: 'remote-1', runId: 'run-1', transport: 'internal-v2' as const,
+      agentUuid: '11111111-1111-4111-8111-111111111111', apiBase: 'https://workos-api.yingdao.com/api/workos-agent-server/v2', disconnectedAt: 100 };
+    state.conversations[0]!.messages[0] = { ...state.conversations[0]!.messages[0]!, status: 'stopped', remoteRunUnconfirmed: run,
+      activities: [{ id: 'busy', kind: 'tool', title: '分析', status: 'stopped', progressUnconfirmed: true, startedAt: 12 }] };
+    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(state, 150), 200);
+    expect(restored?.conversations[0]?.messages[0]).toMatchObject({ status: 'stopped', content: '未完成回答', remoteRunUnconfirmed: run });
+    expect(restored?.conversations[0]?.messages[0]?.activities?.[0]).toEqual({
+      id: 'busy', kind: 'tool', title: '分析', status: 'stopped', progressUnconfirmed: true, startedAt: 12,
+    });
+  });
+  it('restores an unfinished pause request as unconfirmed while retaining its answer', () => {
+    const state = workspace();
+    state.conversations[0]!.messages[0] = {
+      ...state.conversations[0]!.messages[0]!, status: 'stopped', stopStatus: 'pending',
+    };
+    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(state, 100), 200);
+    expect(restored?.conversations[0]?.messages[0]).toMatchObject({
+      status: 'stopped', stopStatus: 'failed', content: '未完成回答',
+      errorMessage: '上次暂停请求未得到确认，请在 WorkOS 中检查任务状态。',
+    });
+  });
+
+  it('preserves an accepted pause response across restoration', () => {
+    const state = workspace();
+    state.conversations[0]!.messages[0] = {
+      ...state.conversations[0]!.messages[0]!, status: 'stopped', stopStatus: 'accepted',
+    };
+    const restored = normalizeWorkspaceSnapshot(createWorkspaceSnapshot(state, 100), 200);
+    expect(restored?.conversations[0]?.messages[0]?.stopStatus).toBe('accepted');
+  });
+
   it('restores batch links and returned subagent details without credentials', () => {
     const state = workspace();
     state.conversations[0]!.draftContextItems.push({ id: 'context-link-1', kind: 'link', included: true, status: 'ready', createdAt: 10,

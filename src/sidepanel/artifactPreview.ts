@@ -1,7 +1,8 @@
-import { getFileType } from './fileTypes';
+import { getFileExtension, getFileType } from './fileTypes';
+import { describeCodeBlock } from './codeBlockLanguage';
 import type { AssistantArtifact } from './types';
 
-export type PreviewKind = 'image' | 'markdown' | 'html' | 'spreadsheet' | 'csv' | 'json' | 'text';
+export type PreviewKind = 'image' | 'markdown' | 'html' | 'spreadsheet' | 'csv' | 'json' | 'text' | 'code';
 export const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 export const TEXT_PAGE_SIZE = 20_000;
@@ -14,8 +15,14 @@ export function safeArtifactUrl(value?: string) {
   } catch { return undefined; }
 }
 
+export function artifactCodeLanguage(artifact: Pick<AssistantArtifact, 'filename'>) {
+  const format = describeCodeBlock(getFileExtension(artifact.filename), '');
+  return format.tone === 'code' ? format.language ?? undefined : undefined;
+}
+
 export function artifactPreviewKind(artifact: Pick<AssistantArtifact, 'filename' | 'mime'>): PreviewKind | undefined {
   const kind = getFileType(artifact.filename, artifact.mime).kind;
+  if ((kind === 'generic' || kind === 'text') && artifactCodeLanguage(artifact)) return 'code';
   return ['image', 'markdown', 'html', 'spreadsheet', 'csv', 'json', 'text'].includes(kind)
     ? kind as PreviewKind : undefined;
 }

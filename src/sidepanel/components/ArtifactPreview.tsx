@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { artifactPreviewKind, decodePreviewText, formatPreviewJson, MAX_PREVIEW_BYTES, MAX_TEXT_BYTES, readPreviewBytes, safeArtifactUrl, staticReportDocument, TEXT_PAGE_SIZE } from '../artifactPreview';
+import { artifactCodeLanguage, artifactPreviewKind, decodePreviewText, formatPreviewJson, MAX_PREVIEW_BYTES, MAX_TEXT_BYTES, readPreviewBytes, safeArtifactUrl, staticReportDocument, TEXT_PAGE_SIZE } from '../artifactPreview';
 import type { AssistantArtifact } from '../types';
 import type { PreviewSheet } from '../spreadsheetPreview';
 import { openPreviewTab } from '../previewTab';
@@ -13,7 +13,7 @@ import { PreviewHeader } from './PreviewHeader';
 type ContentState = { status: 'loading' } | { status: 'error'; error: string }
   | { status: 'ready'; text: string; sheets?: PreviewSheet[]; sourceUrl: string };
 
-function PreviewText({ text, language }: { text: string; language?: string }) {
+function PreviewText({ text, language, lineNumbers = false }: { text: string; language?: string; lineNumbers?: boolean }) {
   const [length, setLength] = useState(TEXT_PAGE_SIZE);
   const content = text.slice(0, length);
   const [highlight, setHighlight] = useState<{ source: string; nodes: ReactNode } | null>(null);
@@ -25,7 +25,15 @@ function PreviewText({ text, language }: { text: string; language?: string }) {
     }).catch(() => undefined);
     return () => { active = false; };
   }, [content, language]);
-  return <div className="preview-source"><pre tabIndex={0}><code>{highlight?.source === content ? highlight.nodes : content}</code></pre>
+  const lineCount = useMemo(() => content.split(/\r\n|\r|\n/).length, [content]);
+  const code = <pre tabIndex={0}><code>{highlight?.source === content ? highlight.nodes : content}</code></pre>;
+  return <div className={`preview-source${lineNumbers ? ' has-line-numbers' : ''}`}>
+    {lineNumbers ? <div className="preview-source-layout">
+      <div className="preview-line-numbers" aria-hidden="true" style={{ minWidth: `calc(${String(lineCount).length}ch + 24px)` }}>
+        {Array.from({ length: lineCount }, (_, index) => <span key={index}>{index + 1}</span>)}
+      </div>
+      {code}
+    </div> : code}
     {text.length > length && <button type="button" onClick={() => setLength((value) => value + TEXT_PAGE_SIZE)}>继续显示（已显示 {length.toLocaleString()} 个字符）</button>}
     {!text && <p className="preview-empty">文件内容为空。</p>}
   </div>;
@@ -143,7 +151,7 @@ export function ArtifactContent({ artifact }: { artifact: AssistantArtifact }) {
       {!raw && kind === 'html' ? <ReportView text={state.text} url={state.sourceUrl} />
         : !raw && kind === 'markdown' && !markdownTooLong ? <div className="markdown-body preview-markdown"><AssistantMarkdown content={state.text} streaming={false} sourceUrl={state.sourceUrl} />{!state.text && <p className="preview-empty">文件内容为空。</p>}</div>
         : (kind === 'spreadsheet' || kind === 'csv' && !raw) ? <SpreadsheetView sheets={state.sheets ?? []} />
-        : <PreviewText key={String(raw)} text={!raw && json ? json.text : state.text} language={kind === 'json' ? 'json' : kind === 'html' ? 'xml' : undefined} />}
+        : <PreviewText key={String(raw)} text={!raw && json ? json.text : state.text} lineNumbers={['code', 'html', 'json'].includes(kind)} language={kind === 'code' ? artifactCodeLanguage(artifact) : kind === 'json' ? 'json' : kind === 'html' ? 'xml' : undefined} />}
     </div>
   </div>;
 }

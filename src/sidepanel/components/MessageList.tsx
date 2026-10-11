@@ -10,13 +10,14 @@ import { findSearchTextMatches } from '../../search/searchTextMatches';
 import {
   MIN_CONVERSATION_RAIL_TURNS,
   activeConversationTurnId,
+  buildConversationTurnAnswerPreviews,
   compactConversationTurnLabel,
 } from '../conversationRail';
 import { attachmentFormatLabel, getFileType, isImageFile, uploadChannelLabel } from '../fileTypes';
 import { STARTER_ACTIONS } from '../starterActions';
 import { parsePageOverview } from '../pageOverview';
 import { messageDecisionInteractions } from '../agentDecision';
-import { deriveAgentRunSummary, deriveMessageRunNote } from '../agentQueue';
+import { deriveAgentRunSummary, deriveMessageRunNote, deriveMessageStopNotice } from '../agentQueue';
 import { collectionDeliveryState } from '../collectionConversation';
 import { formatRunDuration } from '../runDuration';
 import { canTranslateLocally, translateLocally } from '../localTranslator';
@@ -172,13 +173,15 @@ const ACTIVITY_STATUS_COPY: Record<RunActivityStatus, string> = {
 };
 
 function formatDuration(activity: RunActivity) {
+  if (activity.progressUnconfirmed) return null;
   if (!activity.startedAt || !activity.completedAt) return null;
   const duration = Math.max(0, activity.completedAt - activity.startedAt);
   if (duration < 1000) return `${Math.round(duration)} ms`;
   return `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)} 秒`;
 }
 
-function ActivityStatusIcon({ status }: { status: RunActivityStatus }) {
+function ActivityStatusIcon({ status, progressUnconfirmed }: { status: RunActivityStatus; progressUnconfirmed?: true }) {
+  if (progressUnconfirmed) return <span className="activity-pending-dot" aria-hidden="true" />;
   if (status === 'running') return <span className="activity-spinner" aria-hidden="true" />;
   if (status === 'pending') return <span className="activity-pending-dot" aria-hidden="true" />;
   if (status === 'completed') return <KoboyoIcon name="solid-checkmark" size={12} />;
@@ -197,8 +200,11 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
   if (visibleActivities.length === 0) return null;
   const activeCount = visibleActivities.filter((activity) => activity.status === 'pending' || activity.status === 'running').length;
   const failedCount = visibleActivities.filter((activity) => activity.status === 'failed').length;
+  const unconfirmedCount = visibleActivities.filter((activity) => activity.progressUnconfirmed).length;
   const objectLabel = children.length === visibleActivities.length ? '子任务' : '工具';
-  const summary = activeCount > 0
+  const summary = unconfirmedCount > 0
+    ? `${visibleActivities.length} 个${objectLabel}中有 ${unconfirmedCount} 个状态未确认${failedCount ? `，${failedCount} 个失败` : ''}`
+    : activeCount > 0
     ? `正在运行 ${visibleActivities.length} 个${objectLabel}`
     : failedCount > 0
       ? `${visibleActivities.length} 个${objectLabel}中有 ${failedCount} 个失败`
@@ -220,23 +226,25 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
         <div className="run-activity-list">
           {visibleActivities.map((activity) => {
             const duration = formatDuration(activity);
+            const statusCopy = activity.progressUnconfirmed ? '状态未确认' : ACTIVITY_STATUS_COPY[activity.status];
             if (activity.kind === 'subagent') return (
               <button type="button" key={activity.id} className={`subagent-card is-${activity.status}`}
                 aria-label={`查看子任务：${activity.title}`} aria-haspopup="dialog" onClick={() => setSelectedId(activity.id)}>
                 <span className="subagent-card-icon"><KoboyoIcon name="bot" size={17} /></span>
                 <span className="subagent-card-text"><strong>{activity.title}</strong>
-                  <small>{activity.subagent?.agentType ?? '子智能体'} · {ACTIVITY_STATUS_COPY[activity.status]}{duration ? ` · ${duration}` : ''}</small>
+                  <small>{activity.subagent?.agentType ?? '子智能体'} · {statusCopy}{duration ? ` · ${duration}` : ''}</small>
                 </span>
-                <span className="activity-status-icon"><ActivityStatusIcon status={activity.status} /></span>
+                <span className="activity-status-icon" aria-label={statusCopy}><ActivityStatusIcon status={activity.status} progressUnconfirmed={activity.progressUnconfirmed} /></span>
                 <span aria-hidden="true" className="subagent-card-chevron">›</span>
               </button>
             );
             return (
               <div className={`run-activity-item is-${activity.status}`} key={activity.id}>
-                <span className="activity-status-icon" aria-label={ACTIVITY_STATUS_COPY[activity.status]}>
-                  <ActivityStatusIcon status={activity.status} />
+                <span className="activity-status-icon" aria-label={statusCopy}>
+                  <ActivityStatusIcon status={activity.status} progressUnconfirmed={activity.progressUnconfirmed} />
                 </span>
                 <span className="activity-title">{activity.title}</span>
+                {activity.progressUnconfirmed && <span className="activity-duration">{statusCopy}</span>}
                 {duration && <span className="activity-duration">{duration}</span>}
               </div>
             );
@@ -280,8 +288,10 @@ function AssistantMessage({
   const [bookmarkConfirmed, setBookmarkConfirmed] = useState(false);
   const bookmarkConfirmationTimerRef = useRef<number | null>(null);
   const runNote = deriveMessageRunNote(message);
+  const stopNotice = deriveMessageStopNotice(message);
   const runSummary = useMemo(() => deriveAgentRunSummary([message]), [message]);
   const runDuration = formatRunDuration(message.runStartedAt, message.runFinishedAt);
+  const runDurationLabel = message.remoteRunUnconfirmed ? '已接收进度' : message.status === 'complete' ? '用时' : '已运行';
   const pageOverview = useMemo(() => (
     message.presentation === 'page-overview'
     && message.status !== 'streaming'
@@ -371,17 +381,22 @@ function AssistantMessage({
           <Suspense fallback={runSummary ? <div className="agent-run-status" role="status">{runSummary.label}</div> : null}>
             <AgentRunStatus summary={runSummary} startedAt={message.runStartedAt} />
           </Suspense>
-          {!message.content && interactions.length === 0 && runNote && runNote.kind !== 'running' && !uncertainCollectionSend && (
+          {stopNotice && (
+            <div className={`message-run-note message-run-note--${stopNotice.kind}`} role={stopNotice.kind === 'failed' ? 'alert' : 'status'}>
+              {stopNotice.copy}
+            </div>
+          )}
+          {!stopNotice && !message.content && interactions.length === 0 && runNote && runNote.kind !== 'running' && !uncertainCollectionSend && (
             <div className={`message-run-note message-run-note--${runNote.kind}`} role="status">
               {runNote.copy}
             </div>
           )}
-          {uncertainCollectionSend && (
+          {uncertainCollectionSend && !message.remoteRunUnconfirmed && (
             <div className="message-run-note message-run-note--failed" role="status">
               尚未收到 WorkOS 的回答，无法确认这次提问是否提交成功。请先在 WorkOS 中检查；页脉已保留会话和原选择，不会自动重发。
             </div>
           )}
-          {interruptedCollectionReply && (
+          {interruptedCollectionReply && !stopNotice && (
             <div className="message-run-note message-run-note--stopped" role="status">
               {message.status === 'stopped'
                 ? '已停止生成，以下是已收到的内容。'
@@ -403,7 +418,7 @@ function AssistantMessage({
         )}
         {footerAvailable && (
           <div className="assistant-footer" aria-label="回答操作">
-            {message.status === 'failed' && !message.collectionSend && (
+            {message.status === 'failed' && !message.collectionSend && !message.remoteRunUnconfirmed && (
               <IconTooltipButton
                 className="assistant-action pressable"
                 type="button"
@@ -469,8 +484,8 @@ function AssistantMessage({
               />
             )}
             {runDuration && (
-              <span className="message-time message-run-duration" aria-label={`本轮${message.status === 'complete' ? '用时' : '已运行'} ${runDuration}`}>
-                {message.status === 'complete' ? '用时' : '已运行'} {runDuration}
+              <span className="message-time message-run-duration" aria-label={`本轮${runDurationLabel} ${runDuration}`}>
+                {runDurationLabel} {runDuration}
               </span>
             )}
           </div>
@@ -866,6 +881,7 @@ export function MessageList({
   const [navigationAnnouncement, setNavigationAnnouncement] = useState('');
   const answerContexts = useMemo(() => buildAnswerContextMap(messages), [messages]);
   const conversationRailItems = useMemo<ConversationPreviewRailItem[]>(() => {
+    const answerPreviews = buildConversationTurnAnswerPreviews(messages);
     let turnIndex = 0;
     return messages.flatMap((message) => {
       if (message.role !== 'user') return [];
@@ -884,6 +900,7 @@ export function MessageList({
       return [{
         id: message.id,
         label: compactConversationTurnLabel(message.content, fallback),
+        answerSummary: answerPreviews.get(message.id),
         createdAt: message.createdAt,
       }];
     });

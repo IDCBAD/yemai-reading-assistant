@@ -2,6 +2,7 @@ import type { WorkosSseCallbacks } from './workosSse';
 
 export const WORKOS_API_ORIGIN = 'https://power-api.yingdao.com';
 export const WORKOS_INTERNAL_V2_BASE_URL = 'https://workos-api.yingdao.com/api/workos-agent-server/v2';
+export const WORKOS_USER_STOP_REASON = 'workos-user-stop';
 
 export type WorkosTransportKind = 'public-v1' | 'internal-v2';
 
@@ -46,6 +47,7 @@ export interface WorkosTransport {
     requestId: string,
     signal?: AbortSignal,
   ): Promise<void>;
+  abortConversation?(conversationUuid: string, signal?: AbortSignal): Promise<void>;
 }
 
 export class WorkosApiError extends Error {
@@ -55,6 +57,31 @@ export class WorkosApiError extends Error {
   ) {
     super(message);
     this.name = 'WorkosApiError';
+  }
+}
+
+/** Submission succeeded, but its progress stream ended without a final outcome. */
+export class WorkosProgressDisconnected extends WorkosApiError {
+  constructor(
+    readonly conversationUuid: string,
+    readonly runId: string,
+  ) {
+    super('WorkOS 进度连接已断开，任务状态未确认；任务可能仍在运行，请先在 WorkOS 查看。');
+    this.name = 'WorkosProgressDisconnected';
+  }
+}
+
+export class WorkosRemoteStopError extends WorkosApiError {
+  constructor(message: string, status?: number) {
+    super(message, status);
+    this.name = 'WorkosRemoteStopError';
+  }
+}
+
+/** The API accepted the stop request; this does not confirm every tool has stopped. */
+export class WorkosRemoteStopAccepted extends DOMException {
+  constructor() {
+    super('WorkOS 已接受暂停请求。', 'AbortError');
   }
 }
 

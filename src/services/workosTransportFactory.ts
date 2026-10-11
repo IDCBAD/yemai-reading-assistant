@@ -53,6 +53,11 @@ class LazyInternalV2Transport implements WorkosTransport {
     const transport = await this.load();
     return transport.rejectInterrupt?.(conversationUuid, requestId, signal);
   }
+
+  async abortConversation(conversationUuid: string, signal?: AbortSignal) {
+    const transport = await this.load();
+    return transport.abortConversation?.(conversationUuid, signal);
+  }
 }
 
 export function createWorkosTransport(settings: WorkosConnectionSettings): WorkosTransport {

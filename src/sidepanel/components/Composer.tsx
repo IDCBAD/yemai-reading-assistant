@@ -19,9 +19,11 @@ interface ComposerProps {
   focusRequestId: number;
   contextItems: ContextItem[];
   activeConversationIds: Set<string>;
+  unreadConversationIds?: Set<string>;
   runSummary: AgentRunSummary | null;
   historyOpen: boolean;
   connectionState: 'loading' | 'configured' | 'missing';
+  submissionIssue?: string;
   fileUploadEnabled: boolean;
   fileAccept: string;
   maxTabs: number;
@@ -62,9 +64,11 @@ export function Composer({
   focusRequestId,
   contextItems,
   activeConversationIds,
+  unreadConversationIds = new Set<string>(),
   runSummary,
   historyOpen,
   connectionState,
+  submissionIssue,
   fileUploadEnabled,
   fileAccept,
   maxTabs,
@@ -140,7 +144,7 @@ export function Composer({
     (item) => item.included && (item.kind === 'file' || item.kind === 'image') && item.status === 'preparing',
   );
   const waitingForDecision = runSummary?.stage === 'waiting-user-input';
-  const canSend = hasContent && !hasUploadingAttachments && !waitingForDecision;
+  const canSend = hasContent && !hasUploadingAttachments && !waitingForDecision && !submissionIssue;
   const isDraggingFiles = dragDepth > 0;
   const composerState = [
     runSummary ? 'is-running' : 'is-idle',
@@ -303,6 +307,7 @@ export function Composer({
             {tabs.map((tab, index) => {
               const conversation = conversations.find((item) => item.id === tab.conversationId);
               const pending = tab.id === pendingTabId && tab.id !== activeTabId;
+              const unread = unreadConversationIds.has(tab.conversationId);
               return (
                 <button
                   ref={(element) => {
@@ -315,7 +320,7 @@ export function Composer({
                   aria-selected={tab.id === activeTabId}
                   aria-busy={pending || undefined}
                   aria-haspopup="menu"
-                  title={`${conversation?.branch ? `分支 ${conversation.branch.ordinal} · ` : ''}${conversation?.title ?? '新的阅读对话'}，右键关闭`}
+                  title={`${conversation?.branch ? `分支 ${conversation.branch.ordinal} · ` : ''}${conversation?.title ?? '新的阅读对话'}${unread ? ' · 有未读任务结果' : ''}，右键关闭`}
                   onClick={() => onSelectTab(tab.id)}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -330,6 +335,7 @@ export function Composer({
                   key={tab.id}
                 >
                   <span>{index + 1}</span>
+                  {unread && <i className="tab-unread-dot" role="img" aria-label="有未读任务结果" />}
                   {conversation?.branch && (
                     <KoboyoIcon name="fork" size={7} className="workspace-tab-branch" />
                   )}
@@ -422,7 +428,7 @@ export function Composer({
                 : '继续追问，或粘贴图片提问…'}
             rows={2}
             aria-label="输入问题"
-            aria-describedby="composer-paste-hint composer-paste-status"
+            aria-describedby={`composer-paste-hint composer-paste-status${submissionIssue ? ' composer-submission-status' : ''}`}
           />
           <span className="visually-hidden" id="composer-paste-hint">支持直接粘贴剪贴板中的图片。</span>
           <span className="visually-hidden" id="composer-paste-status" aria-live="polite">{pasteAnnouncement}</span>
@@ -498,8 +504,8 @@ export function Composer({
                   }
                 }}
                 disabled={!canSend}
-                aria-label={waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : runSummary ? '加入队列' : '发送消息'}
-                tooltip={waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? (runSummary ? '加入队列' : '发送消息') : '输入内容后发送'}
+                aria-label={submissionIssue ? '任务状态未确认，暂不发送' : waitingForDecision ? '请先完成 Agent 提出的选择' : hasUploadingAttachments ? '附件上传完成后发送' : runSummary ? '加入队列' : '发送消息'}
+                tooltip={submissionIssue ?? (waitingForDecision ? '请先完成上方选择' : hasUploadingAttachments ? '附件上传完成后发送' : hasContent ? (runSummary ? '加入队列' : '发送消息') : '输入内容后发送')}
               >
                 <KoboyoIcon name="send" size={17} />
               </IconTooltipButton>}
@@ -513,6 +519,7 @@ export function Composer({
         </div>
         </div>
       </BorderBeam>
+      {submissionIssue && <p className="message-run-note message-run-note--stopped" id="composer-submission-status" role="status">{submissionIssue}</p>}
       {tabMenu && createPortal(
         <div
           ref={tabMenuRef}

@@ -4,15 +4,10 @@ import { DIAGNOSTICS_ENABLED, recordDiagnosticResources, recordLifecycle, setDia
 import { normalizeSourceIdentityUrl } from '../content/pageManifest';
 import {
   buildAgentContent,
-  preparePageReference,
-  WORKOS_AGENT_CAPABILITIES,
 } from '../services/buildAgentContent';
-import { buildBranchContext, buildTransportHandoffContext, prependBranchContext } from '../services/buildBranchContext';
-import { findConversationSourceDelivery, markPageDelivered } from '../services/conversationSourceLedger';
+import { buildBranchContext } from '../services/buildBranchContext';
 import {
-  decideCurrentPageDelivery,
   shouldDeliverFullCurrentPage,
-  type CurrentPageDeliveryDecision,
 } from '../services/contextDeliveryPolicy';
 import {
   EMPTY_WORKOS_CONNECTION_SETTINGS,
@@ -27,20 +22,13 @@ import {
   createWorkosFileUploader,
   isWorkosFileUploadConfigured,
 } from '../services/workosFileUpload';
-import type {
-  WorkosA2uiInterrupt,
-  WorkosArtifact,
-  WorkosInterruptResolution,
-  WorkosToolActivity,
-} from '../services/workosSse';
-import {
-  hasWorkosRemoteTargetChanged,
-  WORKOS_INTERNAL_V2_BASE_URL,
-  WorkosApiError,
-  type WorkosInterruptAnswers,
-} from '../services/workosTransport';
-import { createWorkosTransport, validateWorkosConnection } from '../services/workosTransportFactory';
-import { clearWorkspaceHistory, loadLocalStorageUsage, loadWorkspaceState, saveWorkspaceState } from '../services/workspaceStorage';
+import type { WorkosInterruptAnswers } from '../services/workosTransport';
+import { validateWorkosConnection } from '../services/workosTransportFactory';
+import { hasUnconfirmedWorkosRun, UNCONFIRMED_WORKOS_SUBMIT_MESSAGE } from '../services/workosRunState';
+import { loadLocalStorageUsage } from '../services/workspaceStorage';
+import { BackgroundWorkspaceClient } from './backgroundClient';
+import { TaskNotificationClient } from './taskNotificationClient';
+import { INITIAL_TASK_NOTIFICATIONS, type TaskNotificationSnapshot, type TaskNotificationTarget } from '../shared/taskNotifications';
 import { loadReadingCards, removeReadingCard, saveReadingCard } from '../services/readingCardStorage';
 import { saveQaCards, type QaDirectory, type QaSaveResult } from '../services/obsidianQa';
 import {
@@ -74,11 +62,8 @@ import type {
   WorkosCredentialsResponse,
 } from '../shared/extensionMessages';
 import {
-  ConversationRequestCoordinator,
   deriveActiveConversationIds,
   deriveAgentRunSummary,
-  reconcileTransientMessages,
-  waitForAbortable,
 } from './agentQueue';
 import type { AnswerContextSource } from './answerContext';
 import { Composer } from './components/Composer';
@@ -111,9 +96,6 @@ import {
 } from './actionSemantics';
 import {
   messageDecisionInteractions,
-  normalizeAgentDecisionAnswers,
-  settleAgentInteraction,
-  upsertAgentInteraction,
 } from './agentDecision';
 import {
   attachmentAcceptForChannel,
@@ -147,16 +129,13 @@ import { finishUiPerformanceMeasure, startUiPerformanceMeasure } from './perform
 import { runPreparedSurfaceOpen } from './surfacePreparation';
 import type {
   AgentDecision,
-  AssistantArtifact,
   ChatMessage,
   Conversation,
   OpenConversationTab,
   PageContext,
-  RunActivity,
-  RunActivityStatus,
   WorkspaceState,
 } from './types';
-import { closeWorkspaceTab, openConversationInWorkspace, selectWorkspaceTab } from './workspaceNavigation';
+import { closeWorkspaceTab, openConversationInWorkspace, openNotificationConversation, selectWorkspaceTab } from './workspaceNavigation';
 
 type CommandPaletteModule = typeof import('./components/CommandPalette');
 type ReadingCardsSurface = typeof import('./components/ReadingCardsPanel').ReadingCardsPanel;
@@ -253,15 +232,6 @@ function pageContextFromSnapshot(snapshot: PageSnapshot, status: PageContext['st
   return { ...page, status };
 }
 
-function sentPageContext(
-  snapshot: PageSnapshot,
-  sentAt: number,
-  version: number,
-  remoteUuid: string,
-): PageContext {
-  return markPageDelivered({ ...pageContextFromSnapshot(snapshot, 'read'), version }, remoteUuid, sentAt);
-}
-
 function createOpenTab(conversationId: string): OpenConversationTab {
   return { id: makeId('open-tab'), conversationId, openedAt: Date.now() };
 }
@@ -333,14 +303,6 @@ type HistoryDeletionRequest =
   | { kind: 'archived'; count: number; messageCount: number }
   | { kind: 'conversation'; conversationId: string; title: string; messageCount: number };
 
-interface QueuedAgentRequest {
-  conversationId: string;
-  messageId: string;
-  userMessage: ChatMessage;
-  needsPageRead: boolean;
-  pageSnapshotPromise: Promise<PagePreparationResult>;
-}
-
 interface PagePreparationResult {
   snapshot?: PageSnapshot;
   error?: string;
@@ -358,13 +320,16 @@ function pageSnapshotKey(conversationId: string, url: string) {
   return `${conversationId}\n${url}`;
 }
 
-function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === 'AbortError';
-}
-
 export default function App() {
-  const [workspace, setWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
+  const [workspace, renderWorkspace] = useState<WorkspaceState>(INITIAL_WORKSPACE);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [taskNotifications, setTaskNotifications] = useState<TaskNotificationSnapshot>(INITIAL_TASK_NOTIFICATIONS);
+  const [notificationWindowId, setNotificationWindowId] = useState<number>();
+  const [notificationTarget, setNotificationTarget] = useState<TaskNotificationTarget | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const conversationId = params.get('taskConversation');
+    return conversationId ? { conversationId, token: params.get('taskTarget') ?? crypto.randomUUID() } : null;
+  });
   const [workosConnection, setWorkosConnection] = useState<WorkosConnectionSettings | null>(null);
   const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -441,10 +406,12 @@ export default function App() {
   const attachmentPreviewUrlsRef = useRef(new Set<string>());
   const attachmentFilesRef = useRef(new Map<string, File>());
   const attachmentUploadsRef = useRef(new Set<string>());
-  const requestRunnerRef = useRef<(request: QueuedAgentRequest, signal: AbortSignal) => Promise<void>>(
-    async () => undefined,
-  );
-  const requestCoordinatorRef = useRef<ConversationRequestCoordinator<QueuedAgentRequest> | null>(null);
+  const backgroundClientRef = useRef<BackgroundWorkspaceClient | null>(null);
+  const notificationClientRef = useRef<TaskNotificationClient | null>(null);
+  const handledNotificationTargetsRef = useRef(new Set<string>());
+  const setWorkspace = useCallback((next: WorkspaceState | ((state: WorkspaceState) => WorkspaceState)) => {
+    backgroundClientRef.current?.update(next);
+  }, []);
   useEffect(() => {
     if (!DIAGNOSTICS_ENABLED) return;
     setDiagnosticResources(() => ({
@@ -463,11 +430,6 @@ export default function App() {
     recordDiagnosticResources();
   });
   searchSuspendedRef.current = searchSuspended;
-  if (!requestCoordinatorRef.current) {
-    requestCoordinatorRef.current = new ConversationRequestCoordinator((request, signal) =>
-      requestRunnerRef.current(request, signal));
-  }
-
   const activeOpenTab = useMemo(
     () => workspace.openTabs.find((tab) => tab.id === workspace.activeOpenTabId) ?? workspace.openTabs[0]!,
     [workspace.activeOpenTabId, workspace.openTabs],
@@ -489,6 +451,7 @@ export default function App() {
     () => deriveActiveConversationIds(workspace.conversations),
     [workspace.conversations],
   );
+  const unreadConversationIds = useMemo(() => new Set(taskNotifications.unreadConversationIds), [taskNotifications.unreadConversationIds]);
   const savedMessageIds = useMemo(() => new Set(readingCards
     .filter((card) => card.sourceConversationId === activeConversation.id && readingCardKind(card) === 'answer')
     .map((card) => card.sourceMessageId)), [activeConversation.id, readingCards]);
@@ -522,6 +485,9 @@ export default function App() {
   const activeConnectionConfigured = workosConnection
     ? isActiveWorkosConnectionConfigured(workosConnection)
     : false;
+  const submissionIssue = workosConnection && hasUnconfirmedWorkosRun(activeConversation, workosConnection)
+    ? UNCONFIRMED_WORKOS_SUBMIT_MESSAGE
+    : undefined;
   currentPageRef.current = currentPage;
 
   useEffect(() => {
@@ -543,10 +509,6 @@ export default function App() {
   }, [activeConversation.id, collectionOrigin, currentPage, pageIssue, workspaceHydrated]);
 
   useEffect(() => {
-    workspaceRef.current = workspace;
-  }, [workspace]);
-
-  useEffect(() => {
     readingCardsRef.current = readingCards;
   }, [readingCards]);
 
@@ -559,29 +521,93 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-    void loadWorkspaceState()
-      .then((stored) => {
-        if (!mounted || !stored) return;
-        setWorkspace({
-          conversations: stored.conversations.map((conversation) => ({
-            ...conversation,
-            messages: reconcileTransientMessages(conversation.messages),
-          })),
-          openTabs: stored.openTabs,
-          activeOpenTabId: stored.activeOpenTabId,
-        });
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setConnectionIssue('无法读取本地历史，会话暂时不会在重启后恢复。');
-      })
-      .finally(() => {
-        if (mounted) setWorkspaceHydrated(true);
-      });
-    return () => {
-      mounted = false;
-    };
+    const client = new BackgroundWorkspaceClient(INITIAL_WORKSPACE, (state) => {
+      if (!mounted) return;
+      workspaceRef.current = state;
+      renderWorkspace(state);
+    }, (error) => { if (mounted) setConnectionIssue(error); }, (previousIssue) => {
+      if (mounted) setConnectionIssue((current) => current === previousIssue ? null : current);
+    });
+    backgroundClientRef.current = client;
+    void client.connect().then(() => { if (mounted) setWorkspaceHydrated(true); })
+      .catch(() => { if (mounted) setConnectionIssue('无法连接扩展后台，本次不能发送问题。'); });
+    return () => { mounted = false; client.disconnect(); if (backgroundClientRef.current === client) backgroundClientRef.current = null; };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const client = new TaskNotificationClient((snapshot) => {
+      if (!mounted) return;
+      setTaskNotifications(snapshot);
+      if (snapshot.target && !handledNotificationTargetsRef.current.has(snapshot.target.token)) setNotificationTarget(snapshot.target);
+    });
+    notificationClientRef.current = client;
+    client.connect();
+    void browser.windows.getCurrent().then((host) => { if (mounted) setNotificationWindowId(host.id); }).catch(() => undefined);
+    return () => { mounted = false; client.disconnect(); if (notificationClientRef.current === client) notificationClientRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const report = () => notificationClientRef.current?.report({
+      conversationId: activeConversation.id,
+      windowId: notificationWindowId,
+      visible: workspaceHydrated && !document.hidden && document.hasFocus() && !settingsOpen && !readingCardsOpen
+        && !historyOpen && !historyDeletion && !searchSession && !collectionReferenceSession && !batchReadingConversationId,
+      seenEventIds: taskNotifications.unreadEvents.filter((event) => event.conversationId === activeConversation.id).map((event) => event.id),
+    });
+    report();
+    window.addEventListener('focus', report);
+    window.addEventListener('blur', report);
+    document.addEventListener('visibilitychange', report);
+    return () => {
+      window.removeEventListener('focus', report);
+      window.removeEventListener('blur', report);
+      document.removeEventListener('visibilitychange', report);
+    };
+  }, [workspace, workspaceHydrated, activeConversation.id, notificationWindowId, settingsOpen, readingCardsOpen,
+    historyOpen, historyDeletion, searchSession, collectionReferenceSession, batchReadingConversationId, taskNotifications.unreadEvents]);
+
+  useEffect(() => {
+    if (!notificationTarget || !workspaceHydrated) return;
+    if (settingsOpen || readingCardsOpen || historyOpen || searchSession || collectionReferenceSession || batchReadingConversationId || historyDeletion) {
+      setSettingsOpen(false);
+      setReadingCardsOpen(false);
+      setHistoryOpen(false);
+      setSearchSession(null);
+      setCollectionReferenceSession(null);
+      setBatchReadingConversationId(null);
+      setHistoryDeletion(null);
+      return;
+    }
+    if (activeConversation.id === notificationTarget.conversationId) {
+      handledNotificationTargetsRef.current.add(notificationTarget.token);
+      notificationClientRef.current?.acknowledgeTarget(notificationTarget.token);
+      setNotificationTarget(null);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('taskConversation');
+      url.searchParams.delete('taskTarget');
+      window.history.replaceState(null, '', url);
+      return;
+    }
+    if (!workspace.conversations.some((conversation) => conversation.id === notificationTarget.conversationId)) {
+      handledNotificationTargetsRef.current.add(notificationTarget.token);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('taskConversation');
+      url.searchParams.delete('taskTarget');
+      window.history.replaceState(null, '', url);
+      setConnectionIssue('该会话已被删除，无法打开任务结果。');
+      setNotificationTarget(null);
+      return;
+    }
+    setWorkspace((current) => openNotificationConversation(current, notificationTarget.conversationId, MAX_OPEN_TABS, createOpenTab));
+    setSettingsOpen(false);
+    setReadingCardsOpen(false);
+    setHistoryOpen(false);
+    setSearchSession(null);
+    setCollectionReferenceSession(null);
+    setBatchReadingConversationId(null);
+  }, [notificationTarget, workspaceHydrated, activeConversation.id, workspace.conversations, setWorkspace,
+    settingsOpen, readingCardsOpen, historyOpen, searchSession, collectionReferenceSession, batchReadingConversationId, historyDeletion]);
 
   useLayoutEffect(() => {
     let mounted = true;
@@ -630,16 +656,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!workspaceHydrated) return;
-    const saveTimer = window.setTimeout(() => {
-      void saveWorkspaceState(workspace).catch(() => {
-        setConnectionIssue('无法保存本地历史，请检查扩展存储权限。');
-      });
-    }, 350);
-    return () => window.clearTimeout(saveTimer);
-  }, [workspace, workspaceHydrated]);
-
-  useEffect(() => {
     if (!workspaceHydrated) return undefined;
 
     const idleId = window.requestIdleCallback(() => {
@@ -681,23 +697,6 @@ export default function App() {
     };
   }, [readingCards, settingsOpen, workspace, workspaceHydrated]);
 
-  useEffect(() => {
-    if (!workspaceHydrated) return;
-    const flushWorkspace = () => {
-      void saveWorkspaceState(workspaceRef.current).catch(() => undefined);
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') flushWorkspace();
-    };
-    window.addEventListener('pagehide', flushWorkspace);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      window.removeEventListener('pagehide', flushWorkspace);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      flushWorkspace();
-    };
-  }, [workspaceHydrated]);
-
   const updateConversation = useCallback(
     (conversationId: string, updater: (conversation: Conversation) => Conversation) => {
       const current = workspaceRef.current;
@@ -722,111 +721,6 @@ export default function App() {
     [updateConversation],
   );
 
-  const upsertMessageActivity = useCallback(
-    (conversationId: string, messageId: string, activity: WorkosToolActivity) => {
-      updateConversation(conversationId, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => {
-          if (message.id !== messageId) return message;
-          const nextActivity: RunActivity = { ...activity, kind: activity.kind ?? 'tool' };
-          const existing = message.activities ?? [];
-          const index = existing.findIndex((item) => item.id === activity.id);
-          return {
-            ...message,
-            activities: index < 0
-              ? [...existing, nextActivity]
-              : existing.map((item, itemIndex) => itemIndex === index ? { ...item, ...nextActivity } : item),
-          };
-        }),
-      }));
-    },
-    [updateConversation],
-  );
-
-  const upsertMessageArtifact = useCallback(
-    (conversationId: string, messageId: string, artifact: WorkosArtifact) => {
-      updateConversation(conversationId, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => {
-          if (message.id !== messageId) return message;
-          const nextArtifact: AssistantArtifact = { ...artifact };
-          const existing = message.artifacts ?? [];
-          const index = existing.findIndex((item) =>
-            item.id === artifact.id || Boolean(item.url && artifact.url && item.url === artifact.url));
-          return {
-            ...message,
-            artifacts: index < 0
-              ? [...existing, nextArtifact]
-              : existing.map((item, itemIndex) => itemIndex === index
-                  ? { ...item, ...nextArtifact, id: item.id }
-                  : item),
-          };
-        }),
-      }));
-    },
-    [updateConversation],
-  );
-
-  const upsertMessageDecision = useCallback(
-    (conversationId: string, messageId: string, interrupt: WorkosA2uiInterrupt) => {
-      updateConversation(conversationId, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => {
-          if (message.id !== messageId) return message;
-          const currentInteractions = messageDecisionInteractions(message);
-          return {
-            ...message,
-            status: 'streaming',
-            stage: 'waiting-user-input',
-            respondedAt: message.respondedAt ?? Date.now(),
-            interactions: upsertAgentInteraction(currentInteractions, interrupt),
-            decision: undefined,
-          };
-        }),
-      }));
-    },
-    [updateConversation],
-  );
-
-  const settleMessageDecision = useCallback(
-    (conversationId: string, messageId: string, resolution: WorkosInterruptResolution) => {
-      updateConversation(conversationId, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => {
-          if (message.id !== messageId) return message;
-          const interactions = messageDecisionInteractions(message);
-          if (!interactions.some((interaction) =>
-            interaction.id === resolution.requestId && interaction.sessionId === resolution.sessionId)) return message;
-          return {
-            ...message,
-            status: 'streaming',
-            stage: 'streaming',
-            interactions: settleAgentInteraction(interactions, resolution),
-            decision: undefined,
-          };
-        }),
-      }));
-    },
-    [updateConversation],
-  );
-
-  const settleMessageActivities = useCallback(
-    (conversationId: string, messageId: string, status: RunActivityStatus) => {
-      updateConversation(conversationId, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => message.id === messageId ? {
-          ...message,
-          activities: message.activities?.map((activity) =>
-            activity.status === 'pending' || activity.status === 'running'
-              ? { ...activity, status, completedAt: Date.now() }
-              : activity,
-          ),
-        } : message),
-      }));
-    },
-    [updateConversation],
-  );
-
   const patchActiveConversation = useCallback(
     (patch: Partial<Conversation>) => {
       updateConversation(activeConversation.id, (conversation) => ({ ...conversation, ...patch }));
@@ -835,25 +729,11 @@ export default function App() {
   );
 
   const stopRequest = useCallback((conversationId: string, messageId: string) => {
-    updateMessage(conversationId, messageId, {
-      status: 'stopped',
-      stage: undefined,
-      errorMessage: undefined,
-      runFinishedAt: Date.now(),
-    });
-    settleMessageActivities(conversationId, messageId, 'stopped');
-    requestCoordinatorRef.current?.stop(conversationId);
-  }, [settleMessageActivities, updateMessage]);
+    void backgroundClientRef.current?.command({ kind: 'stop', conversationId, messageId }).catch(() => undefined);
+  }, []);
 
-  const stopAllRequests = useCallback(() => {
-    requestCoordinatorRef.current?.clear();
-    setWorkspace((current) => ({
-      ...current,
-      conversations: current.conversations.map((conversation) => ({
-        ...conversation,
-        messages: reconcileTransientMessages(conversation.messages),
-      })),
-    }));
+  const stopAllRequests = useCallback(async () => {
+    await backgroundClientRef.current?.command({ kind: 'clear-runs' });
   }, []);
 
   const refreshPageMetadata = useCallback(async (invalidateSnapshot = false, tabId?: number) => {
@@ -1030,7 +910,6 @@ export default function App() {
       });
     return () => {
       mounted = false;
-      requestCoordinatorRef.current?.clear();
     };
   }, []);
 
@@ -1610,394 +1489,19 @@ export default function App() {
     workspaceHydrated,
   ]);
 
-  const runAgentRequest = async (request: QueuedAgentRequest, signal: AbortSignal) => {
-    const connection = workosConnection;
-    if (!connection || !isActiveWorkosConnectionConfigured(connection)) return;
-    const transport = createWorkosTransport(connection);
-    const { conversationId, messageId, userMessage, needsPageRead } = request;
-    updateMessage(conversationId, messageId, {
-      status: 'running',
-      stage: needsPageRead ? 'reading-page' : 'waiting-first-token',
-      errorMessage: undefined,
-      runStartedAt: Date.now(),
-      runFinishedAt: undefined,
-    });
-    let receivedText = false;
-    let receivedArtifact = false;
-    let receivedInterrupt = false;
-    let terminalError: string | null = null;
-    let branchContextConsumed = false;
-    const preparation = await waitForAbortable(request.pageSnapshotPromise, signal);
-    if (signal.aborted) return;
-    const pageSnapshot = preparation?.snapshot;
-    const currentConversation = workspaceRef.current.conversations.find((conversation) => conversation.id === conversationId);
-    const pendingBranchContext = currentConversation?.pendingBranchContext;
-    const connectionTargetChanged = hasWorkosRemoteTargetChanged(
-      currentConversation?.remoteUuid,
-      currentConversation?.remoteTransport,
-      currentConversation?.remoteAgentUuid,
-      transport.kind,
-      connection.agentUuid,
-      currentConversation?.remoteApiBase,
-    );
-    const earlierMessages = currentConversation?.messages.filter(
-      (message) => message.id !== userMessage.id && message.id !== messageId,
-    ) ?? [];
-    const transportHandoffContext = connectionTargetChanged && earlierMessages.length
-      ? buildTransportHandoffContext(earlierMessages)
-      : undefined;
-    const continuationContext = pendingBranchContext ?? transportHandoffContext;
-    const messageContextItems = contextItemsFromMessage(userMessage);
-    const messagePageItem = contextPage(messageContextItems);
-    const messagePage = messagePageItem?.page;
-    const messageSelections = contextSelections(messageContextItems);
-    const messageAttachments = contextAttachments(messageContextItems);
-    const preparedPage = messagePage
-      ? preparePageReference(pageSnapshot ?? messagePage)
-      : undefined;
-    const previousDelivery = currentConversation?.remoteUuid && !connectionTargetChanged && preparedPage
-      ? findConversationSourceDelivery(currentConversation, preparedPage, currentConversation.remoteUuid)
-      : undefined;
-    const pageDecision: CurrentPageDeliveryDecision = decideCurrentPageDelivery({
-      included: Boolean(messagePage) && needsPageRead,
-      prepared: preparedPage,
-      previous: previousDelivery,
-      agent: WORKOS_AGENT_CAPABILITIES,
-    });
-    const pageContextMode = pageDecision.mode === 'none' ? undefined : pageDecision.mode;
-    const pageContextDelivery = pageDecision.mode === 'none'
-      ? undefined
-      : pageDecision.mode === 'reuse'
-        ? 'reuse' as const
-        : pageDecision.delivery;
-
-    if (pageSnapshot) {
-      updateMessage(conversationId, userMessage.id, {
-        contextItems: updatePageContextSnapshot(
-          messageContextItems,
-          pageContextFromSnapshot(pageSnapshot, 'ready'),
-          undefined,
-          pageContextDelivery,
-        ),
-        pageContextMode,
-        pageContextDelivery,
-        pageContextIssue: undefined,
-      });
-    } else if (needsPageRead && messagePage) {
-      const issue = preparation?.error ?? '当前页仅以链接加入，正文未能读取。';
-      updateMessage(conversationId, userMessage.id, {
-        contextItems: updatePageContextSnapshot(
-          messageContextItems,
-          { ...messagePage, status: 'not-read' },
-          issue,
-          pageContextDelivery,
-        ),
-        pageContextMode,
-        pageContextDelivery,
-        pageContextIssue: issue,
-      });
-    }
-
-    const content = userMessage.collectionMaterials && userMessage.collectionMode !== 'question'
-      ? collectionMessagePrompt(userMessage)
-      : buildAgentContent({
-          question: userMessage.content,
-          quotes: messageSelections,
-          links: contextLinks(messageContextItems),
-          collectionMaterials: userMessage.collectionMaterials,
-          ...(preparedPage ? { page: { prepared: preparedPage, decision: pageDecision } } : {}),
-        });
-    const requestContent = prependBranchContext(continuationContext, content);
-    if ((userMessage.collectionMaterials?.length || contextLinks(messageContextItems).length) && requestContent.length > MAX_COLLECTION_PROMPT_CHARACTERS) {
-      const issue = `问题与引用材料合计超过 ${MAX_COLLECTION_PROMPT_CHARACTERS} 字，本次未发送。材料已放回输入区，请排除部分内容后重新提问。`;
-      updateConversation(conversationId, (conversation) => ({ ...conversation,
-        ...restoreCollectionQuestionDraft(conversation, userMessage),
-      }));
-      updateMessage(conversationId, messageId, { status: 'failed', stage: undefined, collectionSend: undefined,
-        errorMessage: issue, runFinishedAt: Date.now() });
-      settleMessageActivities(conversationId, messageId, 'failed');
-      setConnectionIssue(issue);
-      return;
-    }
-    const consumeBranchContext = () => {
-      if (!pendingBranchContext || branchContextConsumed) return;
-      branchContextConsumed = true;
-      updateConversation(conversationId, (conversation) => ({ ...conversation, pendingBranchContext: undefined }));
-    };
-
-    try {
-      let remoteUuid = connectionTargetChanged ? undefined : currentConversation?.remoteUuid;
-      if (!remoteUuid) {
-        updateMessage(conversationId, messageId, { stage: 'creating-conversation' });
-        remoteUuid = await transport.createConversation(signal);
-        updateConversation(conversationId, (conversation) => ({
-          ...conversation,
-          remoteUuid,
-          remoteTransport: transport.kind,
-          remoteAgentUuid: connection.agentUuid,
-          remoteApiBase: transport.kind === 'internal-v2' ? WORKOS_INTERNAL_V2_BASE_URL : undefined,
-        }));
-      }
-      updateMessage(conversationId, messageId, { stage: 'waiting-first-token' });
-      await transport.executeStream(
-        remoteUuid,
-        {
-          content: requestContent,
-          attachments: messageAttachments
-            .filter((attachment) => attachment.status === 'ready' && attachment.url)
-            .map((attachment) => ({
-              url: attachment.url!,
-              filename: attachment.filename,
-              ...(attachment.mime ? { mime: attachment.mime } : {}),
-            })),
-        },
-        {
-          onText: (text) => {
-            consumeBranchContext();
-            const respondedAt = !receivedText && !receivedArtifact && text.length > 0 ? Date.now() : undefined;
-            receivedText = receivedText || text.length > 0;
-            updateMessage(conversationId, messageId, {
-              content: text,
-              stage: 'streaming',
-              status: 'streaming',
-              ...(respondedAt ? { respondedAt } : {}),
-            });
-          },
-          onArtifact: (artifact) => {
-            consumeBranchContext();
-            const respondedAt = !receivedText && !receivedArtifact ? Date.now() : undefined;
-            receivedArtifact = true;
-            upsertMessageArtifact(conversationId, messageId, artifact);
-            updateMessage(conversationId, messageId, {
-              stage: 'streaming',
-              status: 'streaming',
-              ...(respondedAt ? { respondedAt } : {}),
-            });
-          },
-          onActivity: (activity) => {
-            consumeBranchContext();
-            upsertMessageActivity(conversationId, messageId, activity);
-          },
-          onInterrupt: (interrupt) => {
-            consumeBranchContext();
-            receivedInterrupt = true;
-            upsertMessageDecision(conversationId, messageId, interrupt);
-          },
-          onInterruptResolution: (resolution) => {
-            settleMessageDecision(conversationId, messageId, resolution);
-          },
-          onError: (message) => {
-            terminalError = message;
-          },
-        },
-        signal,
-      );
-      consumeBranchContext();
-      if (terminalError) throw new WorkosApiError(terminalError);
-      if (!receivedText && !receivedArtifact && !receivedInterrupt) {
-        throw new WorkosApiError('Agent 已结束运行，但没有返回可显示的内容。');
-      }
-      if (preparedPage && pageDecision.mode !== 'none' && messagePage) {
-        const deliveredAt = Date.now();
-        updateConversation(conversationId, (conversation) => {
-          const existing = conversation.pages
-            .filter((page) =>
-              (page.sourceId && page.sourceId === preparedPage.source.source_id)
-              || Boolean(preparedPage.source.url
-                && normalizeSourceIdentityUrl(page.url) === normalizeSourceIdentityUrl(preparedPage.source.url)))
-            .sort((left, right) => (right.sentAt ?? 0) - (left.sentAt ?? 0))[0];
-          const basePage = pageSnapshot
-            ? sentPageContext(pageSnapshot, deliveredAt, pageDecision.mode === 'reuse'
-                ? existing?.version ?? 1
-                : (existing?.version ?? 0) + 1, remoteUuid)
-            : markPageDelivered({
-                ...messagePage,
-                sourceId: preparedPage.source.source_id,
-                manifest: preparedPage.manifest,
-                status: 'read' as const,
-                version: pageDecision.mode === 'reuse'
-                  ? existing?.version ?? 1
-                  : (existing?.version ?? 0) + 1,
-              }, remoteUuid, deliveredAt);
-          const deliveredPage = {
-            ...basePage,
-            sourceId: preparedPage.source.source_id,
-            manifest: preparedPage.manifest,
-          };
-          const pages = existing
-            ? conversation.pages.map((page) => page === existing
-                ? pageDecision.mode === 'reuse'
-                  ? {
-                      ...page,
-                      sourceId: deliveredPage.sourceId,
-                      manifest: deliveredPage.manifest,
-                      deliveredRemoteUuid: remoteUuid,
-                    }
-                  : deliveredPage
-                : page)
-            : [...conversation.pages, deliveredPage];
-          return {
-            ...conversation,
-            page: deliveredPage,
-            pages,
-            subtitle: conversation.branch
-              ? `分支 ${conversation.branch.ordinal} · 刚刚`
-              : `${pages.length} 个页面 · 刚刚`,
-          };
-        });
-        updateMessage(conversationId, userMessage.id, {
-          contextItems: updatePageContextSnapshot(
-            messageContextItems,
-            {
-              ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : messagePage),
-              sentAt: deliveredAt,
-              deliveredRemoteUuid: remoteUuid,
-            },
-            pageSnapshot ? undefined : preparation?.error,
-            pageContextDelivery,
-          ),
-          pageContextMode,
-          pageContextDelivery,
-          pageContextIssue: pageSnapshot ? undefined : preparation?.error,
-        });
-        setCurrentPage((page) => page.url === preparedPage.source.url
-          ? {
-              ...page,
-              ...(pageSnapshot ? pageContextFromSnapshot(pageSnapshot, 'read') : {}),
-              sentAt: deliveredAt,
-              deliveredRemoteUuid: remoteUuid,
-            }
-          : page);
-      }
-      updateMessage(conversationId, messageId, {
-        status: 'complete',
-        stage: undefined,
-        errorMessage: undefined,
-        runFinishedAt: Date.now(),
-      });
-      settleMessageActivities(conversationId, messageId, 'completed');
-      setConnectionIssue(null);
-    } catch (error) {
-      if (isAbortError(error) || signal.aborted) return;
-      const message = error instanceof Error ? error.message : 'Agent 请求失败，请稍后重试。';
-      updateMessage(conversationId, messageId, {
-        status: 'failed',
-        stage: undefined,
-        errorMessage: message,
-        runFinishedAt: Date.now(),
-      });
-      settleMessageActivities(conversationId, messageId, 'failed');
-      setConnectionIssue(message);
-      if (error instanceof WorkosApiError && (error.status === 401 || error.status === 403)) {
-        setSettingsOpen(true);
-      }
-    }
-  };
-  requestRunnerRef.current = runAgentRequest;
-
   const resolveAgentDecision = useCallback(async (
-    conversationId: string,
-    messageId: string,
-    decisionId: string,
-    action: 'reply' | 'reject',
-    candidateAnswers: WorkosInterruptAnswers = {},
+    conversationId: string, messageId: string, decisionId: string,
+    action: 'reply' | 'reject', candidateAnswers: WorkosInterruptAnswers = {},
   ) => {
-    const connection = workosConnection;
-    if (!connection || connection.transport !== 'internal-v2' || !isActiveWorkosConnectionConfigured(connection)) return;
-    const conversation = workspaceRef.current.conversations.find((item) => item.id === conversationId);
-    const message = conversation?.messages.find((item) => item.id === messageId);
-    const decision = messageDecisionInteractions(message ?? {}).find((interaction) => interaction.id === decisionId);
-    if (!conversation?.remoteUuid || !message || !decision) return;
-    if (message.status !== 'running' && message.status !== 'streaming') return;
-    if (decision.status !== 'pending' && decision.status !== 'failed') return;
-    const pendingKey = `${conversationId}:${decision.id}`;
-    if (pendingDecisionRequestsRef.current.has(pendingKey)) return;
-    pendingDecisionRequestsRef.current.add(pendingKey);
-
-    const answers = normalizeAgentDecisionAnswers(decision.fields, candidateAnswers);
-    updateConversation(conversationId, (current) => ({
-      ...current,
-      messages: current.messages.map((item) => {
-        if (item.id !== messageId) return item;
-        const interactions = messageDecisionInteractions(item);
-        if (!interactions.some((interaction) => interaction.id === decision.id)) return item;
-        return {
-          ...item,
-          stage: 'waiting-user-input',
-          interactions: interactions.map((interaction) => interaction.id === decision.id
-            ? {
-                ...interaction,
-                status: 'submitting' as const,
-                submittedAction: action,
-                ...(action === 'reply' ? { answers } : {}),
-                errorMessage: undefined,
-              }
-            : interaction),
-          decision: undefined,
-        };
-      }),
-    }));
-
-    try {
-      const transport = createWorkosTransport(connection);
-      if (action === 'reply') {
-        if (!transport.replyInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
-        await transport.replyInterrupt(conversation.remoteUuid, decision.id, answers);
-      } else {
-        if (!transport.rejectInterrupt) throw new WorkosApiError('当前连接通道不支持交互表单。');
-        await transport.rejectInterrupt(conversation.remoteUuid, decision.id);
-      }
-      updateConversation(conversationId, (current) => ({
-        ...current,
-        messages: current.messages.map((item) => {
-          if (item.id !== messageId) return item;
-          const interactions = messageDecisionInteractions(item);
-          const target = interactions.find((interaction) => interaction.id === decision.id);
-          if (target?.status !== 'submitting') return item;
-          return {
-            ...item,
-            interactions: interactions.map((interaction) => interaction.id === decision.id
-              ? {
-                  ...interaction,
-                  status: 'submitted' as const,
-                }
-              : interaction),
-            decision: undefined,
-          };
-        }),
-      }));
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : '无法提交当前选择，请重试。';
-      const errorMessage = detail;
-      updateConversation(conversationId, (current) => ({
-        ...current,
-        messages: current.messages.map((item) => {
-          if (item.id !== messageId) return item;
-          const interactions = messageDecisionInteractions(item);
-          if (!interactions.some((interaction) => interaction.id === decision.id)) return item;
-          return {
-            ...item,
-            stage: 'waiting-user-input',
-            interactions: interactions.map((interaction) => interaction.id === decision.id
-              ? {
-                  ...interaction,
-                  status: 'failed' as const,
-                  errorMessage,
-                }
-              : interaction),
-            decision: undefined,
-          };
-        }),
-      }));
-      setConnectionIssue(errorMessage);
-      if (error instanceof WorkosApiError && (error.status === 401 || error.status === 403)) setSettingsOpen(true);
-    } finally {
-      pendingDecisionRequestsRef.current.delete(pendingKey);
-    }
-  }, [updateConversation, workosConnection]);
+    await backgroundClientRef.current?.command({ kind: 'decision', conversationId, messageId, decisionId, action, answers: candidateAnswers });
+  }, []);
 
   const sendMessage = (draftInput: string) => {
     if (!workspaceHydrated || workosConnection === null) return false;
+    if (hasUnconfirmedWorkosRun(activeConversation, workosConnection)) {
+      setConnectionIssue(UNCONFIRMED_WORKOS_SUBMIT_MESSAGE);
+      return false;
+    }
     if (!activeConnectionConfigured) {
       setConnectionIssue('请先配置当前 WorkOS 连接通道，再发送消息。');
       setSettingsOpen(true);
@@ -2087,19 +1591,11 @@ export default function App() {
       };
     });
 
-    const pageSnapshotPromise = queuedSnapshot
-      ? Promise.resolve<PagePreparationResult>({ snapshot: queuedSnapshot })
-      : needsPageRead
-        ? preparePageContext(conversationAtSend.id, pageAtSend)
-        : Promise.resolve<PagePreparationResult>({});
-
-    requestCoordinatorRef.current?.enqueue({
-      conversationId: conversationAtSend.id,
-      messageId: assistantMessage.id,
-      userMessage,
-      needsPageRead,
-      pageSnapshotPromise,
-    });
+    void backgroundClientRef.current?.command({ kind: 'submit', request: {
+      conversationId: conversationAtSend.id, messageId: assistantMessage.id, userMessage, needsPageRead,
+      ...(queuedSnapshot ? { pagePreparation: { snapshot: queuedSnapshot } } : {}),
+      pageTarget: { tabId: pageAtSend.browserTabId ?? activeBrowserTabIdRef.current, expectedUrl: pageAtSend.url },
+    } }).catch(() => undefined);
     return true;
   };
 
@@ -2147,6 +1643,10 @@ export default function App() {
 
   const retryMessage = (message: ChatMessage) => {
     if (!workspaceHydrated || !activeConnectionConfigured) return;
+    if (workosConnection && hasUnconfirmedWorkosRun(activeConversation, workosConnection)) {
+      setConnectionIssue(UNCONFIRMED_WORKOS_SUBMIT_MESSAGE);
+      return;
+    }
     const messageIndex = activeConversation.messages.findIndex((item) => item.id === message.id);
     const userMessage = [...activeConversation.messages.slice(0, messageIndex)].reverse().find((item) => item.role === 'user');
     if (!userMessage) return;
@@ -2156,6 +1656,7 @@ export default function App() {
       runStartedAt: undefined,
       runFinishedAt: undefined,
       status: 'queued',
+      stopStatus: undefined,
       stage: 'queued',
       errorMessage: undefined,
       activities: [],
@@ -2170,18 +1671,11 @@ export default function App() {
     const cachedSnapshot = retryPage
       ? pendingPageSnapshotsRef.current.get(pageSnapshotKey(activeConversation.id, retryPage.url))
       : undefined;
-    const pageSnapshotPromise = needsRetryPageRead && cachedSnapshot
-      ? Promise.resolve<PagePreparationResult>({ snapshot: cachedSnapshot })
-      : needsRetryPageRead && retryPage
-        ? preparePageContext(activeConversation.id, retryPage)
-        : Promise.resolve<PagePreparationResult>({});
-    requestCoordinatorRef.current?.enqueue({
-      conversationId: activeConversation.id,
-      messageId: message.id,
-      userMessage,
-      needsPageRead: needsRetryPageRead,
-      pageSnapshotPromise,
-    });
+    void backgroundClientRef.current?.command({ kind: 'submit', request: {
+      conversationId: activeConversation.id, messageId: message.id, userMessage, needsPageRead: needsRetryPageRead,
+      ...(cachedSnapshot ? { pagePreparation: { snapshot: cachedSnapshot } } : {}),
+      ...(retryPage ? { pageTarget: { tabId: retryPage.browserTabId, expectedUrl: retryPage.url } } : {}),
+    } }).catch(() => undefined);
   };
 
   const uploadAttachment = useCallback((
@@ -2429,7 +1923,7 @@ export default function App() {
   };
 
   const saveConnection = async (settings: WorkosConnectionSettings) => {
-    stopAllRequests();
+    await stopAllRequests();
     const saved = await saveWorkosConnectionSettings(settings);
     setWorkosConnection(saved);
     setConnectionIssue(null);
@@ -2450,7 +1944,7 @@ export default function App() {
   };
 
   const removeCredentials = async (kind: WorkosConnectionSettings['transport']) => {
-    stopAllRequests();
+    await stopAllRequests();
     const saved = await removeWorkosCredentials(kind);
     setWorkosConnection(saved);
     setConnectionIssue(kind === 'public-v1' ? 'v1 API Token 已从本机移除。' : 'v2 登录凭证已从本机移除。');
@@ -2517,7 +2011,7 @@ export default function App() {
   };
 
   const exportBackup = async (): Promise<LocalBackupExportReceipt> => {
-    await saveWorkspaceState(workspaceRef.current);
+    await backgroundClientRef.current?.command({ kind: 'flush' });
     const { exportLocalBackup } = await import('../services/localBackup');
     const receipt = await exportLocalBackup();
     setLocalBackupStatus({ counts: receipt.counts, lastExportedAt: receipt.exportedAt });
@@ -2540,15 +2034,16 @@ export default function App() {
     file: File,
     mode: LocalBackupImportMode,
   ): Promise<LocalBackupImportReceipt> => {
-    stopAllRequests();
-    await saveWorkspaceState(workspaceRef.current);
+    await backgroundClientRef.current?.command({ kind: 'maintenance-start' });
     setWorkspaceHydrated(false);
     try {
       const { importLocalBackup } = await import('../services/localBackup');
       const receipt = await importLocalBackup(file, mode);
+      await backgroundClientRef.current?.command({ kind: 'maintenance-end' });
       window.setTimeout(() => window.location.reload(), 650);
       return receipt;
     } catch (error) {
+      await backgroundClientRef.current?.command({ kind: 'maintenance-end' }).catch(() => undefined);
       setWorkspaceHydrated(true);
       throw error;
     }
@@ -2576,10 +2071,10 @@ export default function App() {
     }
   };
 
-  const clearLocalHistory = () => {
+  const clearLocalHistory = async () => {
     if (!workspaceHydrated) return;
     const current = workspaceRef.current;
-    stopAllRequests();
+    await stopAllRequests();
     releaseConversationResources(current.conversations);
     attachmentPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentPreviewUrlsRef.current.clear();
@@ -2593,7 +2088,7 @@ export default function App() {
     closeCommandPalette();
     setSettingsOpen(false);
     setHistoryOpen(false);
-    void clearWorkspaceHistory(next).catch(() => {
+    void backgroundClientRef.current?.command({ kind: 'clear-history' }).catch(() => {
       setConnectionIssue('无法完成本地历史清理，请检查扩展存储权限后重试。');
       setSettingsOpen(true);
     });
@@ -2747,6 +2242,7 @@ export default function App() {
         />
       </Suspense>
       <Composer
+        unreadConversationIds={unreadConversationIds}
         tabs={workspace.openTabs}
         conversations={workspace.conversations}
         activeTabId={activeOpenTab.id}
@@ -2759,6 +2255,7 @@ export default function App() {
         runSummary={runSummary}
         historyOpen={historyOpen}
         connectionState={!workspaceHydrated || workosConnection === null ? 'loading' : activeConnectionConfigured ? 'configured' : 'missing'}
+        submissionIssue={submissionIssue}
         fileUploadEnabled={Boolean(workosConnection && isWorkosFileUploadConfigured(workosConnection))}
         fileAccept={workosConnection
           ? attachmentAcceptForChannel(workosConnection.transport)
@@ -2892,6 +2389,9 @@ export default function App() {
             settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
             connectionIssue={connectionIssue}
             bubbleEnabled={selectionBubbleEnabled}
+            systemNotificationsEnabled={taskNotifications.systemNotificationsEnabled}
+            notificationPermission={taskNotifications.permission}
+            notificationIssue={taskNotifications.issue}
             storageUsage={localStorageUsage}
             storageUsageIssue={localStorageUsageIssue}
             backupStatus={localBackupStatus}
@@ -2902,6 +2402,7 @@ export default function App() {
             onImportWorkosCredentials={importWorkosLoginCredentials}
             onRemoveCredentials={removeCredentials}
             onBubbleEnabledChange={changeSelectionBubble}
+            onSystemNotificationsEnabledChange={(enabled) => notificationClientRef.current?.setEnabled(enabled)}
             onExportBackup={exportBackup}
             onInspectBackup={inspectBackup}
             onImportBackup={importBackup}

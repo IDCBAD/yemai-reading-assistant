@@ -212,6 +212,9 @@ interface SettingsDrawerProps {
   settings: WorkosConnectionSettings;
   connectionIssue: string | null;
   bubbleEnabled: boolean;
+  systemNotificationsEnabled: boolean;
+  notificationPermission: 'granted' | 'denied' | 'unknown';
+  notificationIssue?: string;
   storageUsage: LocalStorageUsage | null;
   storageUsageIssue: string | null;
   backupStatus: LocalBackupStatus | null;
@@ -222,6 +225,7 @@ interface SettingsDrawerProps {
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
   onRemoveCredentials: (kind: WorkosTransportKind) => Promise<void>;
   onBubbleEnabledChange: (enabled: boolean) => void;
+  onSystemNotificationsEnabledChange: (enabled: boolean) => void;
   onExportBackup: () => Promise<LocalBackupExportReceipt>;
   onInspectBackup: (file: File) => Promise<LocalBackupPreview>;
   onImportBackup: (file: File, mode: LocalBackupImportMode) => Promise<LocalBackupImportReceipt>;
@@ -237,6 +241,9 @@ export function SettingsDrawer({
   settings,
   connectionIssue,
   bubbleEnabled,
+  systemNotificationsEnabled,
+  notificationPermission,
+  notificationIssue,
   storageUsage,
   storageUsageIssue,
   backupStatus,
@@ -247,6 +254,7 @@ export function SettingsDrawer({
   onImportWorkosCredentials,
   onRemoveCredentials,
   onBubbleEnabledChange,
+  onSystemNotificationsEnabledChange,
   onExportBackup,
   onInspectBackup,
   onImportBackup,
@@ -772,6 +780,25 @@ export function SettingsDrawer({
               <p>侧边栏关闭时，划词显示快捷入口。</p>
             </div>
             <button className={`switch pressable${bubbleEnabled ? ' is-on' : ''}`} type="button" role="switch" aria-checked={bubbleEnabled} onClick={() => onBubbleEnabledChange(!bubbleEnabled)}>
+              <span />
+            </button>
+          </section>
+
+          <section className="settings-section settings-section--row">
+            <div>
+              <strong>系统通知</strong>
+              <p>任务完成、失败或需要确认时提醒。关闭后仍保留角标。</p>
+              {notificationPermission === 'denied' && <p role="status">浏览器已关闭通知，仍可通过角标查看。</p>}
+              {notificationIssue && <p role="status">{notificationIssue}</p>}
+            </div>
+            <button
+              className={`switch pressable${systemNotificationsEnabled ? ' is-on' : ''}`}
+              type="button"
+              role="switch"
+              aria-label="系统通知"
+              aria-checked={systemNotificationsEnabled}
+              onClick={() => onSystemNotificationsEnabledChange(!systemNotificationsEnabled)}
+            >
               <span />
             </button>
           </section>

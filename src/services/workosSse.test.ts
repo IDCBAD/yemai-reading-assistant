@@ -146,17 +146,17 @@ describe('WorkosSseParser', () => {
     expect(onText).toHaveBeenLastCalledWith('正文仍应显示');
   });
 
-  it('reports failed terminal events without exposing unrelated payloads', () => {
+  it.each(['failed', 'run_failed'])('reports %s terminal events without exposing unrelated payloads', (status) => {
     const onError = vi.fn();
     const parser = new WorkosSseParser({ onText: vi.fn(), onError });
     parser.push(nestedEvent({
       type: 'run.terminal',
-      properties: { status: 'failed', message: '工具执行失败', debug: 'secret' },
+      properties: { status, message: '工具执行失败', debug: 'secret' },
     }));
     expect(onError).toHaveBeenCalledWith('工具执行失败');
   });
 
-  it.each(['finished', 'finish', 'successful', 'succeeded', 'ok'])('accepts %s as a successful terminal status', (status) => {
+  it.each(['finished', 'finish', 'successful', 'succeeded', 'ok', 'run_succeeded'])('accepts %s as a successful terminal status', (status) => {
     const onError = vi.fn();
     const parser = new WorkosSseParser({ onText: vi.fn(), onError });
     parser.push(nestedEvent({ type: 'run.terminal', properties: { status } }));
@@ -484,6 +484,94 @@ describe('WorkosSseParser', () => {
     });
     expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('must-not-reach-ui');
     expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('未知字段');
+  });
+
+  it('projects WorkOS input, textarea, radio, select and checkbox form fields safely', () => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_form1', sessionID: 'ses_form1', type: 'a2ui',
+        payload: {
+          title: '简单确认',
+          fields: [
+            { type: 'input', label: '你想做什么？', default: '阅读', private: 'must-not-reach-ui' },
+            { type: 'radio', label: '需要什么形式？', default: '文字说明', options: [{ label: '文字说明', token: 'must-not-reach-ui' }, { label: '代码 / 文件' }] },
+            { type: 'textarea', label: '其他补充需求', default: '第一行\n第二行' },
+            { type: 'select', label: '选择平台', default: 'Windows', options: ['Windows', 'Linux', 'Windows', 42] },
+            { type: 'checkbox', label: '选择内容', default: ['原理', '例子', '原理', '未知选项', 42], options: [{ label: '原理' }, { label: '例子' }] },
+            { type: 'password', label: '未知字段', default: 'must-not-reach-ui' },
+          ],
+          rawInput: 'must-not-reach-ui',
+        },
+        tool: { messageID: 'msg_form1', callID: 'call_form1', input: 'must-not-reach-ui' },
+      },
+    }));
+
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith({
+      id: 'int_form1', sessionId: 'ses_form1', title: '简单确认',
+      fields: [
+        { type: 'text', label: '你想做什么？', defaultValue: '阅读' },
+        { type: 'single-select', label: '需要什么形式？', defaultValue: '文字说明', options: ['文字说明', '代码 / 文件'] },
+        { type: 'text', label: '其他补充需求', defaultValue: '第一行\n第二行' },
+        { type: 'single-select', label: '选择平台', defaultValue: 'Windows', options: ['Windows', 'Linux'] },
+        { type: 'multi-select', label: '选择内容', defaultValue: ['原理', '例子'], options: ['原理', '例子'] },
+      ],
+      toolMessageId: 'msg_form1', toolCallId: 'call_form1',
+    });
+    expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('must-not-reach-ui');
+    expect(JSON.stringify(onInterrupt.mock.calls)).not.toContain('未知字段');
+  });
+
+  it.each([
+    ['input', 'text', 42, ''],
+    ['textarea', 'text', { text: 'private' }, ''],
+    ['radio', 'single-select', '未知选项', ''],
+    ['select', 'single-select', ['选项一'], ''],
+    ['checkbox', 'multi-select', '选项一', []],
+  ] as const)('clears an invalid default for WorkOS %s fields', (type, expectedType, defaultValue, expectedDefault) => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_invalid', sessionID: 'ses_form1', type: 'a2ui',
+        payload: { fields: [{ type, label: '表单字段', default: defaultValue, options: ['选项一'] }] },
+      },
+    }));
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      fields: [{ type: expectedType, label: '表单字段', defaultValue: expectedDefault, ...(expectedType === 'text' ? {} : { options: ['选项一'] }) }],
+    }));
+  });
+
+  it.each(['input', 'textarea', 'radio', 'select', 'checkbox'])('uses an empty default for WorkOS %s fields without a default', (type) => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_empty', sessionID: 'ses_form1', type: 'a2ui',
+        payload: { fields: [{ type, label: '表单字段', options: ['选项一'] }] },
+      },
+    }));
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      fields: [expect.objectContaining({ defaultValue: type === 'checkbox' ? [] : '' })],
+    }));
+  });
+
+  it.each(['radio', 'select', 'checkbox'])('ignores WorkOS %s fields with no safe options', (type) => {
+    const onInterrupt = vi.fn();
+    const parser = new WorkosSseParser({ onText: vi.fn(), onInterrupt });
+    parser.push(nestedEvent({
+      type: 'interrupt',
+      properties: {
+        id: 'int_options', sessionID: 'ses_form1', type: 'a2ui',
+        payload: { fields: [{ type, label: '表单字段', options: [42, { value: 'must-not-reach-ui' }, '', '{private}'] }] },
+      },
+    }));
+    expect(onInterrupt).not.toHaveBeenCalled();
   });
 
   it('ignores retired cognition candidate interrupts', () => {

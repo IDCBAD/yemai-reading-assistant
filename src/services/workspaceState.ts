@@ -191,6 +191,7 @@ function isActivity(value: unknown): value is RunActivity {
     && (value.kind === 'tool' || value.kind === 'subagent')
     && typeof value.title === 'string'
     && typeof value.status === 'string'
+    && (value.progressUnconfirmed === undefined || value.progressUnconfirmed === true)
     && (value.subagent === undefined || (isRecord(value.subagent)
       && (value.subagent.sessionId === undefined || (typeof value.subagent.sessionId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value.subagent.sessionId)))
       && (value.subagent.agentType === undefined || (typeof value.subagent.agentType === 'string' && value.subagent.agentType.length <= 80))
@@ -299,6 +300,14 @@ function isMessage(value: unknown): value is ChatMessage {
     && typeof value.createdAt === 'number'
     && (value.respondedAt === undefined || typeof value.respondedAt === 'number')
     && typeof value.status === 'string'
+    && (value.stopStatus === undefined || ['pending', 'accepted', 'failed', 'local-only'].includes(value.stopStatus as string))
+    && (value.remoteRunUnconfirmed === undefined || (isRecord(value.remoteRunUnconfirmed)
+      && typeof value.remoteRunUnconfirmed.conversationUuid === 'string'
+      && typeof value.remoteRunUnconfirmed.runId === 'string'
+      && value.remoteRunUnconfirmed.transport === 'internal-v2'
+      && typeof value.remoteRunUnconfirmed.agentUuid === 'string'
+      && typeof value.remoteRunUnconfirmed.apiBase === 'string'
+      && typeof value.remoteRunUnconfirmed.disconnectedAt === 'number'))
     && (value.presentation === undefined || value.presentation === 'page-overview')
     && (value.pageContext === undefined || isPage(value.pageContext))
     && (value.pageContextMode === undefined || ['manifest', 'reuse', 'snapshot'].includes(value.pageContextMode as string))
@@ -406,16 +415,22 @@ function stopInterruptedActivity(activity: RunActivity, recoveredAt: number): Ru
 }
 
 function recoverMessage(message: ChatMessage, recoveredAt: number): ChatMessage {
-  const { decision: legacyDecision, ...current } = message;
+  const { decision: legacyDecision, ...stored } = message;
+  const current = stored.stopStatus === 'pending'
+    ? { ...stored, stopStatus: 'failed' as const, errorMessage: '上次暂停请求未得到确认，请在 WorkOS 中检查任务状态。' }
+    : stored;
   const interactions = message.interactions ?? (legacyDecision ? [legacyDecision] : undefined);
   const activities = message.activities?.map((activity) => stopInterruptedActivity(activity, recoveredAt));
-  if (message.status !== 'streaming') return { ...current, interactions, activities };
+  if (!['queued', 'running', 'streaming'].includes(message.status)) return { ...current, interactions, activities };
   return {
     ...current,
     interactions,
     status: 'stopped',
     stage: undefined,
-    errorMessage: undefined,
+    errorMessage: message.status === 'queued'
+      ? '扩展后台已重启，此排队问题未自动发送，请确认后重试。'
+      : '扩展后台连接已中断，WorkOS 任务状态未确认。请检查后再继续。',
+    runFinishedAt: recoveredAt,
     activities,
   };
 }

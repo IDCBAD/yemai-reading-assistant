@@ -666,7 +666,7 @@ https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com
 
 ## 11. A2UI 中断表单（可选）
 
-以下路径已随 v2 基础路径更新，但新工作台的表单回复尚未实测。
+2026-10-11 使用独立 WorkOS 简单表单任务实测了中断事件和回复路径：识别表单后按字段标签提交测试值，原任务继续并正常结束。跳过路径仍以现有实现和本地测试为依据，尚未在本轮真实工作台验证。
 
 如果 Agent 使用提问工具，SSE 中可能出现：
 
@@ -677,10 +677,19 @@ https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com
     "id": "<requestId>",
     "sessionID": "<sessionId>",
     "type": "a2ui",
-    "payload": {}
+    "payload": {
+      "title": "简单确认",
+      "fields": [
+        { "type": "input", "label": "你的需求" },
+        { "type": "radio", "label": "输出形式", "options": [{ "label": "文字" }, { "label": "表格" }] },
+        { "type": "textarea", "label": "补充说明" }
+      ]
+    }
   }
 }
 ```
+
+实时事件实测包含 `input`、`radio`、`textarea`；历史表单工具记录还包含 `checkbox`、`select`。插件明确转换为内部三个字段类型：`input/textarea -> text`、`radio/select -> single-select`、`checkbox -> multi-select`。现有旧字段类型继续支持，未知类型仍忽略，不从原始工具输入创建可提交表单。字段、默认值、选项仍经过原有安全投影。文本字段在插件中使用多行文本区域，单选使用单选按钮，因此不要求复刻 WorkOS 的每种控件外观。
 
 回复表单：
 

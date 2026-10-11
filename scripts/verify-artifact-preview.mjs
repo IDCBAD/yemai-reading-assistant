@@ -55,6 +55,48 @@ try {
   assert.equal(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')), true);
   checks.push('Markdown: tables, code, Mermaid, original text and modal focus');
 
+  await open('client.py');
+  await page.locator('.preview-source .hljs-keyword').first().waitFor();
+  assert.equal(await page.locator('.preview-source .hljs-keyword').first().evaluate((keyword) => getComputedStyle(keyword).color !== getComputedStyle(keyword.closest('pre')).color), true);
+  const pythonSource = await readFile(`${output}/client.py`, 'utf8');
+  assert.equal(await page.locator('.preview-source pre').textContent(), pythonSource);
+  assert.equal(await page.locator('.preview-line-numbers > span').count(), pythonSource.split('\n').length);
+  assert.equal(await page.locator('.preview-line-numbers > span').first().innerText(), '1');
+  const number = await page.locator('.preview-line-numbers > span').nth(1).boundingBox();
+  const keyword = await page.locator('.preview-source .hljs-keyword').first().boundingBox();
+  assert.ok(Math.abs(number.y + number.height / 2 - keyword.y - keyword.height / 2) < 2);
+  assert.equal(await page.locator('.preview-source script').count(), 0);
+  assert.equal(await page.evaluate(() => window.__unsafeSourceRan || false), false);
+  await page.evaluate(() => {
+    const writeText = navigator.clipboard.writeText.bind(navigator.clipboard);
+    window.__previewWriteText = writeText;
+    navigator.clipboard.writeText = (text) => { window.__previewCopiedSource = text; return writeText(text); };
+  });
+  await page.getByRole('button', { name: '复制内容', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.__previewCopiedSource), pythonSource);
+  // Windows clipboard normalizes LF to CRLF; the app must pass the untouched source.
+  assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), pythonSource);
+  await page.evaluate(() => { navigator.clipboard.writeText = window.__previewWriteText; });
+  await page.screenshot({ path: `${output}/python-narrow.png` });
+  checks.push('Python: file-card preview, syntax highlighting, exact source/copy and inert script-like text');
+
+  await open('long.py');
+  await page.locator('.preview-line-numbers').waitFor();
+  const initialLines = await page.locator('.preview-line-numbers > span').count();
+  const gutterBefore = await page.locator('.preview-line-numbers').boundingBox();
+  await page.locator('.preview-document-body').evaluate((body) => { body.scrollLeft = 200; });
+  assert.ok(await page.locator('.preview-document-body').evaluate((body) => body.scrollLeft > 0));
+  const gutterAfter = await page.locator('.preview-line-numbers').boundingBox();
+  assert.ok(Math.abs(gutterAfter.x - gutterBefore.x) < 1);
+  await page.getByRole('button', { name: /^继续显示/ }).click();
+  const longSource = await readFile(`${output}/long.py`, 'utf8');
+  const finalLines = longSource.split('\r\n').length;
+  assert.ok(finalLines > initialLines);
+  assert.equal(await page.locator('.preview-line-numbers > span').count(), finalLines);
+  assert.equal(await page.locator('.preview-line-numbers > span').last().innerText(), String(finalLines));
+  assert.equal(await page.locator('.preview-source pre').textContent(), longSource);
+  checks.push('source line numbers: blanks, CRLF, aligned highlighting, horizontal fixed gutter and continuous lazy loading');
+
   await open('report.html');
   const report = page.frameLocator('iframe[title="HTML 静态报告"]');
   await report.getByRole('heading', { name: '本周经营报告' }).waitFor();
@@ -162,7 +204,7 @@ try {
   const origin = 'https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com';
   await extensionContext.route(`${origin}/preview-fixtures/**`, async (route) => {
     const filename = new URL(route.request().url()).pathname.split('/').pop();
-    const types = { md: 'text/markdown; charset=utf-8', html: 'text/html; charset=utf-8', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv: 'text/csv; charset=utf-8', svg: 'image/svg+xml', json: 'application/json; charset=utf-8', txt: 'text/plain; charset=utf-8' };
+    const types = { md: 'text/markdown; charset=utf-8', html: 'text/html; charset=utf-8', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv: 'text/csv; charset=utf-8', svg: 'image/svg+xml', json: 'application/json; charset=utf-8', txt: 'text/plain; charset=utf-8', py: 'application/octet-stream' };
     await route.fulfill({ body: await readFile(`${output}/${filename}`), contentType: types[filename.split('.').pop()] });
   });
   const page = await extensionContext.newPage();
@@ -170,7 +212,7 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') console.error(message.text()); });
-  for (const filename of ['report.html', 'report.xlsx', 'report.md', 'report.csv', 'report.json', 'notes.txt', 'diagram.svg']) {
+  for (const filename of ['report.html', 'report.xlsx', 'report.md', 'report.csv', 'report.json', 'notes.txt', 'client.py', 'diagram.svg']) {
     console.log(`Verifying built extension: ${filename}`);
     const key = `artifact-preview:${crypto.randomUUID()}`;
     await serviceWorker.evaluate(({ key, artifact }) => chrome.storage.session.set({ [key]: { artifact, expiresAt: Date.now() + 60_000 } }), {
@@ -187,6 +229,9 @@ try {
     } else if (filename.endsWith('.md')) {
       await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
       await page.reload(); await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
+    } else if (filename.endsWith('.py')) {
+      await page.locator('.preview-source .hljs-keyword').first().waitFor();
+      assert.equal(await page.locator('.preview-source pre').textContent(), await readFile(`${output}/client.py`, 'utf8'));
     } else if (filename.endsWith('.svg')) {
       await page.waitForFunction(() => document.querySelector('.preview-image-controls output')?.textContent?.includes('%'));
     } else { await page.locator('.preview-source').waitFor(); }
@@ -195,7 +240,7 @@ try {
   await page.goto(`chrome-extension://${extensionId}/artifact-preview.html#artifact-preview:${crypto.randomUUID()}`);
   await page.getByText('预览已过期，请从产物卡片重新打开。').waitFor();
   assert.deepEqual(errors, []);
-  checks.push('built Chrome extension: CSP, all seven formats, worker, temporary storage consumption, reload and invalid IDs');
+  checks.push('built Chrome extension: CSP, all eight formats including Python, worker, temporary storage consumption, reload and invalid IDs');
 } catch (error) {
   if (extensionPage) { console.error(await extensionPage.locator('body').innerText()); await extensionPage.screenshot({ path: `${output}/extension-failure.png` }); }
   throw error;

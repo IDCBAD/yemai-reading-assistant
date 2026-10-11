@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import type { AssistantArtifact } from '../types';
 import { attachmentFormatLabel, getFileType } from '../fileTypes';
 import { FileTypeIcon } from './FileTypeIcon';
-import { artifactPreviewKind, safeArtifactUrl } from '../artifactPreview';
+import { artifactCodeLanguage, artifactPreviewKind, safeArtifactUrl } from '../artifactPreview';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
 
@@ -21,6 +21,7 @@ function formatArtifactSize(bytes?: number) {
 
 function ArtifactFileCard({ artifact, onPreview }: { artifact: AssistantArtifact; onPreview: (artifact: AssistantArtifact) => void }) {
   const type = getFileType(artifact.filename, artifact.mime);
+  const sourceCode = artifactPreviewKind(artifact) === 'code' && artifactCodeLanguage(artifact);
   const size = formatArtifactSize(artifact.size);
   const artifactUrl = safeArtifactUrl(artifact.url);
   const unavailable = artifact.status !== 'available' || !artifactUrl;
@@ -32,8 +33,8 @@ function ArtifactFileCard({ artifact, onPreview }: { artifact: AssistantArtifact
         {!unavailable && artifactPreviewKind(artifact) ? <button className="assistant-artifact-filename" type="button" title={artifact.filename} onClick={() => onPreview(artifact)}>{artifact.filename}</button>
           : <strong title={artifact.filename}>{artifact.filename}</strong>}
         <small>
-          {type.description}
-          {type.kind === 'generic' ? '' : ` · ${attachmentFormatLabel(artifact.filename, artifact.mime)}`}
+          {sourceCode ? '源码' : type.description}
+          {type.kind === 'generic' && !sourceCode ? '' : ` · ${attachmentFormatLabel(artifact.filename, artifact.mime)}`}
           {size ? ` · ${size}` : ''}
         </small>
       </span>

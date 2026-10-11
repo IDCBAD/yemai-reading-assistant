@@ -180,7 +180,15 @@ function projectA2uiOptions(value: unknown) {
 
 function projectA2uiField(value: unknown): WorkosA2uiField | undefined {
   if (!isRecord(value)) return undefined;
-  const type = firstString(value, ['type']);
+  const rawType = firstString(value, ['type']);
+  // WorkOS uses native form names; keep the UI's three safe field types.
+  const type = rawType === 'input' || rawType === 'textarea'
+    ? 'text'
+    : rawType === 'radio' || rawType === 'select'
+      ? 'single-select'
+      : rawType === 'checkbox'
+        ? 'multi-select'
+        : rawType;
   const label = safeObjectKey(firstString(value, ['label']));
   if (!type || !label) return undefined;
   if (type === 'text') {
@@ -405,6 +413,8 @@ function isSuccessfulTerminalStatus(status: string) {
     'success',
     'successful',
     'succeeded',
+    // WorkOS internal-v2 reports successful runs as `run_succeeded`.
+    'runsucceeded',
     'completed',
     'complete',
     'done',
