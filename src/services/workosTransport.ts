@@ -23,6 +23,8 @@ export function hasWorkosRemoteTargetChanged(
 export interface ExecuteRequest {
   content: string;
   attachments?: Array<{ url: string; filename: string; mime?: string }>;
+  /** Local receive-only context; never serialized into a WorkOS submission. */
+  streamContext?: { previousToolCallIds: string[] };
 }
 
 export type WorkosInterruptAnswers = Record<string, string | string[]>;

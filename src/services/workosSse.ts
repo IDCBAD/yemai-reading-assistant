@@ -14,6 +14,8 @@ export interface WorkosSseCallbacks {
 
 export interface WorkosSseParserOptions {
   expectedRunId?: string;
+  /** Conversation-wide subscriptions can replay completed parts from older runs. */
+  previousToolCallIds?: readonly string[];
 }
 
 export type WorkosToolStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -437,11 +439,14 @@ export class WorkosSseParser {
   private toolActivities = new Map<string, WorkosToolActivity>();
   private artifacts = new Map<string, WorkosArtifact>();
   private completed = false;
+  private readonly previousToolCallIds: Set<string>;
 
   constructor(
     private readonly callbacks: WorkosSseCallbacks,
     private readonly options: WorkosSseParserOptions = {},
-  ) {}
+  ) {
+    this.previousToolCallIds = new Set(options.previousToolCallIds);
+  }
 
   get isComplete() {
     return this.completed;
@@ -658,6 +663,7 @@ export class WorkosSseParser {
         ? part.time
         : undefined;
     const id = firstString(part, ['callID', 'callId', 'toolCallId']) ?? partId;
+    if (this.previousToolCallIds.has(id)) return;
     const subagent = projectSubagent(part);
     const input = state && isRecord(state.input) ? state.input : undefined;
     const title = (subagent && input ? safeLabel(firstString(input, ['description'])) : undefined)
@@ -722,9 +728,10 @@ export class WorkosSseParser {
   private processToolEvent(eventType: string, properties: UnknownRecord) {
     const tool = isRecord(properties.tool) ? properties.tool : undefined;
     if (this.isQuestionTool(properties, tool)) return;
-    const id = firstString(properties, ['callID', 'callId', 'toolCallId', 'id'])
-      ?? (tool ? firstString(tool, ['callID', 'callId', 'id']) : undefined)
-      ?? `tool:${this.readToolTitle(properties, tool)}`;
+    const explicitId = firstString(properties, ['callID', 'callId', 'toolCallId', 'id'])
+      ?? (tool ? firstString(tool, ['callID', 'callId', 'id']) : undefined);
+    const id = explicitId ?? `tool:${this.readToolTitle(properties, tool)}`;
+    if (explicitId && this.previousToolCallIds.has(explicitId)) return;
     const lowered = eventType.toLowerCase();
     const fallback: WorkosToolStatus = lowered.includes('error') || lowered.includes('fail')
       ? 'failed'

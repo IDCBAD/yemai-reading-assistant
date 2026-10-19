@@ -5,6 +5,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { artifactCodeLanguage, artifactPreviewKind, safeArtifactUrl } from '../artifactPreview';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
+import { openPreviewTab } from '../previewTab';
 
 const ArtifactPreview = lazy(() => import('./ArtifactPreview').then((module) => ({ default: module.ArtifactPreview })));
 
@@ -19,7 +20,7 @@ function formatArtifactSize(bytes?: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function ArtifactFileCard({ artifact, onPreview }: { artifact: AssistantArtifact; onPreview: (artifact: AssistantArtifact) => void }) {
+function ArtifactFileCard({ artifact, onPreview, opening }: { artifact: AssistantArtifact; onPreview: (artifact: AssistantArtifact) => void; opening: boolean }) {
   const type = getFileType(artifact.filename, artifact.mime);
   const sourceCode = artifactPreviewKind(artifact) === 'code' && artifactCodeLanguage(artifact);
   const size = formatArtifactSize(artifact.size);
@@ -30,7 +31,7 @@ function ArtifactFileCard({ artifact, onPreview }: { artifact: AssistantArtifact
     <article className={`assistant-artifact-file is-${type.kind}${unavailable ? ' is-unavailable' : ''}`}>
       <FileTypeIcon filename={artifact.filename} mime={artifact.mime} variant="draft" />
       <span className="assistant-artifact-file__copy">
-        {!unavailable && artifactPreviewKind(artifact) ? <button className="assistant-artifact-filename" type="button" title={artifact.filename} onClick={() => onPreview(artifact)}>{artifact.filename}</button>
+        {!unavailable && artifactPreviewKind(artifact) ? <button className="assistant-artifact-filename" type="button" title={artifact.filename} disabled={opening} onClick={() => onPreview(artifact)}>{artifact.filename}</button>
           : <strong title={artifact.filename}>{artifact.filename}</strong>}
         <small>
           {sourceCode ? '源码' : type.description}
@@ -42,7 +43,7 @@ function ArtifactFileCard({ artifact, onPreview }: { artifact: AssistantArtifact
         <span className="assistant-artifact-unavailable">暂不可用</span>
       ) : (
         <span className="assistant-artifact-actions">
-        {artifactPreviewKind(artifact) && <IconTooltipButton className="assistant-artifact-preview" type="button" aria-label={`预览 ${artifact.filename}`} tooltip="预览文件" onClick={() => onPreview(artifact)}><KoboyoIcon name="eye" size={14} /><span>预览</span></IconTooltipButton>}
+        {artifactPreviewKind(artifact) && <IconTooltipButton className="assistant-artifact-preview" type="button" disabled={opening} aria-label={`预览 ${artifact.filename}`} tooltip="预览文件" onClick={() => onPreview(artifact)}><KoboyoIcon name="eye" size={14} /><span>预览</span></IconTooltipButton>}
         <a
           className="assistant-artifact-download"
           href={artifactUrl}
@@ -64,6 +65,13 @@ export function AssistantArtifacts({ artifacts }: AssistantArtifactsProps) {
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
   const [activeArtifact, setActiveArtifact] = useState<AssistantArtifact | null>(null);
   const [filesExpanded, setFilesExpanded] = useState(false);
+  const [openingFile, setOpeningFile] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const previewFile = (artifact: AssistantArtifact) => {
+    if (openingFile) return;
+    setOpeningFile(true); setPreviewError('');
+    void openPreviewTab(artifact).catch(() => setPreviewError('预览页面未能打开，请重试。')).finally(() => setOpeningFile(false));
+  };
   const imageArtifacts = useMemo(() => artifacts.filter((artifact) =>
     artifact.kind === 'image'
     && artifact.status === 'available'
@@ -121,7 +129,7 @@ export function AssistantArtifacts({ artifacts }: AssistantArtifactsProps) {
 
       {visibleFiles.length > 0 && (
         <div className="assistant-artifact-files">
-          {visibleFiles.map((artifact) => <ArtifactFileCard artifact={artifact} onPreview={setActiveArtifact} key={artifact.id} />)}
+          {visibleFiles.map((artifact) => <ArtifactFileCard artifact={artifact} onPreview={previewFile} opening={openingFile} key={artifact.id} />)}
           {fileArtifacts.length > 2 && (
             <button
               className="assistant-artifact-more pressable"
@@ -136,6 +144,7 @@ export function AssistantArtifacts({ artifacts }: AssistantArtifactsProps) {
         </div>
       )}
 
+      {previewError && <p className="preview-notice" role="alert">{previewError}</p>}
       {activeArtifact && <Suspense fallback={<p className="preview-notice" role="status">正在打开预览…</p>}><ArtifactPreview artifact={activeArtifact} onClose={() => setActiveArtifact(null)} /></Suspense>}
     </section>
   );

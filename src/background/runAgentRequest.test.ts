@@ -3,6 +3,8 @@ import { WorkosProgressDisconnected, WorkosRemoteStopAccepted, WorkosRemoteStopE
 import type { WorkosConnectionSettings } from '../services/workosConnection';
 import type { ChatMessage, Conversation, WorkspaceState } from '../sidepanel/types';
 import { runAgentRequest, type AgentRequestHost, type SerializableAgentRequest } from './runAgentRequest';
+import { WorkosSseParser, type WorkosSseCallbacks } from '../services/workosSse';
+import { WORKOS_INTERNAL_V2_BASE_URL, type ExecuteRequest } from '../services/workosTransport';
 
 const transportMock = vi.hoisted(() => ({ createWorkosTransport: vi.fn() }));
 vi.mock('./createTransport', () => ({ createBackgroundTransport: transportMock.createWorkosTransport }));
@@ -77,6 +79,31 @@ function makeTransport(overrides: Record<string, unknown> = {}) {
 
 describe('runAgentRequest background runner', () => {
   beforeEach(() => transportMock.createWorkosTransport.mockReset());
+
+  it('does not attach replayed historical files to a later answer, while retaining a newly generated file', async () => {
+    const firstFile = { id: 'material-old-1', kind: 'html' as const, filename: '旧解释.html', url: 'https://files.example.com/old-1.html', status: 'available' as const };
+    const secondFile = { id: 'material-old-2', kind: 'html' as const, filename: '另一个旧解释.html', url: 'https://files.example.com/old-2.html', status: 'available' as const };
+    const freshFile = { id: 'material-new', kind: 'html' as const, filename: '旧解释.html', url: 'https://files.example.com/new.html', status: 'available' as const };
+    const fixture = createHost(workspace(conversation({ remoteUuid: 'remote-existing', remoteTransport: 'internal-v2', remoteAgentUuid: AGENT_UUID, remoteApiBase: WORKOS_INTERNAL_V2_BASE_URL, messages: [
+      message('old-u1', 'user', 'complete'), { ...message('old-a1', 'assistant', 'complete'), artifacts: [firstFile], activities: [{ id: `part-${firstFile.id}`, kind: 'tool', title: '生成文件', status: 'completed' }] },
+      message('old-u2', 'user', 'complete'), { ...message('old-a2', 'assistant', 'complete'), artifacts: [secondFile], activities: [{ id: `part-${secondFile.id}`, kind: 'tool', title: '生成文件', status: 'completed' }] },
+      message('u1', 'user', 'complete'), message('a1', 'assistant', 'queued'),
+    ] })));
+    transportMock.createWorkosTransport.mockReturnValue(makeTransport({ kind: 'internal-v2', executeStream: vi.fn(async (_id: string, body: ExecuteRequest, callbacks: WorkosSseCallbacks) => {
+      const parser = new WorkosSseParser(callbacks, { expectedRunId: 'run-current', previousToolCallIds: body.streamContext?.previousToolCallIds });
+      for (const file of [firstFile, secondFile, freshFile]) {
+        parser.push(`event: message\ndata: ${JSON.stringify({ data: JSON.stringify({ type: 'message.part.updated', properties: {
+          part: { id: `part-${file.id}`, messageID: `message-${file.id}`, type: 'tool', state: { status: 'completed', metadata: { material: { uuid: file.id, type: 'html', filename: file.filename, url: file.url } } } },
+        } }) })}\n\n`);
+      }
+      callbacks.onText('这是当前轮次的回答。');
+    }) }));
+    await runAgentRequest(request(), new AbortController().signal, fixture.host);
+    const messages = fixture.state.conversations[0]!.messages;
+    expect(messages.find((m) => m.id === 'a1')?.artifacts).toEqual([freshFile]);
+    expect(messages.find((m) => m.id === 'old-a1')?.artifacts).toEqual([firstFile]);
+    expect(messages.find((m) => m.id === 'old-a2')?.artifacts).toEqual([secondFile]);
+  });
 
   it('preserves partial content and known tool outcomes, discarding queued questions after progress loss', async () => {
     const queued = { ...request(), messageId: 'a2', userMessage: message('u2', 'user', 'complete') };

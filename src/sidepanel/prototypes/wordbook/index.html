@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>页脉 · 单词收藏交互原型</title>
+  <link rel="stylesheet" href="/prototype.css" />
+</head>
+<body data-variant="A" data-panel="words" data-mobile="words">
+  <!-- Throwaway UI prototype: A card album / B editorial word journal. In-memory mock data only. -->
+  <div class="prototype-note">
+    <span><b>交互原型</b><span class="note-detail"> · 文章摘录与阅读模拟，释义为演示数据</span></span>
+    <div><button id="mobile-toggle" type="button">查看文章</button><button id="reset-demo" type="button">重置演示</button><a class="source-link" href="https://browser-use.com/posts/browser-agents" target="_blank" rel="noopener noreferrer">打开原文 ↗</a></div>
+  </div>
+  <div class="browser-bar" aria-hidden="true">
+    <div class="browser-dots"><i></i><i></i><i></i></div>
+    <div class="address"><span class="address-lock">⌑</span> browser-use.com/posts/browser-agents</div>
+    <span class="browser-label">阅读中</span>
+  </div>
+  <main class="workspace">
+    <section class="reading-pane" aria-label="英语文章阅读模拟">
+      <div class="reading-controls">
+        <span class="reading-label"><span class="live-dot"></span> 点选带点线的单词，或直接划词</span>
+        <div class="toggle-group"><span id="translate-label">翻译浮窗</span><button id="translation-switch" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="translate-label"><span></span></button></div>
+      </div>
+      <div class="article-shell">
+        <nav class="article-nav" aria-label="文章来源">
+          <span class="browser-use-wordmark">browser<span>use</span><i>▰</i></span>
+          <div class="nav-links"><a href="https://browser-use.com/posts/browser-agents" target="_blank" rel="noopener noreferrer">阅读原文 ↗</a></div>
+        </nav>
+        <div class="article-meta">GUIDES <span>OCT 18, 2026</span></div>
+        <h1 class="article-title">What Is a Browser Agent?<br />How It Works and<br />When to Use One</h1>
+        <div class="article-byline"><span class="author-avatar">NT</span><span>Nik Tomazic</span><span class="byline-dot">·</span><span>Browser Use</span></div>
+        <div class="article-rule"></div>
+        <article class="article-body" id="article-body" lang="en">
+          <p data-context="intro">A browser agent is software that uses an AI model to operate a web browser toward a <button class="demo-word" data-word="goal" type="button">goal</button>. You describe the task, and the agent automatically opens the page, <button class="demo-word" data-word="navigate" type="button">navigates</button>, chooses actions, and checks the results before continuing. Agents are especially useful for <button class="demo-word" data-word="unpredictable" type="button">unpredictable</button> <button class="demo-word" data-word="workflow" type="button">workflows</button> because they can <button class="demo-word" data-word="adapt" type="button">adapt</button> to unexpected changes and <button class="demo-word" data-word="recover" type="button">recover</button> from errors.</p>
+          <h2>TL;DR</h2>
+          <ul class="article-summary">
+            <li>Agents suit changing tasks; predictable work is often better served by code or a direct API.</li>
+            <li>A model makes decisions, a harness connects it to tools, and the browser carries out interactions.</li>
+            <li>Expect to check the outcome. A completed run can still contain mistakes.</li>
+          </ul>
+          <p class="article-footer" lang="zh-CN">开篇文字来自你正在阅读的文章；上方三条摘要为原型改写。<br />试着收藏 <button class="inline-demo" data-demo-select="unpredictable" type="button">unpredictable</button>，再到右侧翻看它。</p>
+        </article>
+      </div>
+    </section>
+
+    <aside class="plugin-panel" aria-label="页脉插件模拟">
+      <header class="plugin-topbar">
+        <div class="brand"><img src="/icon.svg" width="25" height="25" alt="" /><span>页脉</span></div>
+        <div class="plugin-actions">
+          <button id="search-trigger" class="icon-button" type="button" aria-label="搜索单词" title="搜索单词"><i class="icon" style="--icon:url('/icons/koboyo/search.svg')"></i></button>
+          <button id="collection-trigger" class="icon-button is-active" type="button" aria-label="打开单词收藏" title="单词收藏"><i class="icon" style="--icon:url('/icons/koboyo/bookmark.svg')"></i><span id="collection-badge" hidden></span></button>
+          <button id="settings-trigger" class="icon-button" type="button" aria-label="划词设置" aria-expanded="false" title="划词设置"><i class="icon" style="--icon:url('/icons/koboyo/settings.svg')"></i></button>
+        </div>
+      </header>
+      <nav class="plugin-nav" aria-label="页脉功能"><button id="chat-tab" type="button">阅读对话</button><button id="words-tab" class="active" type="button" aria-current="page">单词收藏 <span id="tab-count">3</span></button></nav>
+      <div id="search-box" class="search-box" hidden><label for="search-input">搜索收藏的单词</label><input id="search-input" type="search" placeholder="单词、释义或原句" autocomplete="off" /></div>
+      <section class="wordbook" id="wordbook" aria-label="单词收藏">
+        <div class="wordbook-heading"><div><h2>单词收藏</h2><p>从读过的句子里，留下一些词。</p></div><span id="wordbook-count" class="wordbook-count">03</span></div>
+        <div class="collection-meta"><span class="collection-dot"></span><span>来自这次阅读</span><span id="layout-caption">卡片册</span></div>
+        <div id="wordbook-content"></div>
+      </section>
+      <section id="chat-view" class="chat-view" aria-label="阅读对话" hidden>
+        <div class="page-context"><i class="icon" style="--icon:url('/icons/koboyo/globe.svg')"></i><div><small>当前网页</small><p>What Is a Browser Agent?</p></div></div>
+        <div class="chat-intro"><img src="/icon.svg" width="42" height="42" alt="" /><h2>继续你的阅读</h2><p>随时提问，也可以把喜欢的词留下来。</p></div>
+        <div class="sample-question">收藏的单词在哪里？</div>
+        <div class="sample-answer">在上方的「单词收藏」里。原句会和单词一起留下，之后可以听发音、慢慢翻看。</div>
+        <div class="chat-composer"><span>阅读对话仅作布局示意</span><button type="button" id="chat-collection-link">看看单词收藏 ↗</button></div>
+      </section>
+      <footer class="wordbook-footer"><span class="footer-mark"></span><span>演示收藏仅在本次打开期间保留</span></footer>
+      <section id="settings-popover" class="settings-popover" aria-label="划词设置" hidden>
+        <h3>阅读中的划词</h3>
+        <div class="settings-row"><div><label id="settings-translation-label">翻译浮窗</label><small>演示沉浸式翻译的已有体验</small></div><button id="settings-translation-switch" class="switch" role="switch" aria-labelledby="settings-translation-label" aria-checked="true" type="button"><span></span></button></div>
+        <div class="settings-row"><div><label id="settings-collection-label">页脉收藏入口</label><small>划词后显示独立收藏按钮</small></div><button id="collection-switch" class="switch" role="switch" aria-labelledby="settings-collection-label" aria-checked="true" type="button"><span></span></button></div>
+        <p class="settings-footnote">两个开关互相独立。这里不会更改沉浸式翻译插件的实际设置。</p>
+      </section>
+    </aside>
+  </main>
+
+  <div id="selection-actions" class="selection-actions" hidden><button id="save-selection" class="save-selection" type="button"><i class="icon" style="--icon:url('/icons/koboyo/bookmark.svg')"></i><span>收藏到页脉</span></button></div>
+  <section id="translation-popover" class="translation-popover" aria-label="翻译浮窗模拟" hidden></section>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div class="prototype-switcher" aria-label="原型方案切换"><button id="variant-prev" type="button" aria-label="上一个展示方案">‹</button><button id="variant-label" class="switcher-label" type="button" aria-label="切换展示方案"><strong>01 卡片册</strong><span>一词一页，慢慢翻看</span></button><button id="variant-next" type="button" aria-label="下一个展示方案">›</button></div>
+  <script type="module" src="/prototype.js"></script>
+</body>
+</html>

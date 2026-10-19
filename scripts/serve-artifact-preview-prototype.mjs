@@ -15,7 +15,7 @@ utils.book_append_sheet(workbook, utils.aoa_to_sheet([['日期', '内容'], ['20
 await writeFile(`${directory}/report.xlsx`, new Uint8Array(write(workbook, { type: 'array', bookType: 'xlsx' })));
 const fixtures = {
   'report.md': '# 本周经营报告\n\n这份报告汇总了本周交付情况。\n\n| 项目 | 状态 |\n| --- | --- |\n| 阅读服务 | 已交付 |\n| 知识整理 | 已交付 |\n\n```json\n{"delivered": 12, "pending": 2}\n```\n\n```mermaid\nflowchart LR\n  A[阅读材料] --> B[生成报告] --> C[在线预览]\n```',
-  'report.html': '<!doctype html><html><head><style>body{font-family:system-ui;color:#243247;padding:30px;line-height:1.6}h1{font-size:28px}.metric{padding:18px;background:#eef3ff;border-radius:12px}table{width:100%;border-collapse:collapse}td,th{padding:12px;border-bottom:1px solid #e5eaf1;text-align:left}</style></head><body><h1>本周经营报告</h1><p>2026 年 10 月 2 日 · 页脉</p><div class="metric">本周交付 <strong>12</strong> 项，待完成 2 项</div><h2>交付明细</h2><table><tr><th>项目</th><th>状态</th></tr><tr><td>阅读服务</td><td>已交付</td></tr></table><script>window.__unsafeReportRan=true;parent.document.body.dataset.compromised="yes"</script><img src="data:text/html,unsafe" onerror="parent.document.body.dataset.compromised=1"><a href="javascript:alert(1)">危险链接测试</a><form action="https://example.com"><input autofocus value="不提交表单"></form><meta http-equiv="refresh" content="0;url=https://example.com"></body></html>',
+  'report.html': '<!doctype html><html><head><style>body{font-family:system-ui;color:#243247;padding:30px;line-height:1.6}h1{font-size:28px}.metric{padding:18px;background:#eef3ff;border-radius:12px}table{width:100%;border-collapse:collapse}td,th{padding:12px;border-bottom:1px solid #e5eaf1;text-align:left}</style></head><body><h1>本周经营报告</h1><p>2026 年 10 月 2 日 · 页脉</p><div class="metric">本周交付 <strong>12</strong> 项，待完成 2 项</div><h2>交付明细</h2><table><tr><th>项目</th><th>状态</th></tr><tr><td>阅读服务</td><td>已交付</td></tr></table><script>window.__unsafeReportRan=true;try{parent.document.body.dataset.compromised="yes"}catch{}</script><img src="data:text/html,unsafe" onerror="try{parent.document.body.dataset.compromised=1}catch{}"><a href="javascript:alert(1)">危险链接测试</a><form action="https://example.com"><input autofocus value="不提交表单"></form><meta http-equiv="refresh" content="0;url=https://example.com"></body></html>',
   'report.csv': '编号,说明,金额\r\n001,"包含,逗号",1200\r\n002,"多行\n说明",800\r\n003,=1+1,500',
   'report.json': '{"项目":"阅读服务","交付数量":12,"状态":["已完成","待处理"]}',
   'broken.json': '{broken: true',
@@ -79,9 +79,10 @@ const server = await createServer({
   configFile: false, plugins: [react(), { name: 'preview-prototype-route', configureServer(server) {
     server.middlewares.use((request, _response, next) => {
       if (request.url?.split('?')[0] === '/artifact-preview.html') request.url = '/output/artifact-preview/prototype.html';
+      if (request.url?.split('?')[0] === '/html-runtime.html') request.url = '/entrypoints/html-runtime.sandbox.html';
       next();
     });
-  } }], server: { host: '127.0.0.1', port: 5188, strictPort: true },
+  } }], server: { host: '127.0.0.1', port: 5188, strictPort: true, cors: true },
 });
 await server.listen();
 console.log('Artifact preview prototype: http://127.0.0.1:5188/output/artifact-preview/prototype.html');

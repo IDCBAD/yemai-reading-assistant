@@ -32,6 +32,7 @@ import { PageOverviewCard } from './PageOverviewCard';
 import { YemaiMark } from './YemaiMark';
 import { AnswerContextTrace } from './AnswerContextTrace';
 import { AssistantArtifacts } from './AssistantArtifacts';
+import { replayedArtifactGroups, type ArtifactHistoryGroup } from '../artifactHistory';
 import { ConversationPreviewRail, type ConversationPreviewRailItem } from './ConversationPreviewRail';
 import { AssistantMarkdown } from './AssistantMarkdown';
 import { ImagePreview } from './ImagePreview';
@@ -261,6 +262,7 @@ function RunActivityPanel({ activities }: { activities: RunActivity[] }) {
 
 function AssistantMessage({
   message,
+  artifactGroup,
   contextSources,
   onUseFollowUp,
   onRetry,
@@ -271,6 +273,7 @@ function AssistantMessage({
   branchUnavailableReason,
 }: {
   message: ChatMessage;
+  artifactGroup?: ArtifactHistoryGroup;
   contextSources: AnswerContextSource[];
   onUseFollowUp: (question: string) => void;
   onRetry: () => void;
@@ -412,7 +415,11 @@ function AssistantMessage({
             <span className="stream-cursor" aria-label="正在生成" />
           )}
         </div>
-        {hasArtifacts && <AssistantArtifacts artifacts={message.artifacts!} />}
+        {hasArtifacts && <AssistantArtifacts artifacts={artifactGroup?.current ?? message.artifacts!} />}
+        {Boolean(artifactGroup?.replayed.length) && <details className="assistant-artifact-history">
+          <summary>此前交付的文件（{artifactGroup!.replayed.length}）</summary>
+          <AssistantArtifacts artifacts={artifactGroup!.replayed} />
+        </details>}
         {Boolean(message.content || hasArtifacts) && message.status !== 'streaming' && (
           <AnswerContextTrace sources={contextSources} />
         )}
@@ -906,11 +913,13 @@ export function MessageList({
     });
   }, [messages]);
   conversationRailItemsRef.current = conversationRailItems;
+  const artifactGroups = useMemo(() => replayedArtifactGroups(messages), [messages]);
   // Local rail/scroll/selection updates must not render every conversation message again.
   const renderedMessages = useMemo(() => messages.map((message) =>
     message.role === 'assistant' ? (
       <AssistantMessage
         message={message}
+        artifactGroup={artifactGroups.get(message.id)}
         contextSources={answerContexts.get(message.id) ?? []}
         onUseFollowUp={onUseStarter}
         onRetry={() => onRetry(message)}
@@ -930,7 +939,7 @@ export function MessageList({
       <UserMessage message={message} onEdit={() => onEditUserMessage(message)} key={message.id} />
     ),
   ), [
-    messages, answerContexts, savedMessageIds, onUseStarter, onRetry, onBranch,
+    messages, artifactGroups, answerContexts, savedMessageIds, onUseStarter, onRetry, onBranch,
     onToggleReadingCard, onResolveDecision, branchUnavailableReason, onEditUserMessage,
   ]);
   const hasMessages = messages.length > 0;

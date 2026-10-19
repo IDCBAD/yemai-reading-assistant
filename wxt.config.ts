@@ -21,6 +21,7 @@ export default defineConfig({
       ],
       content_security_policy: {
         extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com https://workos-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
+        sandbox: "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
       },
       action: {
         default_title: development ? '打开页脉 DEV' : '打开页脉',

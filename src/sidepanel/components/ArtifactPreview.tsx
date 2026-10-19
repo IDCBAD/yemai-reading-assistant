@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { artifactCodeLanguage, artifactPreviewKind, decodePreviewText, formatPreviewJson, MAX_PREVIEW_BYTES, MAX_TEXT_BYTES, readPreviewBytes, safeArtifactUrl, staticReportDocument, TEXT_PAGE_SIZE } from '../artifactPreview';
+import { artifactCodeLanguage, artifactPreviewKind, decodePreviewText, formatPreviewJson, MAX_PREVIEW_BYTES, MAX_TEXT_BYTES, readPreviewBytes, safeArtifactUrl, TEXT_PAGE_SIZE } from '../artifactPreview';
 import type { AssistantArtifact } from '../types';
 import type { PreviewSheet } from '../spreadsheetPreview';
 import { openPreviewTab } from '../previewTab';
@@ -9,6 +9,8 @@ import { PreviewDialog } from './PreviewDialog';
 import { KoboyoIcon } from './KoboyoIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { PreviewHeader } from './PreviewHeader';
+import { InteractiveHtmlPreview } from './InteractiveHtmlPreview';
+import { observePreviewFullscreen, togglePreviewFullscreen } from '../fullscreen';
 
 type ContentState = { status: 'loading' } | { status: 'error'; error: string }
   | { status: 'ready'; text: string; sheets?: PreviewSheet[]; sourceUrl: string };
@@ -63,13 +65,6 @@ function SpreadsheetView({ sheets }: { sheets: PreviewSheet[] }) {
       <div className="preview-sheet-tabs" aria-label="工作表">{sheets.map((item, index) => <button type="button" key={index} aria-pressed={index === selected} onClick={() => { setSelected(index); setStart(0); if (scroll.current) scroll.current.scrollTop = 0; }}>{item.name}</button>)}</div>
       <small>{sheet.truncated ? '仅预览前 2,000 行、100 列以内的数据，完整内容请下载。' : `${sheet.totalRows.toLocaleString()} 行 · ${sheet.columns.length} 列`}</small>
     </footer>
-  </div>;
-}
-
-function ReportView({ text, url }: { text: string; url: string }) {
-  const document = useMemo(() => staticReportDocument(text, url), [text, url]);
-  return <div className="preview-report"><p>静态预览 · 交互功能请下载后使用</p>
-    <iframe title="HTML 静态报告" sandbox="" referrerPolicy="no-referrer" srcDoc={document} />
   </div>;
 }
 
@@ -148,7 +143,8 @@ export function ArtifactContent({ artifact }: { artifact: AssistantArtifact }) {
     {json && !json.valid && <p className="preview-notice" role="status">JSON 格式有误，已显示原文。</p>}
     {markdownTooLong && !raw && <p className="preview-notice">文档较长，已分段显示原文。完整内容可下载查看。</p>}
     <div className="preview-document-body">
-      {!raw && kind === 'html' ? <ReportView text={state.text} url={state.sourceUrl} />
+      {kind === 'html' && <div className="preview-html-body" hidden={raw}><InteractiveHtmlPreview text={state.text} /></div>}
+      {kind === 'html' && !raw ? null
         : !raw && kind === 'markdown' && !markdownTooLong ? <div className="markdown-body preview-markdown"><AssistantMarkdown content={state.text} streaming={false} sourceUrl={state.sourceUrl} />{!state.text && <p className="preview-empty">文件内容为空。</p>}</div>
         : (kind === 'spreadsheet' || kind === 'csv' && !raw) ? <SpreadsheetView sheets={state.sheets ?? []} />
         : <PreviewText key={String(raw)} text={!raw && json ? json.text : state.text} lineNumbers={['code', 'html', 'json'].includes(kind)} language={kind === 'code' ? artifactCodeLanguage(artifact) : kind === 'json' ? 'json' : kind === 'html' ? 'xml' : undefined} />}
@@ -159,17 +155,32 @@ export function ArtifactContent({ artifact }: { artifact: AssistantArtifact }) {
 export function ArtifactPreview({ artifact, onClose, standalone = false }: { artifact: AssistantArtifact; onClose: () => void; standalone?: boolean }) {
   const [tabError, setTabError] = useState('');
   const [opening, setOpening] = useState(false);
+  const page = useRef<HTMLElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState('');
+  useEffect(() => {
+    if (!standalone || !page.current) return;
+    return observePreviewFullscreen(page.current, setFullscreen);
+  }, [standalone]);
   const url = safeArtifactUrl(artifact.url);
   const content = <>
     <PreviewHeader filename={artifact.filename} downloadUrl={url} onClose={onClose}
       closeLabel={standalone ? '关闭预览标签页' : '关闭产物预览'} opening={opening}
+      fullscreen={fullscreen} onToggleFullscreen={standalone ? () => {
+        if (!page.current) return;
+        setFullscreenError('');
+        void togglePreviewFullscreen(page.current).catch(() => {
+          setFullscreenError('无法切换全屏，请重试，或使用浏览器的全屏功能。');
+        });
+      } : undefined}
       onOpenTab={standalone ? undefined : () => {
         setOpening(true); setTabError('');
         void openPreviewTab(artifact).catch(() => setTabError('新标签页未能打开，请重试。')).finally(() => setOpening(false));
       }} />
     {tabError && <p className="preview-notice" role="alert">{tabError}</p>}
+    {fullscreenError && <p className="preview-notice" role="alert">{fullscreenError}</p>}
     <ArtifactContent key={artifact.id + artifact.url} artifact={artifact} />
   </>;
-  return standalone ? <main className="artifact-preview-page" aria-label={`产物预览：${artifact.filename}`}>{content}</main>
+  return standalone ? <main ref={page} className="artifact-preview-page" aria-label={`产物预览：${artifact.filename}`}>{content}</main>
     : <PreviewDialog label={`产物预览：${artifact.filename}`} onClose={onClose}>{content}</PreviewDialog>;
 }

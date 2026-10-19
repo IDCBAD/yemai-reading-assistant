@@ -291,6 +291,12 @@ export async function runAgentRequest(
     updateMessage(host, conversationId, messageId, { stage: 'waiting-first-token' });
     await transport.executeStream(remoteUuid, {
       content: requestContent,
+      ...(transport.kind === 'internal-v2' && currentConversation.remoteUuid && !connectionTargetChanged ? {
+        streamContext: { previousToolCallIds: [...new Set(currentConversation.messages
+          .slice(0, currentConversation.messages.findIndex((message) => message.id === messageId))
+          .filter((message) => message.role === 'assistant')
+          .flatMap((message) => (message.activities ?? []).map((activity) => activity.id)))] },
+      } : {}),
       attachments: messageAttachments.filter((attachment) => attachment.status === 'ready' && attachment.url)
         .map((attachment) => ({ url: attachment.url!, filename: attachment.filename, ...(attachment.mime ? { mime: attachment.mime } : {}) })),
     }, {

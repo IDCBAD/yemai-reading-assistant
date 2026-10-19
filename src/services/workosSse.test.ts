@@ -119,6 +119,25 @@ describe('WorkosSseParser', () => {
     expect(onComplete).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, 'run-current'])('ignores historical tool calls and their files even when the envelope run is %s', (runId) => {
+    const onArtifact = vi.fn();
+    const onActivity = vi.fn();
+    const onText = vi.fn();
+    const parser = new WorkosSseParser({ onText, onArtifact, onActivity }, { expectedRunId: 'run-current', previousToolCallIds: ['old-call'] });
+    const part = (callID: string, id: string) => ({ id, callID, type: 'tool', state: { status: 'completed', metadata: {
+      material: { uuid: 'file-1', type: 'html', filename: '解释.html', url: 'https://files.example.com/1.html' },
+    } } });
+    const event = { type: 'message.part.updated', properties: { part: part('old-call', 'old-part') } };
+    parser.push(runId ? runEvent(runId, 'message', event) : nestedEvent(event));
+    parser.push(nestedEvent({ type: 'tool.completed', properties: { callID: 'old-call', title: '旧工具' } }));
+    expect(onArtifact).not.toHaveBeenCalled();
+    expect(onActivity).not.toHaveBeenCalled();
+    expect(onText).not.toHaveBeenCalled();
+    parser.push(runEvent('run-current', 'message', { type: 'message.part.updated', properties: { part: part('new-call', 'new-part') } }));
+    expect(onArtifact).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'file-1', filename: '解释.html' }));
+    expect(onActivity).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'new-call' }));
+  });
+
   it('accepts v2 envelopes whose data payload is already an object', () => {
     const onText = vi.fn();
     const parser = new WorkosSseParser({ onText }, { expectedRunId: 'run-object' });

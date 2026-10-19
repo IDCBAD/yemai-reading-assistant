@@ -240,7 +240,7 @@ export class InternalV2Transport implements WorkosTransport {
             remoteError = message;
             callbacks.onError?.(message);
           },
-        }, { expectedRunId });
+        }, { expectedRunId, previousToolCallIds: request.streamContext?.previousToolCallIds });
         const decoder = new TextDecoder('utf-8');
         while (!parser.isComplete) {
           let next: ReadableStreamReadResult<Uint8Array>;

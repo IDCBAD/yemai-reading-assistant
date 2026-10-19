@@ -13,7 +13,8 @@ const browser = await chromium.launch({ headless: true });
 let extensionPage;
 try {
   const context = await browser.newContext({ viewport: { width: 400, height: 850 }, permissions: ['clipboard-read', 'clipboard-write'] });
-  const page = await context.newPage();
+  let page = await context.newPage();
+  const sourcePage = page;
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('http://127.0.0.1:5188/output/artifact-preview/prototype.html');
@@ -40,11 +41,22 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '查看大图：流程图.svg');
   checks.push('image: fit, 100%, drag, wheel, reset, Escape and focus restore');
 
-  const open = async (name) => {
-    if (await page.getByRole('button', { name: '关闭产物预览' }).count()) await page.getByRole('button', { name: '关闭产物预览' }).click();
-    const more = page.getByRole('button', { name: /^还有/ });
+  await sourcePage.evaluate(() => { window.__originalOpen = window.open; window.open = () => null; });
+  await sourcePage.getByRole('button', { name: '预览 report.md', exact: true }).click();
+  await sourcePage.getByRole('alert').filter({ hasText: '预览页面未能打开，请重试。' }).waitFor();
+  assert.equal(await sourcePage.locator('.artifact-preview-dialog').count(), 0);
+  await sourcePage.evaluate(() => { window.open = window.__originalOpen; });
+
+  const open = async (name, filename = false) => {
+    if (page !== sourcePage && !page.isClosed()) await page.close();
+    await sourcePage.bringToFront();
+    const more = sourcePage.getByRole('button', { name: /^还有/ });
     if (await more.count()) await more.click();
-    await page.getByRole('button', { name: `预览 ${name}`, exact: true }).click();
+    const opened = context.waitForEvent('page');
+    await sourcePage.getByRole('button', { name: filename ? name : `预览 ${name}`, exact: true }).click();
+    page = await opened;
+    page.on('pageerror', (error) => errors.push(error.message));
+    assert.equal(await sourcePage.locator('.artifact-preview-dialog').count(), 0);
   };
   await open('report.md');
   await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
@@ -52,8 +64,8 @@ try {
   await page.getByRole('button', { name: '原文', exact: true }).click();
   assert.match(await page.locator('.preview-source').innerText(), /```mermaid/);
   await page.keyboard.press('Tab');
-  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')), true);
-  checks.push('Markdown: tables, code, Mermaid, original text and modal focus');
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('.artifact-preview-page')), true);
+  checks.push('Markdown: direct standalone preview, tables, code, Mermaid and original text');
 
   await open('client.py');
   await page.locator('.preview-source .hljs-keyword').first().waitFor();
@@ -97,19 +109,20 @@ try {
   assert.equal(await page.locator('.preview-source pre').textContent(), longSource);
   checks.push('source line numbers: blanks, CRLF, aligned highlighting, horizontal fixed gutter and continuous lazy loading');
 
-  await open('report.html');
-  const report = page.frameLocator('iframe[title="HTML 静态报告"]');
+  await open('report.html', true);
+  const report = page.frameLocator('iframe[title="HTML 交互页面"]').frameLocator('iframe[title="HTML 页面内容"]');
   await report.getByRole('heading', { name: '本周经营报告' }).waitFor();
-  assert.equal(await page.locator('iframe').getAttribute('sandbox'), '');
-  assert.equal(await report.locator('script,iframe,object,embed,meta[http-equiv="refresh"],a[href],input[autofocus]').count(), 0);
-  assert.equal(await report.locator('input').isDisabled(), true);
+  assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
+  assert.equal(await report.locator('iframe,object,embed,meta[http-equiv="refresh"],a[href]').count(), 0);
+  assert.equal(await report.locator('input').isDisabled(), false);
+  assert.equal(await page.getByRole('button', { name: '静态预览', exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => window.__unsafeReportRan || document.body.dataset.compromised || false), false);
   await page.screenshot({ path: `${output}/html-narrow.png` });
   await page.getByRole('button', { name: '源码', exact: true }).click();
   assert.match(await page.locator('.preview-source').innerText(), /window.__unsafeReportRan/);
   await page.getByRole('button', { name: '复制内容', exact: true }).click();
   assert.match(await page.evaluate(() => navigator.clipboard.readText()), /<!doctype html>/i);
-  checks.push('HTML: static layout, scripts/navigation blocked, original source and copy');
+  checks.push('HTML: direct standalone interactive document, parent access blocked, original source and copy');
 
   await open('report.xlsx');
   await page.getByRole('button', { name: '交付明细', exact: true }).waitFor();
@@ -139,21 +152,16 @@ try {
   await open('expired.md'); await page.getByText(/文件链接已失效/).waitFor();
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await page.getByText(/文件链接已失效/).waitFor();
-  await open('slow.md'); await page.getByRole('button', { name: '关闭产物预览' }).click();
+  await open('slow.md'); await page.close();
   await open('report.md'); await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
   assert.equal(await page.getByText('延迟内容', { exact: true }).count(), 0);
   checks.push('expired links, retry and cancellation without stale content');
 
-  const popupPromise = context.waitForEvent('page');
-  await page.getByRole('button', { name: '新标签页查看' }).click();
-  const popup = await popupPromise;
-  await popup.getByRole('heading', { name: '本周经营报告' }).waitFor();
-  assert.match(popup.url(), /#artifact-preview:/); assert.equal(popup.url().includes('example.test'), false);
-  await popup.reload(); await popup.getByRole('heading', { name: '本周经营报告' }).waitFor();
-  await popup.close();
+  assert.match(page.url(), /#artifact-preview:/); assert.equal(page.url().includes('example.test'), false);
+  await page.reload(); await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
   // Controls stay inside the preview at both sidebar and wide-tab widths.
   const checkControls = async () => {
-    const clipped = await page.locator('.artifact-preview-dialog').evaluate((dialog) => {
+    const clipped = await page.locator('.artifact-preview-page').evaluate((dialog) => {
       const bounds = dialog.getBoundingClientRect();
       return Array.from(dialog.querySelectorAll('.artifact-preview-header button, .artifact-preview-header a, .preview-content-tools button, .preview-image-controls button'))
         .filter((element) => { const rect = element.getBoundingClientRect(); return rect.left < bounds.left || rect.right > bounds.right || rect.top < bounds.top || rect.bottom > bounds.bottom; })
@@ -169,8 +177,8 @@ try {
     await page.getByRole('heading', { name: '本周经营报告' }).waitFor();
   }
   await page.setViewportSize({ width: 400, height: 850 });
-  await page.getByRole('button', { name: '新标签页查看' }).hover();
-  await page.getByRole('tooltip', { name: '新标签页查看', exact: true }).waitFor();
+  await page.getByRole('button', { name: '进入全屏' }).hover();
+  await page.getByRole('tooltip', { name: '进入全屏', exact: true }).waitFor();
   await page.mouse.move(2, 2);
   await page.getByRole('tooltip').waitFor({ state: 'hidden' });
   await page.screenshot({ path: `${output}/markdown-native-toolbar.png` });
@@ -220,8 +228,8 @@ try {
     });
     await page.goto(`chrome-extension://${extensionId}/artifact-preview.html#${key}`);
     if (filename.endsWith('.html')) {
-      await page.frameLocator('iframe').getByRole('heading', { name: '本周经营报告' }).waitFor();
-      assert.equal(await page.frameLocator('iframe').locator('script').count(), 0);
+      await page.frameLocator('iframe').frameLocator('iframe').getByRole('heading', { name: '本周经营报告' }).waitFor();
+      assert.equal(await page.getByRole('button', { name: '静态预览', exact: true }).count(), 0);
       await page.screenshot({ path: `${output}/html-extension.png` });
     } else if (filename.endsWith('.xlsx') || filename.endsWith('.csv')) {
       await page.locator('.preview-sheet-scroll').waitFor();

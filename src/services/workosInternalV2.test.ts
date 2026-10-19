@@ -61,6 +61,27 @@ function deferred<T>() {
 }
 
 describe('InternalV2Transport', () => {
+  it('filters replayed tool materials using local history without sending history to WorkOS', async () => {
+    const onArtifact = vi.fn();
+    const onActivity = vi.fn();
+    const materialEvent = (callID: string) => messageEvent('run-current', {
+      type: 'message.part.updated', properties: { part: { id: `part-${callID}`, callID, type: 'tool', state: {
+        status: 'completed', metadata: { material: { uuid: `file-${callID}`, type: 'html', filename: '解释.html', url: `https://example.com/${callID}.html` } },
+      } } },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/events/messages/subscribe')) return eventStream([
+        materialEvent('old-call'), materialEvent('new-call'), sseEvent('xybot-stream-complete', { runId: 'run-current' }),
+      ]);
+      expect(JSON.parse(String(init?.body))).toEqual({ parts: [{ type: 'text', text: '后续问题' }] });
+      return submittedResponse();
+    }));
+    await new InternalV2Transport(credentials, agentUuid).executeStream('conversation-v2', {
+      content: '后续问题', streamContext: { previousToolCallIds: ['old-call'] },
+    }, { onText: vi.fn(), onArtifact, onActivity });
+    expect(onArtifact).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'file-new-call' }));
+    expect(onActivity).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'new-call' }));
+  });
   it('distinguishes a lost progress connection from a failed remote run after submission', async () => {
     const text = vi.fn();
     let reads = 0;
