@@ -22,6 +22,8 @@ import { collectionDeliveryState } from '../collectionConversation';
 import { formatRunDuration } from '../runDuration';
 import { canTranslateLocally, translateLocally } from '../localTranslator';
 import { DoubleCtrlShortcut } from '../doubleCtrlShortcut';
+import { captureWordSelection } from '../../content/wordSelection';
+import type { WordCardCapture } from '../../shared/wordCards';
 
 import { translationContextAroundSelection, type TranslationContext } from '../translationContext';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -76,6 +78,9 @@ interface MessageListProps {
     contextSources: AnswerContextSource[],
     origin?: ReadingCardFeedbackOrigin,
   ) => void;
+  wordCollectionEnabled?: boolean;
+  localTranslationEnabled?: boolean;
+  onCollectWord?: (capture: WordCardCapture) => Promise<void>;
   onOpenBranchOrigin: () => void;
   onAddAssistantQuote: (quote: QuoteReference) => void;
   onResolveDecision: (
@@ -97,12 +102,14 @@ interface AssistantSelectionAction {
   messageId: string;
   text: string;
   context: TranslationContext | null;
+  wordCapture: WordCardCapture | null;
   left: number;
   top: number;
 }
 
 interface SelectionTranslation {
   source: string;
+  wordCapture?: WordCardCapture;
   context: TranslationContext | null;
   result: string;
   sentenceResult: string;
@@ -863,6 +870,9 @@ export function MessageList({
   onBranch,
   onToggleReadingCard,
   onCollectAssistantExcerpt,
+  wordCollectionEnabled = true,
+  localTranslationEnabled = true,
+  onCollectWord,
   onOpenBranchOrigin,
   onAddAssistantQuote,
   onResolveDecision,
@@ -879,6 +889,8 @@ export function MessageList({
   const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
   const [selectionTranslation, setSelectionTranslation] = useState<SelectionTranslation | null>(null);
   const [translationCopyState, setTranslationCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [wordSaveBusy, setWordSaveBusy] = useState(false);
+  const [wordSaveNotice, setWordSaveNotice] = useState('');
   const translationPanelRef = useRef<HTMLDivElement>(null);
   const translationRequestRef = useRef(0);
   const doubleCtrlShortcutRef = useRef(new DoubleCtrlShortcut());
@@ -1087,7 +1099,7 @@ export function MessageList({
           return;
         }
         const rect = selection.getRangeAt(0).getBoundingClientRect();
-        const toolbarWidth = canTranslateLocally(text) ? 260 : 184;
+        const toolbarWidth = localTranslationEnabled && canTranslateLocally(text) ? 260 : 184;
         const toolbarHeight = 44;
         const toolbarTop = rect.top >= toolbarHeight + 16
           ? rect.top - toolbarHeight - 8
@@ -1096,6 +1108,7 @@ export function MessageList({
           messageId: article.dataset.assistantMessageId ?? '',
           text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
           context: canTranslateLocally(text) ? selectedSentence(selection, text) : null,
+          wordCapture: wordCollectionEnabled ? captureWordSelection(selection, { kind: 'assistant', title: '页脉回答', messageId: article.dataset.assistantMessageId ?? '' }) : null,
           left: Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)),
           top: Math.max(8, Math.min(toolbarTop, window.innerHeight - toolbarHeight - 8)),
         });
@@ -1130,7 +1143,7 @@ export function MessageList({
       document.removeEventListener('pointerdown', clearFromOutside);
       window.removeEventListener('resize', clearSelectionAction);
     };
-  }, [messages]);
+  }, [messages, wordCollectionEnabled, localTranslationEnabled]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1156,12 +1169,13 @@ export function MessageList({
   }, [selectionTranslation]);
 
   const translateSelection = () => {
-    if (!selectionAction) return;
+    if (!selectionAction || !localTranslationEnabled) return;
     const { text, context, left, top } = selectionAction;
     const requestId = ++translationRequestRef.current;
     setTranslationCopyState('idle');
     setSelectionTranslation({
       source: text,
+      wordCapture: selectionAction.wordCapture ?? undefined,
       context,
       result: '',
       sentenceResult: '',
@@ -1212,7 +1226,7 @@ export function MessageList({
   useEffect(() => {
     const selectionKey = (target: EventTarget | null) => {
       if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return null;
-      if (!selectionAction || !canTranslateLocally(selectionAction.text)) return null;
+      if (!localTranslationEnabled || !selectionAction || !canTranslateLocally(selectionAction.text)) return null;
       return `${selectionAction.messageId}:${selectionAction.text}`;
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1233,7 +1247,26 @@ export function MessageList({
       document.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', resetOnBlur);
     };
-  }, [selectionAction]);
+  }, [selectionAction, localTranslationEnabled]);
+
+  useEffect(() => {
+    if (!localTranslationEnabled) { translationRequestRef.current++; setSelectionTranslation(null); doubleCtrlShortcutRef.current.reset(); }
+  }, [localTranslationEnabled]);
+  useEffect(() => {
+    if (!wordSaveNotice) return;
+    const timer = window.setTimeout(() => setWordSaveNotice(''), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [wordSaveNotice]);
+  const saveWordCapture = async (capture: WordCardCapture) => {
+    if (!onCollectWord || wordSaveBusy) return;
+    setWordSaveBusy(true);
+    try {
+      await onCollectWord(capture);
+      setWordSaveNotice('单词已收藏，可在「收藏 → 单词收藏」中查看。');
+      setSelectionAction((current) => current?.wordCapture === capture ? null : current);
+    } catch (error) { setWordSaveNotice(error instanceof Error ? error.message : '单词未能保存，请重试。'); }
+    finally { setWordSaveBusy(false); }
+  };
 
   const readTranslationSource = () => {
     if (!selectionTranslation || !('speechSynthesis' in window)) return;
@@ -1444,7 +1477,11 @@ export function MessageList({
           <button
             className="assistant-selection-action__button pressable"
             type="button"
+            disabled={wordSaveBusy}
             onClick={(event) => {
+              if (wordCollectionEnabled && onCollectWord && selectionAction.wordCapture) {
+                void saveWordCapture(selectionAction.wordCapture); return;
+              }
               const message = messages.find((item) => item.id === selectionAction.messageId);
               if (!message) return;
               const bounds = event.currentTarget.getBoundingClientRect();
@@ -1459,7 +1496,7 @@ export function MessageList({
             }}
           >
             <KoboyoIcon name="bookmark" size={12} />
-            收藏片段
+            {wordCollectionEnabled && onCollectWord && selectionAction.wordCapture ? wordSaveBusy ? '正在收藏…' : '收藏单词' : '收藏片段'}
           </button>
           <button
             className="assistant-selection-action__button pressable"
@@ -1482,7 +1519,7 @@ export function MessageList({
             <KoboyoIcon name="quote" size={12} />
             引用追问
           </button>
-          {canTranslateLocally(selectionAction.text) && (
+          {localTranslationEnabled && canTranslateLocally(selectionAction.text) && (
             <button
               className="assistant-selection-action__button pressable"
               type="button"
@@ -1548,6 +1585,11 @@ export function MessageList({
               </button>
             </div>
           )}
+          {wordCollectionEnabled && onCollectWord && selectionTranslation.wordCapture && selectionTranslation.status === 'ready' && (
+            <button className="assistant-selection-action__button pressable" type="button" disabled={wordSaveBusy} onClick={() => void saveWordCapture({ ...selectionTranslation.wordCapture!, meaning: selectionTranslation.result, meaningSource: 'browser' })}>
+              <KoboyoIcon name="bookmark" size={12} />{wordSaveBusy ? '正在收藏…' : '收藏单词和译文'}
+            </button>
+          )}
           {selectionTranslation.context && selectionTranslation.status !== 'error' && (
             <div className="assistant-selection-translation__context">
               <span className="assistant-selection-translation__label">所在句</span>
@@ -1579,6 +1621,7 @@ export function MessageList({
           onSelect={scrollToConversationTurn}
         />
       )}
+      {wordSaveNotice && <div className="assistant-word-save-notice" role="status" aria-live="polite">{wordSaveNotice}</div>}
       <button
         ref={scrollToLatestRef}
         className="scroll-to-latest pressable"

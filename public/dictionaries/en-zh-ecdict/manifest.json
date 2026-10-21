@@ -1,0 +1,140 @@
+{
+  "source": "https://github.com/skywind3000/ECDICT",
+  "revision": "bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b",
+  "sourceSha256": "1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf",
+  "frequencyLimit": 40000,
+  "entries": 80137,
+  "bytes": 5183475,
+  "shards": {
+    "a": {
+      "entries": 4640,
+      "bytes": 290539,
+      "sha256": "b1059a0dc10aceab2f96bb9d8e79d92070a15783ab04942423ef3347e8226476"
+    },
+    "b": {
+      "entries": 4905,
+      "bytes": 300245,
+      "sha256": "14ca86ad328421841b95481080b728858489180cece5fe2fbf85876cfebaae91"
+    },
+    "c": {
+      "entries": 7740,
+      "bytes": 501932,
+      "sha256": "de903027d7f3385a128ad7968b9ecb8cd53e3602175c4cfe23b3d011c5482d2d"
+    },
+    "d": {
+      "entries": 4924,
+      "bytes": 314432,
+      "sha256": "1117e08233da82409bd2d0c29820be7497c90db2d56704c54a2f505586cf5569"
+    },
+    "e": {
+      "entries": 3304,
+      "bytes": 219118,
+      "sha256": "85ea7e70dd23a6f5460461f51202f7510bd50d8b9f0e904964e836d944448f6b"
+    },
+    "f": {
+      "entries": 3418,
+      "bytes": 220403,
+      "sha256": "e17fcc578acff79d63f0bebdf1bd77b0730e2004dd19ca1b4a19751d3f624c75"
+    },
+    "g": {
+      "entries": 2742,
+      "bytes": 169885,
+      "sha256": "c2bf81f43d9641533558d517e1dc6da5de322d874c71096f946ecebb3abc943c"
+    },
+    "h": {
+      "entries": 3131,
+      "bytes": 190789,
+      "sha256": "ff17a6b507c93b0eb89417bf5503c2dca900ea42ee5229c04936f1f1f268b3ae"
+    },
+    "i": {
+      "entries": 3189,
+      "bytes": 218261,
+      "sha256": "2ca708bab85f0cc22d2f38eeb4bf994258dba32280311c21a2024b382f9b59f6"
+    },
+    "j": {
+      "entries": 811,
+      "bytes": 48838,
+      "sha256": "89cca2a1bf798521b234717cb85776a808af89f80122e2237626638801595b9a"
+    },
+    "k": {
+      "entries": 761,
+      "bytes": 43040,
+      "sha256": "383e565154414de9f8d6fa930ee33689f19a5272b999cf9e1a52d5a1831dd21f"
+    },
+    "l": {
+      "entries": 2627,
+      "bytes": 159794,
+      "sha256": "10dcb8fdef4095617ffa4e3aeb20a04603dd38b8ced448907f6b328ee41fce7d"
+    },
+    "m": {
+      "entries": 4544,
+      "bytes": 281268,
+      "sha256": "41608a4866ace73699031f2395553119c0675b5a810d62e9308f9ea273d6788f"
+    },
+    "n": {
+      "entries": 1635,
+      "bytes": 96661,
+      "sha256": "55f50f8db21701a6f088c5bbce1af74b38576342608547ddc5327371305ba88c"
+    },
+    "o": {
+      "entries": 1942,
+      "bytes": 128074,
+      "sha256": "e9eb78ab55f6b361e78154754213c064b3b3982057240ee0ccb18f0e4b3f74c1"
+    },
+    "p": {
+      "entries": 6113,
+      "bytes": 420901,
+      "sha256": "af327e4a48f26d1624dff883d17ccbf0e523549dd746a5652eecf4d8312a3f5a"
+    },
+    "q": {
+      "entries": 360,
+      "bytes": 24147,
+      "sha256": "20c26c0aa6e85bd92ed9c9150d90b818f865bb88e06fd91958d64f18926e3db6"
+    },
+    "r": {
+      "entries": 4626,
+      "bytes": 319066,
+      "sha256": "92a9420ac7669ce2568d498cb85e01da18b1784033466556859f9a2b64e2235b"
+    },
+    "s": {
+      "entries": 9037,
+      "bytes": 605519,
+      "sha256": "be02790d382cb2562786e9ae789a624953112717b7276ef6e51093f48b75db1e"
+    },
+    "t": {
+      "entries": 3938,
+      "bytes": 257859,
+      "sha256": "deeccae21cd7f8dc6285994210810f45593972bb12dedb12abe903a0e1a41932"
+    },
+    "u": {
+      "entries": 1873,
+      "bytes": 124418,
+      "sha256": "51c99aab27b239200079376bc714517fc1159130416e7f8d711bb5c5191cf682"
+    },
+    "v": {
+      "entries": 1192,
+      "bytes": 79610,
+      "sha256": "f173e9751a11448d5ef11368f36d6222b1e5dcba0b1f7d14a96de6129b1c44cf"
+    },
+    "w": {
+      "entries": 2224,
+      "bytes": 141573,
+      "sha256": "27ef5da751b37204b6903c0b6154b0bbdf09b063775d2fb7132e642c7baf7332"
+    },
+    "x": {
+      "entries": 37,
+      "bytes": 1781,
+      "sha256": "248b3a1800bf47cb30ec7b100fd3b6bcb1804070b69edbe727a79ad55b478e12"
+    },
+    "y": {
+      "entries": 262,
+      "bytes": 15587,
+      "sha256": "96091ef5aeaf5a24907fa0258549232d4d1b015e483b8318921144bf5cb15eb7"
+    },
+    "z": {
+      "entries": 162,
+      "bytes": 9735,
+      "sha256": "f949ec11e7b4c55c39ceba0b8839a461807c8149a758ae36cba68e51550f7f5e"
+    }
+  }
+}

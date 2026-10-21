@@ -114,7 +114,7 @@ export function clearHistoryImpact(counts: YemaiBackupCounts): InlineImpactPrese
     placement: 'inline',
     icon: 'history-clear',
     affected: `${counts.conversations} 个会话、${counts.messages} 条消息和临时资源`,
-    preserved: `${counts.readingCards} 张收藏卡片和连接设置`,
+    preserved: `${counts.readingCards} 张收藏卡片、${counts.wordCards ?? 0} 张单词卡片和连接设置`,
   };
 }
 
@@ -125,7 +125,7 @@ export function replaceKnowledgeImpact(
   return {
     placement: 'inline',
     icon: 'database-replace',
-    affected: `${current.conversations} 个会话、${current.messages} 条消息和 ${current.readingCards} 张收藏卡片`,
+    affected: `${current.conversations} 个会话、${current.messages} 条消息、${current.readingCards} 张收藏卡片和 ${current.wordCards ?? 0} 张单词卡片`,
     preserved: '连接设置和界面偏好',
     currentMessages: current.messages,
     incomingMessages: incoming.messages,

@@ -3540,14 +3540,23 @@ body:has(.artifact-preview-page) { margin: 0; padding: 0; }
 }
 
 .reading-cards-notice { min-height: 0; }
+.reading-cards-kind-switch { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 15px 9px; color:#64718a; font-size:11px; }
+.reading-cards-kind-switch button { min-height:30px; padding:5px 10px; border:1px solid #d7e1f2; border-radius:7px; color:#315eea; background:#edf2fc; font-size:11px; cursor:pointer; }
+.reading-cards-kind-switch button:focus-visible { outline:2px solid #315eea; outline-offset:3px; }
+.assistant-word-save-notice { position:fixed; left:16px; right:16px; bottom:165px; z-index:90; max-width:440px; margin:0 auto; padding:11px 14px; border:1px solid #d7e1f2; border-radius:10px; color:#3f557a; background:#f0f4fd; box-shadow:0 6px 24px #21334b14; font-size:12px; line-height:1.7; pointer-events:none; }
 
 .reading-cards-view-switch { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: #f1f4f8; }
-.reading-cards-view-switch button { min-height: 32px; padding: 0 9px; border: 1px solid transparent; border-radius: 7px; color: #617089; background: transparent; font-size: 11px; font-weight: 650; cursor: pointer; }
+.reading-cards-view-switch button { display:grid; place-items:center; width:28px; height:28px; padding:0; border:1px solid transparent; border-radius:7px; color:#718094; background:transparent; cursor:pointer; }
+.reading-cards-view-switch svg { display:block; flex-shrink:0; }
+.reading-cards-view-switch button:hover { color:#315eea; }
+.reading-cards-view-switch button:active { transform:scale(.96); }
 .reading-cards-view-switch button.is-active { border-color: #dce4f2; color: #203d76; background: #fff; }
 .reading-cards-view-switch button:focus-visible, .reading-cards-batch-actions button:focus-visible, .reading-card-list-row button:focus-visible, .reading-card-list-row input:focus-visible { outline: 2px solid #3b69d3; outline-offset: 2px; }
 
 .reading-cards-list-layout { position: absolute; inset: 0; display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; }
-.reading-cards-list { display: grid; align-content: start; gap: 8px; min-height: 0; overflow-y: auto; padding: 12px 14px; }
+.reading-cards-list-viewport { position:relative; min-width:0; min-height:0; }
+.reading-cards-list-viewport > .reading-cards-list { height:100%; box-sizing:border-box; }
+.reading-cards-list { display: grid; align-content: start; gap: 8px; min-height: 0; overflow-y: auto; padding: 12px 14px 72px; }
 .reading-card-list-row { display: flex; align-items: start; gap: 10px; min-width: 0; padding: 10px; border: 1px solid #dce4ee; border-radius: 12px; background: #fff; }
 .reading-card-list-row.is-selected { border-color: #8aa9eb; background: #f4f7fe; }
 .reading-card-list-row input { flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0 0; accent-color: #315fd0; cursor: pointer; }
@@ -3656,10 +3665,10 @@ body:has(.artifact-preview-page) { margin: 0; padding: 0; }
   left: 14px;
   z-index: 20;
   display: flex;
-  min-height: 44px;
+  min-height: 28px;
   align-items: center;
   gap: 9px;
-  padding: 2px 2px 2px 11px;
+  padding: 4px 10px;
   border: 1px solid rgba(196, 207, 220, 0.82);
   border-radius: 999px;
   color: #637186;
@@ -5806,3 +5815,7 @@ body:has(.artifact-preview-page) { margin: 0; padding: 0; }
     transition-duration: 1ms !important;
   }
 }
+
+/* CollectionSurface owns entry, focus and the shared header in the sidepanel. */
+.reading-cards-embedded { position:relative; height:100%; min-height:0; }
+.reading-cards-panel.reading-cards-panel--embedded { position:relative; inset:auto; height:100%; opacity:1; transform:none; transition:none; box-shadow:none; will-change:auto; }

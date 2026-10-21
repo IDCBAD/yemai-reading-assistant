@@ -17,6 +17,9 @@ import type {
 } from '../src/shared/extensionMessages';
 import type { QuoteReference } from '../src/sidepanel/types';
 import { readWorkosLoginCredentials } from '../src/shared/workosCredentials';
+import { captureWordSelection, isWordSelectionBlocked } from '../src/content/wordSelection';
+import { collectWord } from '../src/services/wordCollectionClient';
+import { WORD_COLLECTION_ENABLED_KEY, type WordCardCapture } from '../src/shared/wordCards';
 
 const MIN_SELECTION_LENGTH = 2;
 const MAX_SELECTION_LENGTH = 8_000;
@@ -36,31 +39,51 @@ export default defineContentScript({
       :host { all: initial; }
       * { box-sizing: border-box; }
       button { font: inherit; }
-      .selection-bubble {
+      .selection-toolbar {
         position: fixed;
         display: inline-flex;
-        height: 32px;
+        height: 34px;
         align-items: center;
-        gap: 6px;
-        padding: 0 11px;
         border: 1px solid rgba(32, 33, 36, .14);
         border-radius: 10px;
-        color: #303134;
+        overflow: hidden;
         background: rgba(255, 255, 255, .98);
         box-shadow: 0 10px 30px rgba(32, 33, 36, .16), 0 1px 2px rgba(32, 33, 36, .08);
-        cursor: pointer;
         pointer-events: auto;
         font: 600 12px/1 Roboto, "Noto Sans SC", "Segoe UI", sans-serif;
         opacity: 0;
+        visibility: hidden;
         transform: translateY(-3px) scale(.98);
         transform-origin: 50% 0;
-        transition: opacity 140ms cubic-bezier(.2, .8, .2, 1), transform 140ms cubic-bezier(.2, .8, .2, 1), background-color 120ms ease;
+        transition: opacity 140ms cubic-bezier(.2, .8, .2, 1), transform 140ms cubic-bezier(.2, .8, .2, 1);
       }
-      .selection-bubble[data-visible="true"] { opacity: 1; transform: translateY(0) scale(1); }
+      .selection-toolbar[data-visible="true"] { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+      .selection-bubble {
+        display: inline-flex;
+        width: 64px;
+        min-width: 0;
+        height: 32px;
+        flex: 0 1 64px;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 0;
+        color: #303134;
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background-color 120ms ease;
+      }
       .selection-bubble:hover { background: #f8f9fa; }
-      .selection-bubble:active { transform: translateY(0) scale(.96); }
+      .selection-bubble:active { background: #edf0f4; }
+      .selection-bubble:focus-visible { outline-offset: -3px; }
       button:focus-visible { outline: 2px solid #315eea; outline-offset: 2px; }
       .selection-mark { color: #315eea; font-size: 15px; font-weight: 700; }
+      .word-save { width: 96px; flex-basis: 96px; color: #28624b; border-right: 1px solid rgba(32, 33, 36, .1); }
+      .word-save[hidden] { display: none; }
+      .word-save:disabled { cursor: default; }
 
       .smart-layer {
         position: fixed;
@@ -142,16 +165,26 @@ export default defineContentScript({
         background: rgba(52, 168, 83, .08);
       }
       @media (prefers-reduced-motion: reduce) {
-        .selection-bubble { transition: opacity 100ms ease; transform: none; }
+        .selection-toolbar { transition: opacity 100ms ease; transform: none; }
         .smart-outline { transition: opacity 80ms ease, border-color 80ms ease; }
       }
     `;
 
+    const selectionToolbar = document.createElement('div');
+    selectionToolbar.className = 'selection-toolbar';
+    selectionToolbar.setAttribute('role', 'toolbar');
+    selectionToolbar.setAttribute('aria-label', '所选文字操作');
     const selectionButton = document.createElement('button');
     selectionButton.className = 'selection-bubble';
     selectionButton.type = 'button';
     selectionButton.setAttribute('aria-label', '引用所选文字到页脉');
     selectionButton.innerHTML = '<span class="selection-mark">“</span><span>引用</span>';
+    const wordButton = document.createElement('button');
+    wordButton.className = 'selection-bubble word-save';
+    wordButton.type = 'button';
+    wordButton.textContent = '收藏单词';
+    wordButton.setAttribute('aria-live', 'polite');
+    selectionToolbar.append(wordButton, selectionButton);
 
     const smartLayer = document.createElement('div');
     smartLayer.className = 'smart-layer';
@@ -172,10 +205,12 @@ export default defineContentScript({
     const smartEscape = smartLayer.querySelector('.smart-hint kbd') as HTMLElement;
     const smartCancel = smartLayer.querySelector('.smart-hint button') as HTMLButtonElement;
     const smartOutline = smartLayer.querySelector('.smart-outline') as HTMLDivElement;
-    shadow.append(style, selectionButton, smartLayer);
+    shadow.append(style, selectionToolbar, smartLayer);
     document.documentElement.append(host);
 
     let currentQuote: QuoteReference | null = null;
+    let currentCapture: WordCardCapture | null = null;
+    let selectionRevision = 0;
     let lastCommittedSignature = '';
     let lastCommittedAt = 0;
     let smartSelectionPhase: SmartSelectionPhase = 'inactive';
@@ -189,19 +224,30 @@ export default defineContentScript({
     let lastPageSignature = pageChangeSignature(getPageMetadata());
 
     const hideSelectionButton = () => {
-      selectionButton.dataset.visible = 'false';
+      selectionRevision++;
+      selectionToolbar.dataset.visible = 'false';
       currentQuote = null;
+      currentCapture = null;
     };
 
-    const showSelectionButton = (rect: DOMRect, quote: QuoteReference) => {
+    const showSelectionButton = (rect: DOMRect, quote: QuoteReference, capture: WordCardCapture | null = null) => {
       currentQuote = quote;
-      const width = 72;
+      currentCapture = capture;
+      const width = Math.min(capture ? 162 : 66, Math.max(0, window.innerWidth - 16));
+      const height = 34;
       const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
       const preferredTop = rect.bottom + 8;
-      const top = preferredTop + 40 < window.innerHeight ? preferredTop : Math.max(8, rect.top - 40);
-      selectionButton.style.left = `${Math.round(left)}px`;
-      selectionButton.style.top = `${Math.round(top)}px`;
-      selectionButton.dataset.visible = 'true';
+      const aboveTop = rect.top - height - 8;
+      const preferredPosition = aboveTop >= 8 ? aboveTop : preferredTop;
+      const top = Math.max(8, Math.min(window.innerHeight - height - 8, preferredPosition));
+      selectionToolbar.style.width = `${width}px`;
+      selectionToolbar.style.left = `${Math.round(left)}px`;
+      selectionToolbar.style.top = `${Math.round(top)}px`;
+      wordButton.textContent = '收藏单词';
+      wordButton.title = '保存单词和当前原句';
+      wordButton.disabled = false;
+      wordButton.hidden = !capture;
+      selectionToolbar.dataset.visible = 'true';
     };
 
     const commitQuote = async (quote: QuoteReference, openPanel: boolean) => {
@@ -354,6 +400,7 @@ export default defineContentScript({
     };
 
     const inspectSelection = async () => {
+      const revision = ++selectionRevision;
       if (smartSelectionPhase !== 'inactive') return;
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
@@ -364,12 +411,12 @@ export default defineContentScript({
       const container = range.commonAncestorContainer instanceof Element
         ? range.commonAncestorContainer
         : range.commonAncestorContainer.parentElement;
-      if (!container || container.closest('input, textarea, [contenteditable="true"]')) {
+      if (!container || isWordSelectionBlocked(range.startContainer, false) || isWordSelectionBlocked(range.endContainer, false)) {
         hideSelectionButton();
         return;
       }
       const text = selection.toString().replace(/\s+/g, ' ').trim();
-      if (text.length < MIN_SELECTION_LENGTH || text.length > MAX_SELECTION_LENGTH) {
+      if (text.length < 1 || text.length > MAX_SELECTION_LENGTH) {
         hideSelectionButton();
         return;
       }
@@ -385,7 +432,14 @@ export default defineContentScript({
         pageUrl: window.location.href,
         createdAt: Date.now(),
       };
-      const status = await browser.runtime.sendMessage<ExtensionRequest, PanelStatusResponse>({ type: 'panel:status' }).catch(() => ({ open: false, bubbleEnabled: true }));
+      const capture = captureWordSelection(selection, { kind: 'page', title: quote.pageTitle, url: quote.pageUrl });
+      const status = await browser.runtime.sendMessage<ExtensionRequest, PanelStatusResponse>({ type: 'panel:status' }).catch(() => ({ open: false, bubbleEnabled: true, wordCollectionEnabled: true }));
+      if (revision !== selectionRevision) return;
+      if (capture && status?.wordCollectionEnabled !== false) {
+        showSelectionButton(rect, quote, capture);
+        return;
+      }
+      if (text.length < MIN_SELECTION_LENGTH) { hideSelectionButton(); return; }
       if (status?.open) {
         hideSelectionButton();
         await commitQuote(quote, false);
@@ -480,7 +534,23 @@ export default defineContentScript({
       }
     }
 
-    selectionButton.addEventListener('pointerdown', (event) => event.preventDefault());
+    selectionToolbar.addEventListener('pointerdown', (event) => event.preventDefault());
+    wordButton.addEventListener('click', () => {
+      const capture = currentCapture;
+      if (!capture || wordButton.disabled) return;
+      wordButton.disabled = true;
+      wordButton.textContent = '收藏中…';
+      void collectWord(capture).then((result) => {
+        if (capture !== currentCapture) return;
+        wordButton.textContent = result.alreadySaved ? '已收藏' : '收藏成功';
+        wordButton.title = '已保存到页脉单词本';
+      }).catch((error: unknown) => {
+        if (capture !== currentCapture) return;
+        wordButton.disabled = false;
+        wordButton.textContent = '重试收藏';
+        wordButton.title = error instanceof Error ? error.message : '收藏失败，请重试';
+      });
+    });
     selectionButton.addEventListener('click', () => {
       const quote = currentQuote;
       hideSelectionButton();
@@ -570,9 +640,15 @@ export default defineContentScript({
       return false;
     };
     browser.runtime.onMessage.addListener(messageListener);
+    const onSelectionSettingsChanged = (changes: Record<string, unknown>, area: string) => {
+      if (area === 'local' && (WORD_COLLECTION_ENABLED_KEY in changes || 'selectionBubbleEnabled' in changes)) scheduleInspection();
+    };
+    browser.storage.onChanged.addListener(onSelectionSettingsChanged);
 
     ctx.onInvalidated(() => {
       browser.runtime.onMessage.removeListener(messageListener);
+      browser.storage.onChanged.removeListener(onSelectionSettingsChanged);
+      hideSelectionButton();
       document.removeEventListener('pointerup', onDocumentPointerUp, true);
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);

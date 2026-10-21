@@ -1,3 +1,4 @@
+import { isWordCard, type WordCard } from '../shared/wordCards';
 import type {
   ArtifactRow,
   ConversationRow,
@@ -8,7 +9,7 @@ import type {
 } from './database';
 
 export const YEMAI_BACKUP_FORMAT = 'yemai-backup' as const;
-export const YEMAI_BACKUP_FORMAT_VERSION = 1 as const;
+export const YEMAI_BACKUP_FORMAT_VERSION = 2 as const;
 export const MAX_YEMAI_BACKUP_BYTES = 50 * 1024 * 1024;
 
 export interface YemaiBackupCounts {
@@ -17,11 +18,11 @@ export interface YemaiBackupCounts {
   sources: number;
   artifacts: number;
   readingCards: number;
+  wordCards?: number;
 }
 
-export interface YemaiBackupV1 {
+interface YemaiBackupBase {
   format: typeof YEMAI_BACKUP_FORMAT;
-  formatVersion: typeof YEMAI_BACKUP_FORMAT_VERSION;
   appVersion: string;
   exportedAt: number;
   counts: YemaiBackupCounts;
@@ -30,6 +31,21 @@ export interface YemaiBackupV1 {
   sources: ConversationSourceRow[];
   artifacts: ArtifactRow[];
   readingCards: ReadingCardRow[];
+}
+
+export interface YemaiBackupV1 extends YemaiBackupBase {
+  formatVersion: 1;
+}
+
+export interface YemaiBackupV2 extends YemaiBackupBase {
+  formatVersion: 2;
+  counts: YemaiBackupCounts & { wordCards: number };
+  wordCards: WordCard[];
+}
+
+export type YemaiBackup = YemaiBackupV1 | YemaiBackupV2;
+export interface NormalizedYemaiBackup extends Omit<YemaiBackupV2, 'formatVersion'> {
+  formatVersion: 1 | 2;
 }
 
 export interface CreateYemaiBackupOptions {
@@ -137,8 +153,8 @@ function sortRows<Row>(rows: Row[], keyOf: (row: Row) => string) {
 export async function createYemaiBackup(
   database: YemaiDatabase,
   options: CreateYemaiBackupOptions,
-): Promise<YemaiBackupV1> {
-  const [conversations, messages, sources, artifacts, readingCards] = await database.transaction(
+): Promise<YemaiBackupV2> {
+  const [conversations, messages, sources, artifacts, readingCards, wordCards] = await database.transaction(
     'r',
     [
       database.conversations,
@@ -146,6 +162,7 @@ export async function createYemaiBackup(
       database.conversationSources,
       database.artifacts,
       database.readingCards,
+      database.wordCards,
     ],
     async () => Promise.all([
       database.conversations.toArray(),
@@ -153,6 +170,7 @@ export async function createYemaiBackup(
       database.conversationSources.toArray(),
       database.artifacts.toArray(),
       database.readingCards.toArray(),
+      database.wordCards.toArray(),
     ]),
   );
 
@@ -161,6 +179,7 @@ export async function createYemaiBackup(
   const stableSources = sanitizedRows(sortRows(sources, (row) => row.id));
   const stableArtifacts = sanitizedRows(sortRows(artifacts, (row) => row.key));
   const stableReadingCards = sanitizedRows(sortRows(readingCards, (row) => row.id));
+  const stableWordCards = sanitizedRows(sortRows(wordCards, (row) => row.id));
   return {
     format: YEMAI_BACKUP_FORMAT,
     formatVersion: YEMAI_BACKUP_FORMAT_VERSION,
@@ -172,16 +191,18 @@ export async function createYemaiBackup(
       sources: stableSources.length,
       artifacts: stableArtifacts.length,
       readingCards: stableReadingCards.length,
+      wordCards: stableWordCards.length,
     },
     conversations: stableConversations,
     messages: stableMessages,
     sources: stableSources,
     artifacts: stableArtifacts,
     readingCards: stableReadingCards,
+    wordCards: stableWordCards,
   };
 }
 
-export function serializeYemaiBackup(backup: YemaiBackupV1) {
+export function serializeYemaiBackup(backup: YemaiBackup | NormalizedYemaiBackup) {
   return `${JSON.stringify(backup, null, 2)}\n`;
 }
 
@@ -222,7 +243,7 @@ function requireEntityRows(
 }
 
 export interface ParsedYemaiBackup {
-  backup: YemaiBackupV1;
+  backup: NormalizedYemaiBackup;
   bytes: number;
 }
 
@@ -240,7 +261,7 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
   if (!isRecord(value) || value.format !== YEMAI_BACKUP_FORMAT) {
     throw new YemaiBackupValidationError('这不是页脉备份文件。');
   }
-  if (value.formatVersion !== YEMAI_BACKUP_FORMAT_VERSION) {
+  if (value.formatVersion !== 1 && value.formatVersion !== YEMAI_BACKUP_FORMAT_VERSION) {
     throw new YemaiBackupValidationError(`暂不支持格式版本 ${String(value.formatVersion)}。`);
   }
   if (!hasString(value, 'appVersion') || !isValidTimestamp(value.exportedAt) || !isRecord(value.counts)) {
@@ -254,6 +275,17 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
   const sources = requireEntityRows(value, 'sources', ['id', 'conversationId']);
   const artifacts = requireEntityRows(value, 'artifacts', ['key', 'id', 'conversationId', 'messageId', 'filename']);
   const readingCards = requireEntityRows(value, 'readingCards', ['id', 'sourceConversationId', 'sourceMessageId', 'title']);
+  const wordCards = value.formatVersion === 1 ? [] : value.wordCards;
+  if (!Array.isArray(wordCards) || !wordCards.every(isWordCard)) {
+    throw new YemaiBackupValidationError('备份中的 wordCards 列表无效。');
+  }
+  if (new Set(wordCards.map((card) => card.id)).size !== wordCards.length
+    || new Set(wordCards.map((card) => card.captureKey)).size !== wordCards.length) {
+    throw new YemaiBackupValidationError('wordCards 中存在重复 ID 或来源。');
+  }
+  if (value.formatVersion === 2 && value.counts.wordCards !== wordCards.length) {
+    throw new YemaiBackupValidationError('备份中的 wordCards 数量校验失败。');
+  }
   conversations.forEach((row, index) => {
     if (!hasFiniteNumber(row, 'position')
       || !hasFiniteNumber(row, 'updatedAt')
@@ -344,5 +376,5 @@ export function parseYemaiBackup(serialized: string): ParsedYemaiBackup {
       throw new YemaiBackupValidationError(`产物 ${String(row.id)} 找不到所属会话或消息。`);
     }
   });
-  return { backup: value as unknown as YemaiBackupV1, bytes };
+  return { backup: { ...value, wordCards, counts: { ...value.counts, wordCards: wordCards.length } } as unknown as NormalizedYemaiBackup, bytes };
 }

@@ -1,0 +1,58 @@
+English-to-Chinese dictionary attribution and license
+
+Bundled files: en-zh-ecdict/a.json through z.json and manifest.json
+Source repository: https://github.com/skywind3000/ECDICT
+Pinned revision: bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b
+Source CSV: https://raw.githubusercontent.com/skywind3000/ECDICT/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b/ecdict.csv
+Source CSV SHA-256: 1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf
+Original upstream documentation: ECDICT-README.md (bundled without modification)
+License source: https://raw.githubusercontent.com/skywind3000/ECDICT/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b/LICENSE
+
+This is a derived subset of the community-maintained ECDICT database, not
+a claim of authoritative dictionary or context-specific translation quality.
+Upstream describes its historical material sources in the bundled README.
+The repository distributes this database under its MIT license, reproduced
+in full below. No IPA data from ECDICT is bundled by this extraction.
+
+Selection: rows with an exam tag, positive Collins/Oxford marker, or positive
+BNC/frq rank <= 40,000; plus real source rows whose explicit exchange
+0: lemma points to one of those selected words. Non-ASCII English headwords,
+headwords longer than 80 characters, and empty translations are excluded.
+Only lowercase letters with internal apostrophes, spaces or hyphens are kept.
+Selection uses source metadata; runtime lookup does not infer lemmas or roots.
+
+Meanings are the first two nonempty translation lines, with surrounding
+whitespace removed, limited to 240 characters (ellipsis denotes truncation).
+Source part-of-speech labels and wording are retained. These concise general
+meanings may not represent the sense used in a particular article.
+Lookup misses are expected for rare words, some inflections, names and phrases.
+
+The generated UTF-8 JSON is split by initial letter, loaded only when needed,
+and does not make requests to any remote dictionary service at runtime.
+Rebuild using scripts/update-word-meaning-dictionary.py.
+
+============================================================================
+ECDICT (MIT)
+============================================================================
+
+MIT License
+
+Copyright (c) 2025 Linwei
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

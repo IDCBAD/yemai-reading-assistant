@@ -45,7 +45,7 @@ function isValidTimestamp(value: unknown): value is number {
 }
 
 async function loadBackupCounts(): Promise<YemaiBackupCounts> {
-  const [conversations, messages, sources, artifacts, readingCards] = await yemaiDatabase.transaction(
+  const [conversations, messages, sources, artifacts, readingCards, wordCards] = await yemaiDatabase.transaction(
     'r',
     [
       yemaiDatabase.conversations,
@@ -53,6 +53,7 @@ async function loadBackupCounts(): Promise<YemaiBackupCounts> {
       yemaiDatabase.conversationSources,
       yemaiDatabase.artifacts,
       yemaiDatabase.readingCards,
+      yemaiDatabase.wordCards,
     ],
     async () => Promise.all([
       yemaiDatabase.conversations.count(),
@@ -60,9 +61,10 @@ async function loadBackupCounts(): Promise<YemaiBackupCounts> {
       yemaiDatabase.conversationSources.count(),
       yemaiDatabase.artifacts.count(),
       yemaiDatabase.readingCards.count(),
+      yemaiDatabase.wordCards.count(),
     ]),
   );
-  return { conversations, messages, sources, artifacts, readingCards };
+  return { conversations, messages, sources, artifacts, readingCards, wordCards };
 }
 
 export async function loadLocalBackupStatus(): Promise<LocalBackupStatus> {

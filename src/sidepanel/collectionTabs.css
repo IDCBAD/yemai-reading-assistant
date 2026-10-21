@@ -1,0 +1,17 @@
+.collection-header { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; min-height:56px; padding:0 16px; border-bottom:1px solid #e0e5ec; background:#fff; }
+.collection-tabs { display:flex; align-self:stretch; gap:24px; min-width:0; }
+.collection-tabs > button { position:relative; display:flex; align-items:center; gap:6px; min-height:48px; padding:0; border:0; background:transparent; color:#718094; font:inherit; font-size:13px; white-space:nowrap; cursor:pointer; }
+.collection-tabs > button[aria-pressed='true'] { color:#263347; font-weight:650; }
+.collection-tabs > button[aria-pressed='true']::after { content:''; position:absolute; left:0; right:0; bottom:-1px; height:2px; border-radius:2px; background:#365de1; }
+.collection-tabs span { color:#7b8798; font-size:11px; font-weight:400; font-variant-numeric:tabular-nums; }
+.collection-tabs span[aria-hidden='true'] { display:none; }
+.collection-header-actions { display:flex; align-items:center; flex-shrink:0; gap:3px; }
+.collection-close,.collection-audio-toggle { display:grid; place-items:center; width:32px; height:36px; padding:0; border:0; border-radius:7px; background:transparent; color:#758195; cursor:pointer; }
+.collection-close:hover,.collection-audio-toggle:hover { color:#315eea; background:#f0f4fc; }
+.collection-audio-toggle[aria-pressed='true'] { color:#456cd1; }
+.collection-header button:focus-visible { outline:2px solid #315eea; outline-offset:3px; }
+@media(max-width:380px) { .collection-header { padding-inline:10px; gap:6px; } .collection-tabs { gap:12px; } .collection-tabs > button { font-size:12px; gap:4px; } .collection-header-actions { gap:1px; } }
+@media(max-width:310px) { .collection-header { padding-inline:6px; gap:4px; } .collection-tabs { gap:8px; } .collection-tabs > button { font-size:11px; } .collection-close { width:26px; } }
+.collection-surface-panel,.reading-cards-panel { container-type:inline-size; container-name:collection; }
+@container collection (max-width:380px) { .collection-header { padding-inline:10px; gap:6px; } .collection-tabs { gap:12px; } .collection-tabs > button { font-size:12px; gap:4px; } .collection-header-actions { gap:1px; } }
+@container collection (max-width:310px) { .collection-header { padding-inline:6px; gap:4px; } .collection-tabs { gap:8px; } .collection-tabs > button { font-size:11px; } .collection-close { width:26px; } }

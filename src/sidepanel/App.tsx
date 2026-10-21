@@ -30,6 +30,8 @@ import { BackgroundWorkspaceClient } from './backgroundClient';
 import { TaskNotificationClient } from './taskNotificationClient';
 import { INITIAL_TASK_NOTIFICATIONS, type TaskNotificationSnapshot, type TaskNotificationTarget } from '../shared/taskNotifications';
 import { loadReadingCards, removeReadingCard, saveReadingCard } from '../services/readingCardStorage';
+import { collectWord } from '../services/wordCollectionClient';
+import { LOCAL_TRANSLATION_ENABLED_KEY, WORD_COLLECTION_ENABLED_KEY, type WordCardCapture } from '../shared/wordCards';
 import { saveQaCards, type QaDirectory, type QaSaveResult } from '../services/obsidianQa';
 import {
   authorizeQaDirectory,
@@ -135,12 +137,23 @@ import type {
   PageContext,
   WorkspaceState,
 } from './types';
+import { CollectionSurface } from './components/CollectionSurface';
 import { closeWorkspaceTab, openConversationInWorkspace, openNotificationConversation, selectWorkspaceTab } from './workspaceNavigation';
 
 type CommandPaletteModule = typeof import('./components/CommandPalette');
 type ReadingCardsSurface = typeof import('./components/ReadingCardsPanel').ReadingCardsPanel;
 const CollectionReferencePicker = lazy(() => import('./components/CollectionReferencePicker').then((module) => ({ default: module.CollectionReferencePicker })));
 const BatchReadingDialog = lazy(() => import('./components/BatchReadingDialog').then((module) => ({ default: module.BatchReadingDialog })));
+type WordCardsSurface = typeof import('./components/WordCardsPanel').WordCardsPanel;
+let wordCardsSurface: WordCardsSurface | null = null;
+let wordCardsLoad: Promise<WordCardsSurface> | null = null;
+const loadWordCardsPanel = () => {
+  if (wordCardsSurface) return Promise.resolve(wordCardsSurface);
+  if (!wordCardsLoad) wordCardsLoad = import('./components/WordCardsPanel')
+    .then((module) => { wordCardsSurface = module.WordCardsPanel; return module.WordCardsPanel; })
+    .catch((error) => { wordCardsLoad = null; throw error; });
+  return wordCardsLoad;
+};
 
 let commandPaletteModule: CommandPaletteModule | null = null;
 let commandPaletteLoad: Promise<CommandPaletteModule> | null = null;
@@ -182,7 +195,10 @@ const loadReadingCardsPanel = () => {
 };
 const prepareCommandPalette = () => { void loadCommandPalette(); };
 const prepareOverlays = () => { void loadOverlays(); };
-const prepareReadingCardsPanel = () => { void loadReadingCardsPanel(); };
+const prepareReadingCardsPanel = () => {
+  void loadReadingCardsPanel().catch(() => undefined);
+  void loadWordCardsPanel().catch(() => undefined);
+};
 const ConfirmDialog = lazy(() => loadOverlays().then((module) => ({ default: module.ConfirmDialog })));
 const HistoryPopover = lazy(() => loadOverlays().then((module) => ({ default: module.HistoryPopover })));
 const MessageList = lazy(loadMessageList);
@@ -364,6 +380,10 @@ export default function App() {
     requestId: number;
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [wordCardsOpen, setWordCardsOpen] = useState(false);
+  const [wordCardsLoaded, setWordCardsLoaded] = useState(false);
+  const [wordCardCount, setWordCardCount] = useState(0);
+  const [collectionKind, setCollectionKind] = useState<'answers' | 'words'>('answers');
   const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletionRequest | null>(null);
   const [readingCardRemovalUndo, setReadingCardRemovalUndo] = useState<ReadingCardRemovalUndo | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
@@ -380,12 +400,16 @@ export default function App() {
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [pageMetadataRevision, setPageMetadataRevision] = useState(0);
   const [selectionBubbleEnabled, setSelectionBubbleEnabled] = useState(true);
+  const [wordCollectionEnabled, setWordCollectionEnabled] = useState(true);
+  const [localTranslationEnabled, setLocalTranslationEnabled] = useState(true);
   const workspaceRef = useRef<WorkspaceState>(INITIAL_WORKSPACE);
   const readingCardsRef = useRef<ReadingCardRow[]>([]);
   const searchSessionControllerRef = useRef(new WorkspaceSearchSessionController());
   const searchPreparationRequestRef = useRef(0);
   const searchSuspendedRef = useRef(false);
   const readingCardsPreparationRequestRef = useRef(0);
+  const collectionIsOpenRef = useRef(false);
+  collectionIsOpenRef.current = readingCardsOpen || wordCardsOpen || readingCardsPreparing;
   const readingCardsLoadTaskRef = useRef<Promise<void> | null>(null);
   const readingCardsHydratedRef = useRef(false);
   const readingCardsReadSucceededRef = useRef(false);
@@ -551,7 +575,7 @@ export default function App() {
     const report = () => notificationClientRef.current?.report({
       conversationId: activeConversation.id,
       windowId: notificationWindowId,
-      visible: workspaceHydrated && !document.hidden && document.hasFocus() && !settingsOpen && !readingCardsOpen
+      visible: workspaceHydrated && !document.hidden && document.hasFocus() && !settingsOpen && !readingCardsOpen && !wordCardsOpen
         && !historyOpen && !historyDeletion && !searchSession && !collectionReferenceSession && !batchReadingConversationId,
       seenEventIds: taskNotifications.unreadEvents.filter((event) => event.conversationId === activeConversation.id).map((event) => event.id),
     });
@@ -564,14 +588,15 @@ export default function App() {
       window.removeEventListener('blur', report);
       document.removeEventListener('visibilitychange', report);
     };
-  }, [workspace, workspaceHydrated, activeConversation.id, notificationWindowId, settingsOpen, readingCardsOpen,
+  }, [workspace, workspaceHydrated, activeConversation.id, notificationWindowId, settingsOpen, readingCardsOpen, wordCardsOpen,
     historyOpen, historyDeletion, searchSession, collectionReferenceSession, batchReadingConversationId, taskNotifications.unreadEvents]);
 
   useEffect(() => {
     if (!notificationTarget || !workspaceHydrated) return;
-    if (settingsOpen || readingCardsOpen || historyOpen || searchSession || collectionReferenceSession || batchReadingConversationId || historyDeletion) {
+    if (settingsOpen || readingCardsOpen || wordCardsOpen || historyOpen || searchSession || collectionReferenceSession || batchReadingConversationId || historyDeletion) {
       setSettingsOpen(false);
       setReadingCardsOpen(false);
+      setWordCardsOpen(false);
       setHistoryOpen(false);
       setSearchSession(null);
       setCollectionReferenceSession(null);
@@ -607,7 +632,7 @@ export default function App() {
     setCollectionReferenceSession(null);
     setBatchReadingConversationId(null);
   }, [notificationTarget, workspaceHydrated, activeConversation.id, workspace.conversations, setWorkspace,
-    settingsOpen, readingCardsOpen, historyOpen, searchSession, collectionReferenceSession, batchReadingConversationId, historyDeletion]);
+    settingsOpen, readingCardsOpen, wordCardsOpen, historyOpen, searchSession, collectionReferenceSession, batchReadingConversationId, historyDeletion]);
 
   useLayoutEffect(() => {
     let mounted = true;
@@ -645,13 +670,22 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-    void browser.storage.local.get('selectionBubbleEnabled').then((stored) => {
+    void browser.storage.local.get(['selectionBubbleEnabled', WORD_COLLECTION_ENABLED_KEY, LOCAL_TRANSLATION_ENABLED_KEY]).then((stored) => {
       if (mounted && typeof stored.selectionBubbleEnabled === 'boolean') {
         setSelectionBubbleEnabled(stored.selectionBubbleEnabled);
       }
+      if (mounted && typeof stored[WORD_COLLECTION_ENABLED_KEY] === 'boolean') setWordCollectionEnabled(stored[WORD_COLLECTION_ENABLED_KEY] as boolean);
+      if (mounted && typeof stored[LOCAL_TRANSLATION_ENABLED_KEY] === 'boolean') setLocalTranslationEnabled(stored[LOCAL_TRANSLATION_ENABLED_KEY] as boolean);
     }).catch(() => undefined);
+    const listener = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area !== 'local') return;
+      if (typeof changes[WORD_COLLECTION_ENABLED_KEY]?.newValue === 'boolean') setWordCollectionEnabled(changes[WORD_COLLECTION_ENABLED_KEY].newValue as boolean);
+      if (typeof changes[LOCAL_TRANSLATION_ENABLED_KEY]?.newValue === 'boolean') setLocalTranslationEnabled(changes[LOCAL_TRANSLATION_ENABLED_KEY].newValue as boolean);
+    };
+    browser.storage.onChanged.addListener(listener);
     return () => {
       mounted = false;
+      browser.storage.onChanged.removeListener(listener);
     };
   }, []);
 
@@ -914,6 +948,9 @@ export default function App() {
   }, []);
 
   const openCommandPalette = useCallback((origin: 'pointer' | 'keyboard' = 'pointer') => {
+    readingCardsPreparationRequestRef.current += 1;
+    setReadingCardsPreparing(false);
+    setWordCardsOpen(false);
     startUiPerformanceMeasure('search-shell');
     const requestId = ++searchPreparationRequestRef.current;
     const session = searchSessionControllerRef.current.open(
@@ -1031,28 +1068,25 @@ export default function App() {
   } = {}) => {
     startUiPerformanceMeasure('reading-cards-shell');
     const requestId = ++readingCardsPreparationRequestRef.current;
+    const alreadyOpen = collectionIsOpenRef.current;
+    if (!alreadyOpen) setCollectionKind('answers');
+    setHistoryOpen(false); setSettingsOpen(false);
+    if (options.preserveSearch) setSearchSuspended(true);
+    else closeCommandPalette();
     const commitOpen = () => {
       setReadingCardSelectionId(options.selectedCardId);
       setReadingCardsLoaded(true);
+      setCollectionKind('answers');
+      setWordCardsOpen(false);
       setReadingCardsOpen(true);
-      setHistoryOpen(false);
-      setSettingsOpen(false);
       setReadingCardsPreparing(false);
-      if (options.preserveSearch) setSearchSuspended(true);
-      else closeCommandPalette();
     };
-    if (readingCardsSurface && readingCardsHydratedRef.current) {
-      commitOpen();
-      return;
-    }
+    if (readingCardsSurface && readingCardsHydratedRef.current) { commitOpen(); return; }
     setReadingCardsPreparing(true);
     void runPreparedSurfaceOpen({
-      load: async () => {
-        await Promise.all([
-          loadReadingCardsPanel(),
-          readingCardsLoadTaskRef.current ?? Promise.resolve(),
-        ]);
-      },
+      load: async () => { await Promise.all([
+        loadReadingCardsPanel(), readingCardsLoadTaskRef.current ?? Promise.resolve(),
+      ]); },
       shouldCommit: () => readingCardsPreparationRequestRef.current === requestId,
       commit: commitOpen,
     }).catch(() => {
@@ -1957,6 +1991,41 @@ export default function App() {
     });
   };
 
+  const changeWordCollection = (enabled: boolean) => {
+    setWordCollectionEnabled(enabled);
+    void browser.storage.local.set({ [WORD_COLLECTION_ENABLED_KEY]: enabled }).catch(() => {
+      setWordCollectionEnabled(!enabled); setConnectionIssue('无法保存单词收藏设置。');
+    });
+  };
+  const changeLocalTranslation = (enabled: boolean) => {
+    setLocalTranslationEnabled(enabled);
+    void browser.storage.local.set({ [LOCAL_TRANSLATION_ENABLED_KEY]: enabled }).catch(() => {
+      setLocalTranslationEnabled(!enabled); setConnectionIssue('无法保存回答内翻译设置。');
+    });
+  };
+
+  const openWordCards = () => {
+    const requestId = ++readingCardsPreparationRequestRef.current;
+    const alreadyOpen = readingCardsOpen || wordCardsOpen || readingCardsPreparing;
+    if (!alreadyOpen) setCollectionKind('words');
+    closeCommandPalette(); setHistoryOpen(false); setSettingsOpen(false);
+    const commitOpen = () => {
+      if (readingCardsPreparationRequestRef.current !== requestId) return;
+      setReadingCardsOpen(false); setReadingCardsPreparing(false);
+      setCollectionKind('words'); setWordCardsLoaded(true); setWordCardsOpen(true);
+    };
+    if (wordCardsSurface) { commitOpen(); return; }
+    setReadingCardsPreparing(true);
+    void loadWordCardsPanel().then(commitOpen).catch(() => {
+      if (readingCardsPreparationRequestRef.current === requestId) setReadingCardsPreparing(false);
+    });
+  };
+
+  const saveAssistantWord = async (capture: WordCardCapture) => {
+    const result = await collectWord({ ...capture, source: { ...capture.source, conversationId: activeConversation.id } });
+    showReadingCardFeedback(undefined, result.alreadySaved ? '单词已在收藏中' : '单词已收藏');
+  };
+
   const selectQaDirectory = async () => {
     try {
       const { directory, state } = await chooseQaDirectory();
@@ -2149,23 +2218,28 @@ export default function App() {
 
   const ReadyCommandPalette = commandPaletteModule?.CommandPalette ?? null;
   const ReadyReadingCardsPanel = readingCardsSurface;
+  const ReadyWordCardsPanel = wordCardsSurface;
+  const closeCollectionSurface = () => { closeReadingCards(); setWordCardsOpen(false); };
 
   return (
     <div className="app-shell">
       <TopBar
         onOpenSearch={openCommandPalette}
-        onOpenReadingCards={(readingCardsOpen || readingCardsPreparing)
-          ? closeReadingCards
-          : () => openReadingCards()}
+        onOpenReadingCards={() => {
+          if (wordCardsOpen || readingCardsOpen || readingCardsPreparing) closeCollectionSurface();
+          else if (collectionKind === 'words') openWordCards();
+          else openReadingCards();
+        }}
         onPrepareSearch={prepareCommandPalette}
         onPrepareReadingCards={prepareReadingCardsPanel}
         searchPreparing={searchPreparing}
         readingCardsPreparing={readingCardsPreparing}
         readingCardsOpen={readingCardsOpen}
+        wordCardsOpen={wordCardsOpen}
         readingCardFeedbackCount={readingCardFeedback?.count ?? 0}
         onOpenSettings={() => {
           setSettingsOpen(true);
-          setReadingCardsOpen(false);
+          closeCollectionSurface();
           closeCommandPalette();
           setHistoryOpen(false);
         }}
@@ -2222,6 +2296,9 @@ export default function App() {
           onCollectAssistantExcerpt={(message, text, contextSources, origin) => {
             void collectReadingCardExcerpt(message, text, contextSources, origin);
           }}
+          wordCollectionEnabled={wordCollectionEnabled}
+          localTranslationEnabled={localTranslationEnabled}
+          onCollectWord={saveAssistantWord}
           onOpenBranchOrigin={() => {
             if (branchParent) selectHistory(branchParent.id);
           }}
@@ -2358,8 +2435,17 @@ export default function App() {
           onSelect={selectSearchResult}
         />
       )}
+      <CollectionSurface open={readingCardsOpen || wordCardsOpen || readingCardsPreparing}
+        active={collectionKind} answerCount={readingCards.length} wordCount={wordCardCount}
+        busy={readingCardsPreparing}
+        paused={shouldPauseReadingCardsForSearch(Boolean(searchSession), searchSuspended)}
+        onClose={closeCollectionSurface}
+        onChange={(kind) => { if (kind === 'words') openWordCards(); else openReadingCards(); }}>
+      {!readingCardsOpen && !wordCardsOpen && readingCardsPreparing && !(collectionKind === 'answers' ? readingCardsLoaded : wordCardsLoaded) && <div className="collection-surface-loading" role="status">正在打开收藏…</div>}
+      <div className="collection-surface-page" hidden={collectionKind !== 'answers'}>
       {readingCardsLoaded && ReadyReadingCardsPanel && (
         <ReadyReadingCardsPanel
+          embedded
           open={readingCardsOpen}
           cards={readingCards}
           conversations={workspace.conversations}
@@ -2368,6 +2454,7 @@ export default function App() {
           issue={readingCardsIssue}
           removalUndo={readingCardRemovalUndo}
           onClose={closeReadingCards}
+          onShowWords={openWordCards}
           onReaderClose={() => {
             setReadingCardSelectionId(undefined);
             setSearchSuspended(false);
@@ -2382,6 +2469,12 @@ export default function App() {
           collectionSend={collectionSend}
         />
       )}
+      </div>
+      <div className="collection-surface-page" hidden={collectionKind !== 'words'}>
+      {wordCardsLoaded && ReadyWordCardsPanel && <ReadyWordCardsPanel embedded open={wordCardsOpen}
+        onCountChange={setWordCardCount} onClose={closeCollectionSurface} onShowAnswers={() => openReadingCards()} />}
+      </div>
+      </CollectionSurface>
       {settingsOpen && (
         <Suspense fallback={null}>
           <SettingsDrawer
@@ -2389,6 +2482,8 @@ export default function App() {
             settings={workosConnection ?? EMPTY_WORKOS_CONNECTION_SETTINGS}
             connectionIssue={connectionIssue}
             bubbleEnabled={selectionBubbleEnabled}
+            wordCollectionEnabled={wordCollectionEnabled}
+            localTranslationEnabled={localTranslationEnabled}
             systemNotificationsEnabled={taskNotifications.systemNotificationsEnabled}
             notificationPermission={taskNotifications.permission}
             notificationIssue={taskNotifications.issue}
@@ -2402,6 +2497,8 @@ export default function App() {
             onImportWorkosCredentials={importWorkosLoginCredentials}
             onRemoveCredentials={removeCredentials}
             onBubbleEnabledChange={changeSelectionBubble}
+            onWordCollectionEnabledChange={changeWordCollection}
+            onLocalTranslationEnabledChange={changeLocalTranslation}
             onSystemNotificationsEnabledChange={(enabled) => notificationClientRef.current?.setEnabled(enabled)}
             onExportBackup={exportBackup}
             onInspectBackup={inspectBackup}

@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import type { WordCard } from '../shared/wordCards';
 import type {
   AssistantArtifact,
   ChatMessage,
@@ -12,7 +13,7 @@ import type {
 import type { WorkosTransportKind } from '../services/workosTransport';
 
 export const YEMAI_DATABASE_NAME = 'yemai-reading-assistant';
-export const YEMAI_DATABASE_VERSION = 4;
+export const YEMAI_DATABASE_VERSION = 5;
 
 export interface ConversationRow {
   id: string;
@@ -103,6 +104,7 @@ export class YemaiDatabase extends Dexie {
   artifacts!: Table<ArtifactRow, string>;
   readingCards!: Table<ReadingCardRow, string>;
   meta!: Table<MetaRow, string>;
+  wordCards!: Table<WordCard, string>;
 
   constructor(name = YEMAI_DATABASE_NAME) {
     super(name);
@@ -123,10 +125,13 @@ export class YemaiDatabase extends Dexie {
       readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
       cognitionProjection: '&id,filename,type,status,updatedAt',
     });
-    this.version(YEMAI_DATABASE_VERSION).stores({
+    this.version(4).stores({
       ...workspaceStores,
       readingCards: '&id,sourceConversationId,sourceMessageId,[sourceConversationId+sourceMessageId],createdAt,updatedAt',
       cognitionProjection: null,
+    });
+    this.version(YEMAI_DATABASE_VERSION).stores({
+      wordCards: '&id,&captureKey,createdAt,updatedAt,normalizedWord',
     });
   }
 }

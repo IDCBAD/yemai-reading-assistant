@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import type { ReadingCardRow } from '../../data/database';
 import { formatMessageTimestamp } from '../messageTimestamp';
 import {
@@ -32,6 +32,8 @@ interface ReadingCardRiverProps {
   paused?: boolean;
   onOpenCard: (cardId: string, modality: ReadingCardOpenModality) => void;
   onRemoveCard: (card: ReadingCardRow) => void;
+  latestRef?: RefObject<(() => void) | null>;
+  onLatestChange?: (atLatest: boolean) => void;
 }
 
 interface RiverRuntime {
@@ -52,7 +54,7 @@ function cardKindLabel(card: ReadingCardRow) {
   return readingCardKind(card) === 'excerpt' ? '回答片段' : '完整回答';
 }
 
-export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpenCard, onRemoveCard }: ReadingCardRiverProps) {
+export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpenCard, onRemoveCard, latestRef, onLatestChange }: ReadingCardRiverProps) {
   const initialPosition = initialReadingCardRiverPosition(cards.length);
   const initialCenter = Math.round(initialPosition);
   const looping = canLoopReadingCardRiver(cards.length);
@@ -69,6 +71,7 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
   const pausedRef = useRef(paused);
   const hoveredIdRef = useRef<string | null>(null);
   const onOpenCardRef = useRef(onOpenCard);
+  const onLatestChangeRef = useRef(onLatestChange);
   const pointerOpenedCardIdRef = useRef<string | null>(null);
   const readerReturnPositionRef = useRef<number | null>(null);
   const reducedMotionRef = useRef(false);
@@ -96,6 +99,7 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
   selectedIdRef.current = selectedCardId;
   pausedRef.current = paused;
   onOpenCardRef.current = onOpenCard;
+  onLatestChangeRef.current = onLatestChange;
   const visibleIndices = readingCardRiverWindowIndices(
     windowCenter,
     cards.length,
@@ -115,6 +119,18 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
       setWindowCenter(nextCenter);
     }
   };
+
+  useEffect(() => {
+    if (!latestRef) return;
+    latestRef.current = () => {
+      const runtime = runtimeRef.current;
+      const count = cardsRef.current.length;
+      runtime.position = nearestReadingCardRiverPosition(runtime.position, 0, count);
+      runtime.velocity = 0;
+      commitWindowCenter(Math.round(runtime.position), count);
+    };
+    return () => { latestRef.current = null; };
+  }, [latestRef]);
 
   useEffect(() => {
     if (!paused) return;
@@ -173,6 +189,7 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
     const viewportSize = { width: initialBounds.width, height: initialBounds.height };
     const pathLayout = { width: -1, height: -1, cardCount: -1, spacing: -1 };
     let lastPositionLabel = '';
+    let lastAtLatest: boolean | undefined;
 
     const updatePath = (width: number, height: number, spacing: number, cardCount: number) => {
       if (!pathRef.current) return;
@@ -352,6 +369,13 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
       const nextCenter = isLooping
         ? Math.round(runtime.position)
         : clamp(Math.round(runtime.position), 0, Math.max(cardCount - 1, 0));
+      // Report only state changes; keep frame-by-frame motion outside React.
+      const atLatest = cardCount <= 1 || (Math.abs(readingCardRiverRelative(0, runtime.position, cardCount)) < 0.08
+        && Math.abs(runtime.velocity) < 0.015);
+      if (atLatest !== lastAtLatest) {
+        lastAtLatest = atLatest;
+        onLatestChangeRef.current?.(atLatest);
+      }
       if (nextCenter !== windowCenterRef.current) {
         commitWindowCenter(nextCenter, cardCount);
       }
@@ -519,16 +543,6 @@ export function ReadingCardRiver({ cards, selectedCardId, paused = false, onOpen
           aria-label={`当前位置 ${wrapRiverIndex(Math.round(windowCenter), cards.length) + 1}，共 ${cards.length} 张收藏`}
         >
           <span ref={positionLabelRef}>{wrapRiverIndex(Math.round(windowCenter), cards.length) + 1}/{cards.length}</span>
-          <button
-            type="button"
-            onClick={() => {
-              const runtime = runtimeRef.current;
-              runtime.position = nearestReadingCardRiverPosition(runtime.position, 0, cards.length);
-              runtime.velocity = 0;
-              const nextCenter = Math.round(runtime.position);
-              commitWindowCenter(nextCenter, cards.length);
-            }}
-          >回到最新</button>
         </div>
       )}
       <div className="reading-card-river__cards" role="list">

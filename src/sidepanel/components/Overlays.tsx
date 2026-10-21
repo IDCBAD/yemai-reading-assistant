@@ -212,6 +212,8 @@ interface SettingsDrawerProps {
   settings: WorkosConnectionSettings;
   connectionIssue: string | null;
   bubbleEnabled: boolean;
+  wordCollectionEnabled?: boolean;
+  localTranslationEnabled?: boolean;
   systemNotificationsEnabled: boolean;
   notificationPermission: 'granted' | 'denied' | 'unknown';
   notificationIssue?: string;
@@ -225,6 +227,8 @@ interface SettingsDrawerProps {
   onImportWorkosCredentials: () => Promise<InternalV2Credentials>;
   onRemoveCredentials: (kind: WorkosTransportKind) => Promise<void>;
   onBubbleEnabledChange: (enabled: boolean) => void;
+  onWordCollectionEnabledChange?: (enabled: boolean) => void;
+  onLocalTranslationEnabledChange?: (enabled: boolean) => void;
   onSystemNotificationsEnabledChange: (enabled: boolean) => void;
   onExportBackup: () => Promise<LocalBackupExportReceipt>;
   onInspectBackup: (file: File) => Promise<LocalBackupPreview>;
@@ -241,6 +245,8 @@ export function SettingsDrawer({
   settings,
   connectionIssue,
   bubbleEnabled,
+  wordCollectionEnabled = true,
+  localTranslationEnabled = true,
   systemNotificationsEnabled,
   notificationPermission,
   notificationIssue,
@@ -254,6 +260,8 @@ export function SettingsDrawer({
   onImportWorkosCredentials,
   onRemoveCredentials,
   onBubbleEnabledChange,
+  onWordCollectionEnabledChange,
+  onLocalTranslationEnabledChange,
   onSystemNotificationsEnabledChange,
   onExportBackup,
   onInspectBackup,
@@ -803,6 +811,15 @@ export function SettingsDrawer({
             </button>
           </section>
 
+          <section className="settings-section settings-section--row">
+            <div><strong>划词收藏单词</strong><p>划选英语词语时显示收藏和引用操作，不自动加入提问。</p></div>
+            <button className={`switch pressable${wordCollectionEnabled ? ' is-on' : ''}`} type="button" role="switch" aria-label="划词收藏单词" aria-checked={wordCollectionEnabled} onClick={() => onWordCollectionEnabledChange?.(!wordCollectionEnabled)}><span /></button>
+          </section>
+          <section className="settings-section settings-section--row">
+            <div><strong>回答内划词翻译</strong><p>控制页脉回答中的翻译入口，不影响沉浸式翻译。</p></div>
+            <button className={`switch pressable${localTranslationEnabled ? ' is-on' : ''}`} type="button" role="switch" aria-label="回答内划词翻译" aria-checked={localTranslationEnabled} onClick={() => onLocalTranslationEnabledChange?.(!localTranslationEnabled)}><span /></button>
+          </section>
+
           <section className="settings-section storage-usage-section">
             <strong>本地知识占用</strong>
             {storageUsage ? (
@@ -816,6 +833,7 @@ export function SettingsDrawer({
                 </div>
                 <div className="storage-usage-breakdown">
                   <span>会话与卡片 {formatStorageBytes(storageUsage.historyBytes)}</span>
+                  {(storageUsage.wordBytes ?? 0) > 0 && <span>其中单词 {formatStorageBytes(storageUsage.wordBytes ?? 0)}</span>}
                   <span>配置 {formatStorageBytes(storageUsage.settingsBytes)}</span>
                 </div>
               </>
@@ -829,7 +847,7 @@ export function SettingsDrawer({
             <div className="local-backup-heading">
               <div>
                 <strong>本地数据备份</strong>
-                <p>这里只备份会话和收藏卡片。Obsidian 问答文件不包含在备份中，请在 Obsidian 中单独备份。</p>
+                <p>备份会话、问答收藏和单词卡片。Obsidian 问答文件请在 Obsidian 中单独备份。</p>
               </div>
             </div>
             {backupStatus ? (
@@ -839,6 +857,7 @@ export function SettingsDrawer({
                 <div><dt>来源</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.sources)}</dd></div>
                 <div><dt>产物</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.artifacts)}</dd></div>
                 <div><dt>收藏卡片</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.readingCards)}</dd></div>
+                <div><dt>单词卡片</dt><dd>{new Intl.NumberFormat('zh-CN').format(backupStatus.counts.wordCards ?? 0)}</dd></div>
               </dl>
             ) : (
               <p>{backupStatusIssue ?? '正在统计本地知识资产…'}</p>
@@ -909,7 +928,8 @@ export function SettingsDrawer({
                   <p>
                     {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.conversations)} 个会话 · {' '}
                     {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.messages)} 条消息 · {' '}
-                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.readingCards)} 张卡片
+                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.readingCards)} 张问答卡片 · {' '}
+                    {new Intl.NumberFormat('zh-CN').format(backupPreview.counts.wordCards ?? 0)} 张单词卡片
                   </p>
                   <div className="local-backup-import-actions">
                     <button

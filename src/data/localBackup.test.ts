@@ -77,7 +77,7 @@ describe('local backup', () => {
 
     expect(backup).toMatchObject({
       format: 'yemai-backup',
-      formatVersion: 1,
+      formatVersion: 2,
       appVersion: '0.5.0',
       exportedAt: 100,
       counts: { conversations: 1, messages: 1, sources: 1, artifacts: 1, readingCards: 1 },

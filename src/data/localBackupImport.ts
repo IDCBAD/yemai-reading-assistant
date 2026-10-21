@@ -1,11 +1,13 @@
 import type { YemaiDatabase } from './database';
-import type { YemaiBackupCounts, YemaiBackupV1 } from './localBackup';
+import type { YemaiBackupCounts, YemaiBackup, NormalizedYemaiBackup } from './localBackup';
+import type { WordCard } from '../shared/wordCards';
 
 export type LocalBackupImportMode = 'merge' | 'replace';
 
 export interface LocalBackupImportChanges {
   added: YemaiBackupCounts;
   updatedReadingCards: number;
+  updatedWordCards?: number;
   skipped: YemaiBackupCounts;
 }
 
@@ -21,38 +23,63 @@ const emptyCounts = (): YemaiBackupCounts => ({
   sources: 0,
   artifacts: 0,
   readingCards: 0,
+  wordCards: 0,
 });
 
-function importedCounts(backup: YemaiBackupV1): YemaiBackupCounts {
+function importedCounts(backup: YemaiBackup | NormalizedYemaiBackup): YemaiBackupCounts {
   return {
     conversations: backup.conversations.length,
     messages: backup.messages.length,
     sources: backup.sources.length,
     artifacts: backup.artifacts.length,
     readingCards: backup.readingCards.length,
+    wordCards: (backup.formatVersion === 2 ? backup.wordCards : []).length,
   };
 }
 
 async function countAll(database: YemaiDatabase): Promise<YemaiBackupCounts> {
-  const [conversations, messages, sources, artifacts, readingCards] = await Promise.all([
+  const [conversations, messages, sources, artifacts, readingCards, wordCards] = await Promise.all([
     database.conversations.count(),
     database.messages.count(),
     database.conversationSources.count(),
     database.artifacts.count(),
     database.readingCards.count(),
+    database.wordCards.count(),
   ]);
-  return { conversations, messages, sources, artifacts, readingCards };
+  return { conversations, messages, sources, artifacts, readingCards, wordCards };
 }
 
 function missingRows<Row>(rows: Row[], existing: Array<Row | undefined>) {
   return rows.filter((_row, index) => existing[index] === undefined);
 }
 
+function mergeWordCard(existing: WordCard, incoming: WordCard): WordCard | undefined {
+  // Only a newer version of this exact card can contribute fields. A second
+  // capture with the same content remains a duplicate, not a replacement.
+  if (existing.id !== incoming.id || incoming.updatedAt <= existing.updatedAt) return undefined;
+  const merged = { ...existing };
+  if (incoming.meaning !== undefined && (incoming.meaningSource === 'manual'
+    || (existing.meaningSource !== 'manual' && !existing.meaning?.trim() && incoming.meaning.trim()))) {
+    merged.meaning = incoming.meaning;
+    merged.meaningSource = incoming.meaningSource;
+  }
+  if (incoming.sentenceTranslation !== undefined && (incoming.sentenceTranslationSource === 'manual'
+    || (existing.sentenceTranslationSource !== 'manual' && !existing.sentenceTranslation?.trim() && incoming.sentenceTranslation.trim()))) {
+    merged.sentenceTranslation = incoming.sentenceTranslation;
+    merged.sentenceTranslationSource = incoming.sentenceTranslationSource;
+  }
+  if (merged.meaning === existing.meaning && merged.meaningSource === existing.meaningSource
+    && merged.sentenceTranslation === existing.sentenceTranslation && merged.sentenceTranslationSource === existing.sentenceTranslationSource) return undefined;
+  merged.updatedAt = incoming.updatedAt;
+  return merged;
+}
+
 export async function importYemaiBackup(
   database: YemaiDatabase,
-  backup: YemaiBackupV1,
+  backup: YemaiBackup | NormalizedYemaiBackup,
   mode: LocalBackupImportMode,
 ): Promise<LocalBackupImportResult> {
+  const wordCards = backup.formatVersion === 2 ? backup.wordCards : [];
   return database.transaction(
     'rw',
     [
@@ -61,6 +88,7 @@ export async function importYemaiBackup(
       database.conversationSources,
       database.artifacts,
       database.readingCards,
+      database.wordCards,
     ],
     async () => {
       if (mode === 'replace') {
@@ -70,6 +98,7 @@ export async function importYemaiBackup(
           database.conversationSources.clear(),
           database.artifacts.clear(),
           database.readingCards.clear(),
+          database.wordCards.clear(),
         ]);
         await Promise.all([
           backup.conversations.length ? database.conversations.bulkPut(backup.conversations) : undefined,
@@ -77,6 +106,7 @@ export async function importYemaiBackup(
           backup.sources.length ? database.conversationSources.bulkPut(backup.sources) : undefined,
           backup.artifacts.length ? database.artifacts.bulkPut(backup.artifacts) : undefined,
           backup.readingCards.length ? database.readingCards.bulkPut(backup.readingCards) : undefined,
+          wordCards.length ? database.wordCards.bulkAdd(wordCards) : undefined,
         ]);
         const totalAfter = await countAll(database);
         const expected = importedCounts(backup);
@@ -85,7 +115,7 @@ export async function importYemaiBackup(
         }
         return {
           mode,
-          changes: { added: expected, updatedReadingCards: 0, skipped: emptyCounts() },
+          changes: { added: expected, updatedReadingCards: 0, updatedWordCards: 0, skipped: emptyCounts() },
           totalAfter,
         };
       }
@@ -107,6 +137,17 @@ export async function importYemaiBackup(
         const existing = existingCards[index];
         return existing !== undefined && card.updatedAt > existing.updatedAt;
       });
+      const wordsToAdd = [] as typeof wordCards;
+      const wordsToUpdate = [] as typeof wordCards;
+      for (const card of wordCards) {
+        const existing = await database.wordCards.where('captureKey').equals(card.captureKey).first();
+        if (existing) {
+          const merged = mergeWordCard(existing, card);
+          if (merged) wordsToUpdate.push(merged);
+        } else if (!await database.wordCards.get(card.id)) {
+          wordsToAdd.push(card);
+        }
+      }
       await Promise.all([
         conversationsToAdd.length ? database.conversations.bulkAdd(conversationsToAdd) : undefined,
         messagesToAdd.length ? database.messages.bulkAdd(messagesToAdd) : undefined,
@@ -115,12 +156,15 @@ export async function importYemaiBackup(
         cardsToAdd.length ? database.readingCards.bulkAdd(cardsToAdd) : undefined,
       ]);
       if (cardsToUpdate.length) await database.readingCards.bulkPut(cardsToUpdate);
+      if (wordsToAdd.length) await database.wordCards.bulkAdd(wordsToAdd);
+      if (wordsToUpdate.length) await database.wordCards.bulkPut(wordsToUpdate);
       const added: YemaiBackupCounts = {
         conversations: conversationsToAdd.length,
         messages: messagesToAdd.length,
         sources: sourcesToAdd.length,
         artifacts: artifactsToAdd.length,
         readingCards: cardsToAdd.length,
+        wordCards: wordsToAdd.length,
       };
       const skipped: YemaiBackupCounts = {
         conversations: backup.conversations.length - conversationsToAdd.length,
@@ -128,6 +172,7 @@ export async function importYemaiBackup(
         sources: backup.sources.length - sourcesToAdd.length,
         artifacts: backup.artifacts.length - artifactsToAdd.length,
         readingCards: backup.readingCards.length - cardsToAdd.length - cardsToUpdate.length,
+        wordCards: wordCards.length - wordsToAdd.length - wordsToUpdate.length,
       };
       const totalAfter = await countAll(database);
       const expectedAfter: YemaiBackupCounts = {
@@ -136,11 +181,12 @@ export async function importYemaiBackup(
         sources: totalBefore.sources + added.sources,
         artifacts: totalBefore.artifacts + added.artifacts,
         readingCards: totalBefore.readingCards + added.readingCards,
+        wordCards: (totalBefore.wordCards ?? 0) + (added.wordCards ?? 0),
       };
       if (JSON.stringify(totalAfter) !== JSON.stringify(expectedAfter)) {
         throw new Error('合并后的数据库回读校验失败。');
       }
-      return { mode, changes: { added, updatedReadingCards: cardsToUpdate.length, skipped }, totalAfter };
+      return { mode, changes: { added, updatedReadingCards: cardsToUpdate.length, updatedWordCards: wordsToUpdate.length, skipped }, totalAfter };
     },
   );
 }

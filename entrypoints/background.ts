@@ -14,6 +14,9 @@ import type { QuoteReference } from '../src/sidepanel/types';
 import { hasDefiniteUrlMismatch, isDefinitelyUnsupportedPage } from '../src/shared/tabTarget';
 import { WORKOS_APP_URL_PATTERN } from '../src/shared/workosCredentials';
 import { registerTaskRuntime } from '../src/background/registerTaskRuntime';
+import { WORD_COLLECTION_ENABLED_KEY } from '../src/shared/wordCards';
+import { handleWordCollectionRequest, isWordCollectionRequest } from '../src/background/wordCollections';
+import { saveWordCardCapture, updateWordCardMeaning, enrichWordCard, updateWordCardSentenceTranslation, removeWordCard, restoreWordCard } from '../src/services/wordCardStorage';
 
 const PENDING_QUOTES_KEY = 'pendingSelectionQuotes';
 const SELECTION_BUBBLE_KEY = 'selectionBubbleEnabled';
@@ -40,6 +43,7 @@ export default defineBackground(() => {
   startLifecycleDiagnostics('background');
   let panelConnections = 0;
   let bubbleEnabled = true;
+  let wordCollectionEnabled = true;
   const sidePanel = browser.sidePanel as SidePanelWithLifecycle;
   const openPanelWindows = new Set<number>();
   const openPanelTabs = new Set<number>();
@@ -61,12 +65,16 @@ export default defineBackground(() => {
       }));
     })
     .catch(() => undefined);
-  void browser.storage.local.get(SELECTION_BUBBLE_KEY).then((stored) => {
+  const selectionSettingsReady = browser.storage.local.get([SELECTION_BUBBLE_KEY, WORD_COLLECTION_ENABLED_KEY]).then((stored) => {
     if (typeof stored[SELECTION_BUBBLE_KEY] === 'boolean') bubbleEnabled = stored[SELECTION_BUBBLE_KEY];
+    if (typeof stored[WORD_COLLECTION_ENABLED_KEY] === 'boolean') wordCollectionEnabled = stored[WORD_COLLECTION_ENABLED_KEY];
   }).catch(() => undefined);
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && typeof changes[SELECTION_BUBBLE_KEY]?.newValue === 'boolean') {
       bubbleEnabled = changes[SELECTION_BUBBLE_KEY].newValue as boolean;
+    }
+    if (areaName === 'local' && WORD_COLLECTION_ENABLED_KEY in changes) {
+      wordCollectionEnabled = changes[WORD_COLLECTION_ENABLED_KEY]?.newValue !== false;
     }
   });
 
@@ -174,7 +182,7 @@ export default defineBackground(() => {
     return { page: null, error: '无法连接当前网页，请刷新页面后重试。' };
   };
 
-  registerTaskRuntime((target) => sendToTab({ type: 'page:extract' }, target));
+  const taskRuntime = registerTaskRuntime((target) => sendToTab({ type: 'page:extract' }, target));
 
   const importWorkosCredentials = async (): Promise<WorkosCredentialsResponse> => {
     const tabs = await browser.tabs.query({ url: WORKOS_APP_URL_PATTERN }).catch(() => []);
@@ -296,16 +304,32 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse) => {
     if (!message || typeof message !== 'object' || !('type' in message)) return false;
+    if (isWordCollectionRequest(message)) {
+      void handleWordCollectionRequest(message, sender, {
+        extensionId: browser.runtime.id,
+        extensionUrl: browser.runtime.getURL(''),
+        runKnowledgeWrite: (write) => taskRuntime.runKnowledgeWrite(write),
+        save: saveWordCardCapture,
+        updateMeaning: updateWordCardMeaning,
+        enrich: enrichWordCard,
+        updateSentenceTranslation: updateWordCardSentenceTranslation,
+        remove: removeWordCard,
+        restore: restoreWordCard,
+        notify: () => browser.runtime.sendMessage({ type: 'wordcards:changed' } satisfies ExtensionEvent),
+      }).then(sendResponse);
+      return true;
+    }
     if (message.type === 'panel:status') {
       const senderTabId = sender.tab?.id;
       const senderWindowId = sender.tab?.windowId;
       const trackedOpen = (senderTabId !== undefined && openPanelTabs.has(senderTabId))
         || (senderWindowId !== undefined && openPanelWindows.has(senderWindowId));
-      sendResponse({
+      void selectionSettingsReady.then(() => sendResponse({
         open: trackedOpen || (!hasNativePanelLifecycle && panelConnections > 0),
         bubbleEnabled,
-      } satisfies PanelStatusResponse);
-      return false;
+        wordCollectionEnabled,
+      } satisfies PanelStatusResponse));
+      return true;
     }
     if (message.type === 'selection:commit') {
       const openPromise = message.openPanel && sender.tab?.id !== undefined

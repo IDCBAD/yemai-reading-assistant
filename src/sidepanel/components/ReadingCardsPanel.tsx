@@ -17,9 +17,13 @@ import { finishUiPerformanceMeasure } from '../performanceTelemetry';
 import { KoboyoIcon } from './KoboyoIcon';
 import { PageFavicon } from './PageFavicon';
 import { ReadingCardRiver, type ReadingCardOpenModality } from './ReadingCardRiver';
+import { CollectionTabs } from './CollectionTabs';
+import { CollectionHeaderActions, useCollectionEscape } from './CollectionSurface';
+import { CollectionQuickMenu } from './CollectionQuickMenu';
 
 interface ReadingCardsPanelProps {
   open: boolean;
+  embedded?: boolean;
   cards: ReadingCardRow[];
   conversations: Conversation[];
   selectedCardId?: string;
@@ -27,6 +31,7 @@ interface ReadingCardsPanelProps {
   issue?: string;
   removalUndo: ReadingCardRemovalUndo | null;
   onClose: () => void;
+  onShowWords?: () => void;
   onReaderClose?: () => void;
   onRemove: (card: ReadingCardRow) => void;
   onUndoRemove: () => void;
@@ -65,6 +70,7 @@ function readingCardKindLabel(card: ReadingCardRow) {
 
 export function ReadingCardsPanel({
   open,
+  embedded = false,
   cards,
   conversations,
   selectedCardId,
@@ -72,6 +78,7 @@ export function ReadingCardsPanel({
   issue,
   removalUndo,
   onClose,
+  onShowWords,
   onReaderClose,
   onRemove,
   onUndoRemove,
@@ -84,6 +91,10 @@ export function ReadingCardsPanel({
 }: ReadingCardsPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<'river' | 'list'>('river');
+  const [riverAtLatest, setRiverAtLatest] = useState(true);
+  const [listAtLatest, setListAtLatest] = useState(true);
+  const riverLatestRef = useRef<(() => void) | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>(restoreSelectedCards);
   const [saveReport, setSaveReport] = useState<QaSaveResult[] | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
@@ -100,11 +111,23 @@ export function ReadingCardsPanel({
   const openRef = useRef(open);
   const returnFocusIdRef = useRef<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const appliedSelectionRef = useRef<string | undefined>(undefined);
+  const previousReaderIdRef = useRef<string | null>(null);
   const selected = useMemo(() => cards.find((card) => card.id === selectedId), [cards, selectedId]);
   const batchCards = useMemo(() => cards.filter((card) => selectedIds.includes(card.id)), [cards, selectedIds]);
   const sendCharacters = useMemo(() => collectionContextText(collectionMaterials(batchCards, conversations)).length, [batchCards, conversations]);
   selectedIdRef.current = selectedId;
   openRef.current = open;
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (view !== 'list' || !list || !open) return;
+    const update = () => setListAtLatest(list.scrollTop <= 4);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [view, open, cards]);
 
   useLayoutEffect(() => {
     if (open) finishUiPerformanceMeasure('reading-cards-shell');
@@ -130,6 +153,7 @@ export function ReadingCardsPanel({
   };
 
   useEffect(() => {
+    if (embedded) return;
     let frame: number | undefined;
     let timer: number | undefined;
     if (open) {
@@ -143,19 +167,22 @@ export function ReadingCardsPanel({
       if (frame !== undefined) window.cancelAnimationFrame(frame);
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [open]);
+  }, [embedded, open]);
 
   useEffect(() => {
+    if (selectedCardId === undefined) appliedSelectionRef.current = undefined;
     if (!open) return;
+    if (embedded && (selectedCardId === undefined || selectedCardId === appliedSelectionRef.current)) return;
+    appliedSelectionRef.current = selectedCardId;
     const nextSelectedId = selectedCardId ?? null;
     setView('river');
     setReaderModality('programmatic');
     setSelectedId(nextSelectedId);
     returnFocusIdRef.current = nextSelectedId;
-  }, [open, selectedCardId]);
+  }, [embedded, open, selectedCardId]);
 
   useEffect(() => {
-    if (open) return;
+    if (open || embedded) return;
     if (preserveSelectionOnCloseRef.current) {
       preserveSelectionOnCloseRef.current = false;
       return;
@@ -163,7 +190,7 @@ export function ReadingCardsPanel({
     setSelectedIds([]);
     setSaveReport(null);
     setBatchIssue(null);
-  }, [open]);
+  }, [embedded, open]);
 
   useEffect(() => {
     if (selectedId && !cards.some((card) => card.id === selectedId)) {
@@ -189,7 +216,7 @@ export function ReadingCardsPanel({
   }, [selectedIds]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -206,10 +233,12 @@ export function ReadingCardsPanel({
       window.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus();
     };
-  }, [onClose, onReaderClose, open, paused]);
+  }, [embedded, onClose, onReaderClose, open, paused]);
 
   useEffect(() => {
-    if (!open) return;
+    const readerChanged = previousReaderIdRef.current !== (selected?.id ?? null);
+    previousReaderIdRef.current = selected?.id ?? null;
+    if (!open || (embedded && !readerChanged)) return;
     const frame = window.requestAnimationFrame(() => {
       if (selected) {
         panelRef.current?.querySelector<HTMLElement>('.reading-card-reader-back')?.focus();
@@ -227,11 +256,11 @@ export function ReadingCardsPanel({
         return;
       }
       panelRef.current
-        ?.querySelector<HTMLElement>('.reading-card-river__open, .reading-card-list-open, .reading-cards-close')
+        ?.querySelector<HTMLElement>('.reading-card-river__open, .reading-card-list-open, .collection-close')
         ?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [open, selected]);
+  }, [embedded, open, selected]);
 
   const openCard = (cardId: string, modality: ReadingCardOpenModality) => {
     returnFocusIdRef.current = cardId;
@@ -243,6 +272,12 @@ export function ReadingCardsPanel({
     setSelectedId(null);
     onReaderClose?.();
   };
+
+  useCollectionEscape(embedded && open && !paused, () => {
+    if (!selectedIdRef.current) return false;
+    closeReader();
+    return true;
+  });
 
   const switchView = (nextView: 'river' | 'list') => {
     if (selectedId) closeReader();
@@ -287,32 +322,59 @@ export function ReadingCardsPanel({
     }
   };
 
-  if (!rendered) return null;
+  if (!rendered && !embedded) return null;
   const exportAllPresentation = exportPresentation('all', 'export-all-cards');
   const selectedExportPresentation = selected
     ? exportPresentation(selected.id, 'export-card-markdown')
     : null;
 
+  const viewSwitch = <div className="reading-cards-view-switch" role="group" aria-label="收藏视图">
+    <button type="button" className={view === 'river' ? 'is-active' : ''} aria-pressed={view === 'river'}
+      aria-label="瀑布流视图" title="瀑布流视图" onClick={() => switchView('river')}>
+      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M5 4V2.5h10V4M3.5 7V5.5h13V7"/><rect x="2.5" y="8.5" width="15" height="9" rx="2"/></svg>
+    </button>
+    <button type="button" className={view === 'list' ? 'is-active' : ''} aria-pressed={view === 'list'}
+      aria-label="列表视图" title="列表视图" onClick={() => switchView('list')}>
+      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M7 4.5h10M7 10h10M7 15.5h10M3 4.5h.5M3 10h.5M3 15.5h.5"/></svg>
+    </button>
+  </div>;
+  const quickMenu = open && !paused && !selected && cards.length > 0 && <CollectionQuickMenu key={view}
+    canReturnLatest={view === 'river' ? !riverAtLatest : !listAtLatest}
+    onLatest={() => {
+      if (view === 'river') riverLatestRef.current?.();
+      else listRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+    }}
+    onExport={() => runExport('all', 'export-all-cards', () => onExportAll(cards))}
+    exportStatus={exportFeedback?.key === 'all' ? exportAllPresentation.label : undefined}
+    exportLabel={exportAllPresentation.label} exportIcon={exportAllPresentation.icon}
+    exporting={exportAllPresentation.spinning} exportDisabled={exportAllPresentation.spinning} />;
+
   return (
     <div
-      className={`reading-cards-layer${visible ? ' is-open' : ''}`}
+      className={embedded ? 'reading-cards-embedded' : `reading-cards-layer${visible ? ' is-open' : ''}`}
       aria-hidden={!open || paused}
       inert={paused || undefined}
     >
-      <button
+      {!embedded && <button
         className="reading-cards-scrim"
         type="button"
         tabIndex={-1}
         onClick={() => open && onClose()}
         aria-label="关闭收藏"
-      />
+      />}
       <aside
-        className="reading-cards-panel"
-        role="dialog"
-        aria-modal="true"
+        className={embedded ? "reading-cards-panel reading-cards-panel--embedded" : "reading-cards-panel"}
+        role={embedded ? undefined : "dialog"}
+        aria-modal={embedded ? undefined : true}
         aria-label="收藏卡片"
         ref={panelRef}
         onKeyDown={(event) => {
+          if (embedded) {
+            if (event.key === 'Escape' && !paused && selectedIdRef.current) {
+              event.preventDefault(); event.stopPropagation(); closeReader();
+            }
+            return;
+          }
           if (event.key !== 'Tab') return;
           const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
             'button:not(:disabled), input:not(:disabled), a[href]',
@@ -329,42 +391,11 @@ export function ReadingCardsPanel({
           }
         }}
       >
-        <header className="reading-cards-header">
-          <div className="reading-cards-header-title">
-            <h2>收藏 <span className="reading-cards-count">{cards.length}</span></h2>
-          </div>
-          <div className="reading-cards-view-switch" role="group" aria-label="收藏视图">
-            <button type="button" className={view === 'river' ? 'is-active' : ''} aria-pressed={view === 'river'} onClick={() => switchView('river')}>瀑布流</button>
-            <button type="button" className={view === 'list' ? 'is-active' : ''} aria-pressed={view === 'list'} onClick={() => switchView('list')}>列表{selectedIds.length > 0 ? ` · ${selectedIds.length}` : ''}</button>
-          </div>
-          <div className="reading-cards-header-actions">
-            {cards.length > 0 && (
-              <button
-                className="reading-cards-export-all pressable"
-                type="button"
-                aria-label={exportAllPresentation.label}
-                disabled={exportAllPresentation.spinning}
-                onClick={() => runExport('all', 'export-all-cards', () => onExportAll(cards))}
-                aria-live="polite"
-              >
-                <KoboyoIcon
-                  name={exportAllPresentation.icon}
-                  size={14}
-                  className={exportAllPresentation.spinning ? 'is-spinning' : ''}
-                />
-                <span>{exportAllPresentation.label}</span>
-              </button>
-            )}
-            <button
-              className="reading-cards-close pressable"
-              type="button"
-              onClick={onClose}
-              aria-label="关闭收藏"
-            >
-              <KoboyoIcon name="cross" size={13} />
-            </button>
-          </div>
-        </header>
+        <div className="reading-cards-navigation">
+          {embedded
+            ? open && !paused && <CollectionHeaderActions>{viewSwitch}</CollectionHeaderActions>
+            : <CollectionTabs active="answers" count={cards.length} onChange={onShowWords} onClose={onClose}>{viewSwitch}</CollectionTabs>}
+        </div>
 
         <div className="reading-cards-notice">
           {issue && <p className="reading-cards-issue" role="status">{issue}</p>}
@@ -380,13 +411,17 @@ export function ReadingCardsPanel({
             <ReadingCardRiver
               cards={cards}
               selectedCardId={selectedId}
-              paused={paused}
+              paused={paused || !open}
               onOpenCard={openCard}
               onRemoveCard={onRemove}
+              latestRef={riverLatestRef}
+              onLatestChange={setRiverAtLatest}
             />
           ) : (
             <div className="reading-cards-list-layout">
-              <div className="reading-cards-list" aria-label="收藏列表">
+              <div className="reading-cards-list-viewport">
+              <div className="reading-cards-list" aria-label="收藏列表" ref={listRef}
+                onScroll={(event) => setListAtLatest(event.currentTarget.scrollTop <= 4)}>
                 {cards.map((card) => (
                   <div className={`reading-card-list-row${selectedIds.includes(card.id) ? ' is-selected' : ''}`} key={card.id}>
                     <input type="checkbox" aria-label={`选择 ${card.title}`} checked={selectedIds.includes(card.id)} onChange={() => toggleSelection(card.id)} />
@@ -397,6 +432,8 @@ export function ReadingCardsPanel({
                     </button>
                   </div>
                 ))}
+              </div>
+              {quickMenu}
               </div>
               <div className="reading-cards-batch-actions">
                 {saveReport && <div className="reading-cards-save-report" role="status">
@@ -414,6 +451,8 @@ export function ReadingCardsPanel({
               </div>
             </div>
           )}
+
+          {view === 'river' && quickMenu}
 
           {selected && (
             <>

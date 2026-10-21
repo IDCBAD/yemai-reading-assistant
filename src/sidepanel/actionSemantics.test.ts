@@ -114,7 +114,7 @@ describe('destructive action presentation', () => {
       placement: 'inline',
       icon: 'history-clear',
       affected: '13 个会话、182 条消息和临时资源',
-      preserved: '2 张收藏卡片和连接设置',
+      preserved: '2 张收藏卡片、0 张单词卡片和连接设置',
     });
     expect(replaceKnowledgeImpact(current, incoming)).toMatchObject({
       placement: 'inline',

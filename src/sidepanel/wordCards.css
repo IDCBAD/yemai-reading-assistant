@@ -1,0 +1,106 @@
+.wordbook-panel { position:absolute; inset:56px 0 0; z-index:30; display:flex; flex-direction:column; min-height:0; color:#242b37; background:#f6f8fb; }
+.wordbook-panel.is-embedded { position:relative; inset:auto; z-index:auto; width:100%; height:100%; }
+.wordbook-content { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:18px 22px 26px; scrollbar-width:thin; scrollbar-color:#d1d7df transparent; }
+.wordbook-content > * { max-width:460px; margin-left:auto; margin-right:auto; }
+.wordbook-search { display:flex; align-items:center; gap:8px; padding:10px 12px; border:1px solid #dfe4eb; border-radius:9px; color:#788497; background:#fff; }
+.wordbook-search:focus-within { border-color:#8ca4ee; box-shadow:0 0 0 2px #315eea0c; }
+.wordbook-search input { width:100%; min-width:0; border:0; background:transparent; color:#323c4d; font:inherit; font-size:12px; outline:0; }
+.wordbook-search input::placeholder { color:#697588; }
+.wordbook-album { position:relative; isolation:isolate; perspective:900px; margin-top:10px; }
+.wordbook-back { position:absolute; inset:0 7px; z-index:-1; border:1px solid #dfe3e9; border-radius:18px; pointer-events:none; background:#fafbfc; }
+.wordbook-back.one { transform:translateY(-8px) rotate(-2deg); background:#e9edf3; }
+.wordbook-back.two { transform:translateY(-3px) rotate(1.7deg); }
+.wordbook-panel .word-card { padding:30px 25px 16px; border:1px solid #e0e5ed; border-radius:18px; background:#fff; box-shadow:0 2px 5px #14233d03,0 22px 35px -27px #1a2d4b40; }
+.wordbook-panel .word-card.is-arriving { animation:word-card-arrive 220ms cubic-bezier(.23,1,.32,1) both; }
+.wordbook-panel .word-card h3 { margin:0 0 10px; color:#242b37; font-family:Garamond,Georgia,serif; font-size:52px; font-weight:400; letter-spacing:-1.5px; line-height:1.12; overflow-wrap:anywhere; }
+.wordbook-panel .word-card h3.is-long { font-size:clamp(29px,8vw,43px); letter-spacing:-1.4px; }
+.word-card-pronunciation { display:flex; align-items:center; gap:9px; min-height:34px; color:#738096; }
+.word-card-phonetic { font:14px/1.5 'Segoe UI',system-ui,sans-serif; overflow-wrap:anywhere; }
+.word-card-phonetic abbr { margin-right:7px; color:#8a94a3; font:10px/1.5 system-ui,sans-serif; text-decoration:none; }
+.word-card-audio { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-width:32px; min-height:32px; padding:6px; border:0; border-radius:50%; color:#657caa; background:transparent; font-size:12px; cursor:pointer; }
+.word-card-audio:hover { background:#e4ebfb; }
+.word-card-audio.is-playing { color:#315eea; background:#edf2ff; }
+.word-card-wave { display:inline-flex; align-items:center; gap:2px; height:12px; margin-left:3px; }
+.word-card-wave i { width:2px; height:7px; border-radius:2px; background:currentColor; animation:word-voice-wave 500ms ease-in-out infinite alternate; }
+.word-card-wave i:nth-child(2) { height:11px; animation-delay:-170ms; }
+.word-card-wave i:nth-child(3) { height:5px; animation-delay:-300ms; }
+.word-card-meaning { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:23px; }
+.word-card-meaning p { margin:0; font-size:16px; font-weight:500; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.word-card-meaning.is-empty { justify-content:flex-start; margin-top:16px; }
+.word-card-translation-badge { display:inline-block; margin-left:7px; padding:0 3px; border:1px solid #dce3ee; border-radius:3px; color:#7b89a1; font:10px/1.4 system-ui,sans-serif; vertical-align:middle; }
+.word-card-edit { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-width:30px; min-height:32px; flex-shrink:0; padding:6px; border:0; border-radius:6px; color:#8490a2; background:transparent; font-size:12px; cursor:pointer; }
+.word-card-edit:hover { background:#eaf0fb; color:#315eea; }
+.word-card-context { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:26px 0 8px; padding-top:17px; border-top:1px solid #edf0f5; color:#8490a0; font-size:11px; }
+.word-card-context button { display:grid; place-items:center; min-width:32px; min-height:32px; padding:5px; border:0; border-radius:50%; color:#7588a9; background:transparent; cursor:pointer; }
+.word-card-context button:hover,.word-card-context button[aria-pressed='true'] { color:#315eea; background:#f0f4ff; }
+.word-card-context-actions { display:flex; align-items:center; gap:2px; }
+.word-card-sentence-translation { margin:13px 0 0; color:#768295; font-size:13px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
+.word-card-translation-action { min-height:32px; margin-top:12px; padding:4px 0; border:0; color:#5475c4; background:transparent; font-size:12px; cursor:pointer; }
+.word-card-translation-unavailable { display:block; margin-top:12px; color:#8792a3; font-size:11px; }
+.word-card-loading { display:block; width:65%; height:15px; border-radius:4px; background:#edf0f5; }
+.word-card-loading.is-sentence { width:90%; margin-top:17px; }
+.word-card-sentence { margin:0; padding:0; color:#4d596b; font-family:Georgia,'Times New Roman',serif; font-size:17px; line-height:1.75; overflow-wrap:anywhere; }
+.word-card-sentence mark { color:#315eea; background:linear-gradient(transparent 78%,#e4eaff 78%); }
+.word-card-source { display:flex; align-items:center; gap:5px; min-width:0; color:#8792a2; font-size:11px; text-decoration:none; }
+.word-card-source > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+a.word-card-source:hover { color:#315eea; }
+.word-card-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:25px; padding-top:11px; border-top:1px solid #edf0f5; }
+.word-card-footer > button { display:grid; place-items:center; min-width:32px; min-height:32px; padding:6px; border:0; border-radius:6px; color:#929bab; background:transparent; cursor:pointer; }
+.word-card-footer button:hover { color:#a34e4b; }
+.wordbook-navigation { flex-shrink:0; padding:13px 18px 16px; border-top:1px solid #e7ecf3; background:#f6f8fb; }
+.wordbook-pagination { display:flex; align-items:center; justify-content:center; gap:18px; margin:0; color:#778396; }
+.wordbook-pagination button { display:flex; align-items:center; justify-content:center; box-sizing:border-box; cursor:pointer; }
+.wordbook-page-arrow { flex-shrink:0; width:36px; height:36px; padding:0; border:1px solid #dae1eb; border-radius:50%; color:#637792; background:#fbfcfe; }
+.wordbook-page-arrow svg { display:block; flex-shrink:0; }
+.wordbook-pagination .wordbook-directory-trigger { gap:10px; min-width:112px; height:38px; padding:0 13px; border:1px solid #d7e0ee; border-radius:9px; color:#7286a6; background:#fff; }
+.wordbook-page-number { display:inline-flex; align-items:center; gap:7px; font:11px/1 Consolas,monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wordbook-page-number strong { color:#4d5e78; font-weight:500; }
+.wordbook-directory-chevron { display:block; flex:0 0 14px; align-self:center; width:14px; height:14px; }
+.wordbook-directory-trigger[aria-expanded=true] .wordbook-directory-chevron { transform:rotate(180deg); }
+.wordbook-pagination button:hover:not(:disabled) { color:#315eea; border-color:#9dafdd; background:#fff; }
+.word-directory-layer { position:absolute; inset:0; z-index:4; }
+.word-directory-scrim { position:absolute; inset:0; width:100%; height:100%; border:0; background:rgba(30,45,67,.16); cursor:default; animation:word-directory-dim 140ms ease-out; }
+.word-directory-sheet { position:absolute; bottom:0; left:0; right:0; display:flex; flex-direction:column; height:min(70%,520px); min-height:min(280px,100%); border-top:1px solid #dce3ed; border-radius:18px 18px 0 0; background:#fbfcfe; box-shadow:0 -16px 45px -22px #263c6166; animation:word-directory-arrive 180ms cubic-bezier(.23,1,.32,1); }
+.word-directory-sheet > header { flex-shrink:0; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:15px 20px 11px; }
+.word-directory-sheet h3 { margin:0; color:#354256; font-size:14px; font-weight:600; line-height:1.5; }
+.word-directory-sheet h3 span { margin-left:7px; color:#8c98aa; font-size:11px; font-weight:400; }
+.word-directory-sheet > header button { display:flex; align-items:center; justify-content:center; flex-shrink:0; width:32px; height:32px; padding:0; border:0; border-radius:6px; color:#8491a4; background:transparent; cursor:pointer; }
+.word-directory-sheet > header button:hover { background:#edf1f8; color:#45628e; }
+.word-directory-search { flex-shrink:0; margin:0 20px 10px; }
+.word-directory-list { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; margin:0; padding:2px 10px 12px; list-style:none; scrollbar-width:thin; scrollbar-color:#d1d7df transparent; }
+.word-directory-list li { margin:0; padding:0; }
+.word-directory-list button { display:flex; align-items:center; gap:12px; width:100%; min-height:61px; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:#8090a5; text-align:left; cursor:pointer; }
+.word-directory-list button:hover { background:#f0f3fa; }
+.word-directory-list button[aria-current=true] { background:#edf2fd; }
+.word-directory-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:4px; }
+.word-directory-copy strong { overflow:hidden; color:#3d4e65; font-size:14px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+.word-directory-copy > span { overflow:hidden; font-size:11px; line-height:1.5; text-overflow:ellipsis; white-space:nowrap; }
+.word-directory-current { display:block; flex-shrink:0; color:#5c7fc9; }
+.word-directory-empty { flex:1; margin:0; padding:42px 16px; color:#8c98aa; text-align:center; font-size:12px; }
+.word-directory-layer.without-motion * { animation:none!important; }
+@keyframes word-directory-arrive { from { opacity:.6; transform:translateY(18px); } to { opacity:1; transform:none; } }
+@keyframes word-directory-dim { from { opacity:0; } to { opacity:1; } }
+.word-card-form { margin-top:18px; }
+.word-card-form label { display:block; margin-bottom:7px; font-size:12px; }
+.word-card-form textarea { display:block; width:100%; min-height:90px; padding:9px; border:1px solid #cdd6e3; border-radius:7px; resize:vertical; color:#323d50; background:#fbfcfe; font:inherit; font-size:13px; }
+.word-card-form > div { display:flex; justify-content:flex-end; gap:9px; margin-top:9px; }
+.word-card-form button { min-height:32px; padding:5px 10px; border:1px solid #d7deea; border-radius:6px; color:#4e607e; background:#f6f8fc; font-size:11px; cursor:pointer; }
+.word-card-form button[type='submit'] { color:#fff; border-color:#315eea; background:#315eea; }
+.wordbook-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:320px; padding:40px 8px; text-align:center; color:#69768b; font-size:13px; }
+.wordbook-empty > .koboyo-icon { margin-bottom:16px; color:#829ac4; }
+.wordbook-empty h3 { margin:15px 0 9px; font-size:17px; font-weight:500; }
+.wordbook-empty p { max-width:280px; margin:0; font-size:12px; line-height:1.9; }
+.word-card-no-context { margin:22px 0 0; color:#6c788a; font-size:12px; line-height:1.8; }
+.wordbook-issue { padding:9px 11px; border-radius:7px; color:#894441; background:#fff0ee; font-size:11px; line-height:1.7; overflow-wrap:anywhere; }
+.wordbook-issue button { margin-left:8px; border:0; background:none; color:inherit; text-decoration:underline; cursor:pointer; }
+.wordbook-undo { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-shrink:0; margin:0 17px 15px; padding:10px 13px; border:1px solid #dce4f1; border-radius:9px; color:#536580; background:#edf2fb; font-size:12px; }
+.wordbook-undo button { padding:4px 7px; border:0; color:#315eea; background:none; font-size:12px; cursor:pointer; }
+.wordbook-panel button { touch-action:manipulation; transition:background-color 140ms ease,color 140ms ease,transform 140ms ease; }
+.wordbook-panel button:active:not(:disabled) { transform:scale(.97); }
+.wordbook-panel button:disabled { opacity:.5; cursor:default; }
+.wordbook-panel button:focus-visible,.wordbook-panel a:focus-visible,.wordbook-panel textarea:focus-visible { outline:2px solid #315eea; outline-offset:3px; }
+.wordbook-panel .wordbook-search input:focus-visible { outline:0; }
+@keyframes word-card-arrive { from { opacity:.2; transform:translateX(12px) rotateY(-4deg); } to { opacity:1; transform:translateX(0) rotateY(0); } }
+@keyframes word-voice-wave { from { transform:scaleY(.5); } to { transform:scaleY(1.15); } }
+@media (max-width:380px) { .wordbook-content { padding:16px 16px 24px; } .wordbook-panel .word-card { padding:25px 20px 14px; } .wordbook-panel .word-card h3 { font-size:46px; } .wordbook-panel .word-card h3.is-long { font-size:35px; } .word-card-sentence { font-size:16px; } }
+@media (prefers-reduced-motion:reduce) { .wordbook-panel *, .wordbook-panel *::before, .wordbook-panel *::after { animation:none!important; transition:none!important; } }

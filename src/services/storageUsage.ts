@@ -8,6 +8,7 @@ export interface BrowserStorageEstimateLike {
 
 export interface LocalStorageUsage {
   historyBytes: number;
+  wordBytes?: number;
   knowledgeBytes: number;
   knowledgeUsageSource: KnowledgeUsageSource;
   settingsBytes: number;

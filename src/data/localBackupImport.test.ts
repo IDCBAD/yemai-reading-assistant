@@ -7,7 +7,7 @@ import {
   parseYemaiBackup,
   serializeYemaiBackup,
   YemaiBackupValidationError,
-  type YemaiBackupV1,
+  type YemaiBackupV2,
 } from './localBackup';
 import { importYemaiBackup } from './localBackupImport';
 
@@ -19,7 +19,7 @@ function createDatabase() {
   return new YemaiDatabase(name);
 }
 
-async function createBackup(): Promise<YemaiBackupV1> {
+async function createBackup(): Promise<YemaiBackupV2> {
   const database = createDatabase();
   await database.conversations.put({
     id: 'conversation-1',
@@ -171,9 +171,9 @@ describe('local backup import', () => {
     const first = await importYemaiBackup(destination, backup, 'merge');
     const second = await importYemaiBackup(destination, backup, 'merge');
 
-    expect(first.changes.added).toMatchObject({ conversations: 1, messages: 1, readingCards: 0 });
+    expect(first.changes.added).toMatchObject({ conversations: 1, messages: 1, readingCards: 0, wordCards: 0 });
     expect(first.changes.updatedReadingCards).toBe(1);
-    expect(second.changes.added).toEqual({ conversations: 0, messages: 0, sources: 0, artifacts: 0, readingCards: 0 });
+    expect(second.changes.added).toEqual({ conversations: 0, messages: 0, sources: 0, artifacts: 0, readingCards: 0, wordCards: 0 });
     expect(second.changes.updatedReadingCards).toBe(0);
     expect(await destination.conversations.count()).toBe(1);
     expect(await destination.messages.count()).toBe(1);
@@ -217,9 +217,9 @@ describe('local backup import', () => {
 
   it('keeps a reading card readable even when its original conversation is absent', async () => {
     const backup = await createBackup();
-    const cardOnly: YemaiBackupV1 = {
+    const cardOnly: YemaiBackupV2 = {
       ...backup,
-      counts: { conversations: 0, messages: 0, sources: 0, artifacts: 0, readingCards: 1 },
+      counts: { conversations: 0, messages: 0, sources: 0, artifacts: 0, readingCards: 1, wordCards: 0 },
       conversations: [],
       messages: [],
       sources: [],

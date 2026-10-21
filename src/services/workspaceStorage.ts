@@ -1,3 +1,4 @@
+import { estimateWordCardBytes } from './wordCardStorage';
 import { browser } from 'wxt/browser';
 import type { WorkspaceState } from '../sidepanel/types';
 import { yemaiDatabase, type WorkspaceUiState } from '../data/database';
@@ -148,15 +149,16 @@ export async function loadLocalStorageUsage(): Promise<LocalStorageUsage> {
   const storageEstimate = typeof navigator !== 'undefined'
     ? navigator.storage?.estimate?.().catch(() => undefined)
     : Promise.resolve(undefined);
-  const [workspaceBytes, readingCardBytes, localBytes, legacyBackupBytes, estimate] = await Promise.all([
+  const [workspaceBytes, readingCardBytes, wordBytes, localBytes, legacyBackupBytes, estimate] = await Promise.all([
     repository.estimateBytes(),
     estimateReadingCardBytes(),
+    estimateWordCardBytes(),
     browser.storage.local.getBytesInUse(null),
     browser.storage.local.getBytesInUse(WORKSPACE_STORAGE_KEY),
     storageEstimate,
   ]);
   const settingsBytes = Math.max(0, localBytes - legacyBackupBytes);
-  const historyBytes = workspaceBytes + readingCardBytes;
+  const historyBytes = workspaceBytes + readingCardBytes + wordBytes;
   const knowledgeUsage = resolveKnowledgeStorageUsage(
     historyBytes,
     estimate
@@ -170,6 +172,7 @@ export async function loadLocalStorageUsage(): Promise<LocalStorageUsage> {
   const totalBytes = knowledgeUsage.knowledgeBytes + localBytes;
   return {
     historyBytes,
+    wordBytes,
     knowledgeBytes: knowledgeUsage.knowledgeBytes,
     knowledgeUsageSource: knowledgeUsage.knowledgeUsageSource,
     settingsBytes,

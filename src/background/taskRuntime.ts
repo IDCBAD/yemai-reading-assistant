@@ -214,6 +214,15 @@ export class BackgroundTaskRuntime {
         errorMessage: '上一项 WorkOS 任务状态未确认，此问题未发送。', runFinishedAt: Date.now() } : m) }));
     throw new Error(UNCONFIRMED_WORKOS_SUBMIT_MESSAGE);
   }
+  /** Share ordering with backup maintenance and workspace commands. */
+  runKnowledgeWrite<T>(write: () => Promise<T>): Promise<T> {
+    const operation = this.operations.then(async () => {
+      if (this.maintenanceOwner) throw new Error('正在导入本地备份，暂时不能修改单词收藏。');
+      return write();
+    });
+    this.operations = operation.catch(() => undefined);
+    return operation;
+  }
   handle(request: ExecutorRequest): Promise<ExecutorResponse> {
     const operation = this.operations.then(async (): Promise<ExecutorResponse> => {
       await this.initialize();

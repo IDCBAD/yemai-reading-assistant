@@ -9,6 +9,7 @@ interface TopBarProps {
   onOpenSettings: () => void;
   onPrepareSettings: () => void;
   readingCardsOpen?: boolean;
+  wordCardsOpen?: boolean;
   searchPreparing?: boolean;
   readingCardsPreparing?: boolean;
   readingCardFeedbackCount?: number;
@@ -22,6 +23,7 @@ export function TopBar({
   onOpenSettings,
   onPrepareSettings,
   readingCardsOpen = false,
+  wordCardsOpen = false,
   searchPreparing = false,
   readingCardsPreparing = false,
   readingCardFeedbackCount = 0,
@@ -49,13 +51,13 @@ export function TopBar({
           <KoboyoIcon name="search" size={18} />
         </button>
         <button
-          className={`icon-button topbar-reading-cards pressable${readingCardsOpen || readingCardsPreparing ? ' is-active' : ''}${readingCardsPreparing ? ' is-preparing' : ''}`}
+          className={`icon-button topbar-reading-cards pressable${readingCardsOpen || wordCardsOpen || readingCardsPreparing ? ' is-active' : ''}${readingCardsPreparing ? ' is-preparing' : ''}`}
           type="button"
           onClick={onOpenReadingCards}
           onPointerEnter={onPrepareReadingCards}
           onFocus={onPrepareReadingCards}
-          aria-label={readingCardsPreparing ? '正在准备收藏' : readingCardsOpen ? '关闭收藏' : '打开收藏'}
-          aria-pressed={readingCardsOpen || readingCardsPreparing}
+          aria-label={readingCardsPreparing ? '正在准备收藏' : readingCardsOpen || wordCardsOpen ? '关闭收藏' : '打开收藏'}
+          aria-pressed={readingCardsOpen || wordCardsOpen || readingCardsPreparing}
           aria-busy={readingCardsPreparing || undefined}
           title="收藏"
           data-reading-cards-trigger="true"

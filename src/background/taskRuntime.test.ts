@@ -61,6 +61,25 @@ beforeEach(() => { vi.useFakeTimers(); decisionTransport.replyInterrupt.mockRese
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 describe('BackgroundTaskRuntime', () => {
+  it('serializes knowledge writes with maintenance and recovers the queue after a rejected write', async () => {
+    const f = fixture(async () => undefined);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const first = f.runtime.runKnowledgeWrite(async () => { entered.resolve(); await release.promise; return 'saved'; });
+    await entered.promise;
+    let maintenanceStarted = false;
+    const maintenance = f.command({ kind: 'maintenance-start' }).then((result) => { maintenanceStarted = true; return result; });
+    await Promise.resolve();
+    expect(maintenanceStarted).toBe(false);
+    release.resolve();
+    expect(await first).toBe('saved');
+    expect(await maintenance).toMatchObject({ ok: true });
+    const write = vi.fn(async () => 'not saved');
+    await expect(f.runtime.runKnowledgeWrite(write)).rejects.toThrow('导入本地备份');
+    expect(write).not.toHaveBeenCalled();
+    expect(await f.command({ kind: 'maintenance-end' })).toMatchObject({ ok: true });
+    expect(await f.runtime.runKnowledgeWrite(async () => 'after import')).toBe('after import');
+  });
   it.each(['connection', 'save'] as const)('rejects a question when the previous stream disconnects during awaited %s', async (phase) => {
     const completion = deferred<void>();
     const f = fixture(async () => completion.promise, workspace(2));

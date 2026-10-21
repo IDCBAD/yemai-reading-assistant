@@ -1,0 +1,14 @@
+.collection-surface { position:absolute; inset:56px 0 0; z-index:30; pointer-events:none; }
+.collection-surface[hidden] { display:none; }
+.collection-surface.is-open { pointer-events:auto; }
+.collection-surface-scrim { position:absolute; inset:0; width:100%; height:100%; border:0; background:rgba(26,31,39,.12); opacity:0; transition:opacity 180ms ease-out; }
+.collection-surface-panel { position:absolute; inset:0; display:flex; flex-direction:column; overflow:hidden; color:var(--ink); background:#f7f9fc; box-shadow:0 0 0 1px rgba(37,50,69,.09),-18px 0 48px rgba(36,53,78,.14); opacity:0; transform:translateX(12px); transition:opacity 180ms cubic-bezier(.23,1,.32,1),transform 180ms cubic-bezier(.23,1,.32,1); }
+.collection-surface.is-open .collection-surface-panel { opacity:1; transform:none; }
+.collection-surface.is-open .collection-surface-scrim { opacity:1; }
+.collection-surface-content,.collection-surface-page { position:relative; min-width:0; min-height:0; flex:1; overflow:hidden; }
+.collection-surface-page { height:100%; }
+.collection-surface-page[hidden] { display:none; }
+.collection-surface-loading { display:grid; place-items:center; height:100%; color:#718094; font-size:13px; }
+.collection-content-actions { display:contents; }
+.collection-surface.is-keyboard-open .collection-surface-panel,.collection-surface.is-keyboard-open .collection-surface-scrim { transition:none; }
+@media(prefers-reduced-motion:reduce) { .collection-surface-panel,.collection-surface-scrim { transition:none; } }
