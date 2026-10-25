@@ -6,9 +6,11 @@ const repository = new WordCardRepository(yemaiDatabase);
 
 export const loadWordCards = () => repository.loadAll();
 export const saveWordCardCapture = (capture: WordCardCapture) => repository.saveCapture(capture);
+export const saveExpressionCardCapture = (capture: WordCardCapture) => repository.saveExpressionCapture(capture);
+export const getCollectedExpressionNames = (url: string, names: string[]) => repository.getCollectedExpressions(url, names);
 export const updateWordCardMeaning = (id: string, meaning: string, source: WordMeaningSource, expectedUpdatedAt?: number, expectedField?: WordMeaningFieldSnapshot) => repository.updateMeaning(id, meaning, source, expectedUpdatedAt, expectedField);
 export const enrichWordCard = (id: string, captureKey: string, patch: WordCardEnrichment) => repository.enrich(id, captureKey, patch);
-export const updateWordCardSentenceTranslation = (id: string, translation: string, expectedUpdatedAt?: number, expectedField?: WordSentenceTranslationFieldSnapshot) => repository.updateSentenceTranslation(id, translation, expectedUpdatedAt, expectedField);
+export const updateWordCardSentenceTranslation = (id: string, translation: string, expectedUpdatedAt?: number, expectedField?: WordSentenceTranslationFieldSnapshot, source?: 'manual' | 'browser' | 'baidu') => repository.updateSentenceTranslation(id, translation, expectedUpdatedAt, expectedField, source);
 export const removeWordCard = (id: string) => repository.remove(id);
 export const restoreWordCard = (card: WordCard) => repository.restore(card);
 export const estimateWordCardBytes = () => repository.estimateBytes();

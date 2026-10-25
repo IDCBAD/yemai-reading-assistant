@@ -16,7 +16,13 @@ import { WORKOS_APP_URL_PATTERN } from '../src/shared/workosCredentials';
 import { registerTaskRuntime } from '../src/background/registerTaskRuntime';
 import { WORD_COLLECTION_ENABLED_KEY } from '../src/shared/wordCards';
 import { handleWordCollectionRequest, isWordCollectionRequest } from '../src/background/wordCollections';
-import { saveWordCardCapture, updateWordCardMeaning, enrichWordCard, updateWordCardSentenceTranslation, removeWordCard, restoreWordCard } from '../src/services/wordCardStorage';
+import { saveWordCardCapture, saveExpressionCardCapture, getCollectedExpressionNames, updateWordCardMeaning, enrichWordCard, updateWordCardSentenceTranslation, removeWordCard, restoreWordCard } from '../src/services/wordCardStorage';
+import { registerPageReadingAnalysis } from '../src/background/registerPageReading';
+import { lookupWordMeaning } from '../src/services/wordMeaningDictionary';
+import { lookupWordPronunciation } from '../src/services/wordPronunciation';
+import { createWordTranslationRuntime } from '../src/background/wordTranslation';
+import { isSidepanelTranslationSender, isWebTranslationSender } from '../src/background/translationSender';
+import { normalizeTranslationSettings, TRANSLATION_SETTINGS_KEY, TRANSLATION_USAGE_KEY, type TranslationUsage } from '../src/shared/wordTranslation';
 
 const PENDING_QUOTES_KEY = 'pendingSelectionQuotes';
 const SELECTION_BUBBLE_KEY = 'selectionBubbleEnabled';
@@ -40,6 +46,15 @@ type SidePanelWithLifecycle = typeof browser.sidePanel & {
 };
 
 export default defineBackground(() => {
+  const translationSettings = async () => {
+    await browser.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+    return normalizeTranslationSettings((await browser.storage.local.get(TRANSLATION_SETTINGS_KEY))[TRANSLATION_SETTINGS_KEY]);
+  };
+  const wordTranslation = createWordTranslationRuntime({
+    getSettings: translationSettings, lookupMeaning: lookupWordMeaning, lookupPronunciation: lookupWordPronunciation,
+    getUsage: async () => (await browser.storage.local.get(TRANSLATION_USAGE_KEY))[TRANSLATION_USAGE_KEY] as TranslationUsage | undefined,
+    setUsage: async (usage) => { await browser.storage.local.set({ [TRANSLATION_USAGE_KEY]: usage }); },
+  });
   startLifecycleDiagnostics('background');
   let panelConnections = 0;
   let bubbleEnabled = true;
@@ -183,6 +198,7 @@ export default defineBackground(() => {
   };
 
   const taskRuntime = registerTaskRuntime((target) => sendToTab({ type: 'page:extract' }, target));
+  registerPageReadingAnalysis();
 
   const importWorkosCredentials = async (): Promise<WorkosCredentialsResponse> => {
     const tabs = await browser.tabs.query({ url: WORKOS_APP_URL_PATTERN }).catch(() => []);
@@ -304,12 +320,66 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse) => {
     if (!message || typeof message !== 'object' || !('type' in message)) return false;
+    if (message.type === 'reading-focus:active') {
+      if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(''))) {
+        sendResponse({ enabled: false, error: '请从页脉侧边栏开启辅助阅读。' });
+        return false;
+      }
+      void browser.tabs.query({ active: true, lastFocusedWindow: true }).then(async ([tab]) => {
+        if (tab?.id === undefined || isDefinitelyUnsupportedPage(tab.url)) return { enabled: false, error: '当前页面不支持辅助阅读。' };
+        return browser.tabs.sendMessage(tab.id, { type: `reading-focus:${message.action}` }, { frameId: 0 });
+      }).then(sendResponse).catch(() => sendResponse({ enabled: false, error: '无法连接当前网页，请刷新页面后重试。' }));
+      return true;
+    }
+    if (message.type === 'word-translation:text' || message.type === 'word-translation:preference') {
+      const sidepanelSender = isSidepanelTranslationSender(sender, browser.runtime.id, browser.runtime.getURL('/sidepanel.html'));
+      const allowed = sidepanelSender || (message.type === 'word-translation:preference' && isWebTranslationSender(sender, browser.runtime.id));
+      if (!allowed) { sendResponse({ ok: false, error: '请从页脉侧边栏发起主动翻译。' }); return false; }
+      if (message.type === 'word-translation:text') {
+        void wordTranslation.translateText(message.input).then(result => sendResponse({ ok: true, result }))
+          .catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : '翻译暂时不可用。' }));
+      } else {
+        void translationSettings().then(settings => sendResponse({ ok: true, service: settings.service,
+          preference: { service: settings.service, remoteEnabled: settings.remoteEnabled,
+            configured: /^\d{5,40}$/.test(settings.appid) && Boolean(settings.apiKey) } }))
+          .catch(() => sendResponse({ ok: false, error: '无法读取翻译设置。' }));
+      }
+      return true;
+    }
+    if (message.type === 'word-translation:lookup' || message.type === 'word-translation:settings') {
+      if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || sender.frameId !== 0 || !/^https?:\/\//i.test(sender.url ?? '')) {
+        sendResponse({ ok: false, error: '请从网页查词入口发起请求。' }); return false;
+      }
+      if (message.type === 'word-translation:lookup') {
+        void wordTranslation.lookup(message.input).then(result => sendResponse({ ok: true, result }))
+          .catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : '翻译暂时不可用。' }));
+      } else {
+        void browser.storage.session.set({ wordTranslationSettingsRequested: true });
+        void sidePanel.open({ tabId: sender.tab.id }).then(() => {
+          void browser.runtime.sendMessage({ type: 'word-translation:settings-open' }).catch(() => undefined);
+          sendResponse({ ok: true });
+        }).catch(() => sendResponse({ ok: false, error: '请打开页脉侧边栏，在设置中配置翻译服务。' }));
+      }
+      return true;
+    }
+    if (message.type === 'reading-focus:lookup') {
+      if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || sender.frameId !== 0
+        || !/^https?:\/\//i.test(sender.url ?? '') || typeof message.word !== 'string' || message.word.length > 240) {
+        sendResponse({ ok: false, error: '无法查找这个词语。' });
+        return false;
+      }
+      void Promise.all([lookupWordMeaning(message.word), lookupWordPronunciation(message.word)]).then(([meaning, pronunciation]) => sendResponse({ ok: true, meaning, pronunciation }))
+        .catch(() => sendResponse({ ok: false, error: '本地词库暂时不可用。' }));
+      return true;
+    }
     if (isWordCollectionRequest(message)) {
       void handleWordCollectionRequest(message, sender, {
         extensionId: browser.runtime.id,
         extensionUrl: browser.runtime.getURL(''),
         runKnowledgeWrite: (write) => taskRuntime.runKnowledgeWrite(write),
         save: saveWordCardCapture,
+        saveExpression: saveExpressionCardCapture,
+        getCollectedExpressions: getCollectedExpressionNames,
         updateMeaning: updateWordCardMeaning,
         enrich: enrichWordCard,
         updateSentenceTranslation: updateWordCardSentenceTranslation,

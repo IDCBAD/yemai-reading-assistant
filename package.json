@@ -7,6 +7,7 @@
     "dev": "wxt",
     "prototype:river": "node scripts/serve-collection-river-prototype.mjs",
     "prototype:loop": "node scripts/serve-collection-loop-prototype.mjs",
+    "prototype:reading-focus": "node scripts/serve-reading-focus-preview.mjs",
     "build": "wxt build",
     "build:diagnostic": "wxt build -c wxt.diagnostic.config.ts --mode diagnostic",
     "zip": "wxt zip",

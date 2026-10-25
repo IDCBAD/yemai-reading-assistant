@@ -1,17 +1,21 @@
 import type { PageContext, QuoteReference } from '../sidepanel/types';
 import type { WorkosCredentialsResponse } from './workosCredentials';
+import type { WordTranslationInput, ManualTranslationInput } from './wordTranslation';
+import type { ReadingFocusPreferences } from './readingFocusPreferences';
 import type { WordCard, WordCardCapture, WordCardEnrichment, WordMeaningSource, WordMeaningFieldSnapshot, WordSentenceTranslationFieldSnapshot } from './wordCards';
 
 export type WordCollectionRequest =
   | { type: 'word:save'; capture: WordCardCapture }
+  | { type: 'word:save-expression'; capture: WordCardCapture }
+  | { type: 'word:expression-status'; url: string; names: string[] }
   | { type: 'word:update-meaning'; id: string; meaning: string; meaningSource: WordMeaningSource; expectedUpdatedAt?: number; expectedField?: WordMeaningFieldSnapshot }
   | { type: 'word:enrich'; id: string; captureKey: string; patch: WordCardEnrichment }
-  | { type: 'word:update-sentence-translation'; id: string; translation: string; expectedUpdatedAt?: number; expectedField?: WordSentenceTranslationFieldSnapshot }
+  | { type: 'word:update-sentence-translation'; id: string; translation: string; expectedUpdatedAt?: number; expectedField?: WordSentenceTranslationFieldSnapshot; source?: 'manual' | 'browser' | 'baidu' }
   | { type: 'word:remove'; id: string }
   | { type: 'word:restore'; card: WordCard };
 
 export type WordCollectionResponse =
-  | { ok: true; card?: WordCard; alreadySaved?: boolean }
+  | { ok: true; card?: WordCard; alreadySaved?: boolean; savedExpressions?: string[] }
   | { ok: false; error: string };
 
 export interface PageSnapshot extends PageContext {
@@ -26,6 +30,14 @@ export interface PageSnapshot extends PageContext {
 
 export type ExtensionRequest =
   | WordCollectionRequest
+  | { type: 'word-translation:lookup'; input: WordTranslationInput }
+  | { type: 'word-translation:text'; input: ManualTranslationInput }
+  | { type: 'word-translation:preference' }
+  | { type: 'word-translation:settings' }
+  | { type: 'reading-focus:active'; action: 'toggle' | 'status' }
+  | { type: 'reading-focus:lookup'; word: string }
+  | { type: 'reading-focus:preferences-get' }
+  | { type: 'reading-focus:preferences-set'; preferences: ReadingFocusPreferences }
   | { type: 'panel:status' }
   | { type: 'selection:commit'; quote: QuoteReference; openPanel: boolean }
   | { type: 'selection:consume' }
@@ -42,6 +54,8 @@ export type ExtensionRequest =
   | { type: 'page:extract-active'; tabId?: number; expectedUrl?: string };
 
 export type ContentRequest =
+  | { type: 'reading-focus:toggle' }
+  | { type: 'reading-focus:status' }
   | { type: 'page:get-metadata' }
   | { type: 'page:extract' }
   | { type: 'selection:smart-start' }
@@ -49,6 +63,7 @@ export type ContentRequest =
   | { type: 'workos:read-login-credentials' };
 
 export type ExtensionEvent =
+  | { type: 'word-translation:settings-open' }
   | { type: 'wordcards:changed' }
   | { type: 'selection:available' }
   | { type: 'selection:smart-finished'; outcome: 'committed' | 'cancelled' }

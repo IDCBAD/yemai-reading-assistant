@@ -51,7 +51,7 @@ export function WordCardDirectory({ id, cards, selectedId, animate, onClose, onS
   const focusedCardId = useRef<string | undefined>(undefined);
   const filtered = useMemo(() => {
     const value = query.trim().toLowerCase();
-    return cards.filter((card) => [card.word, card.meaning ?? '', card.sentence, card.sentenceTranslation ?? '', card.source.title].some((text) => text.toLowerCase().includes(value)));
+    return cards.filter((card) => [card.expression?.name ?? '', card.word, card.meaning ?? '', card.sentence, card.sentenceTranslation ?? '', card.source.title].some((text) => text.toLowerCase().includes(value)));
   }, [cards, query]);
 
   useLayoutEffect(() => {
@@ -95,7 +95,7 @@ export function WordCardDirectory({ id, cards, selectedId, animate, onClose, onS
       <label className="wordbook-search word-directory-search"><KoboyoIcon name="search" size={15} /><span className="visually-hidden">搜索单词、释义或原句</span><input ref={input} type="search" value={query} placeholder="搜索单词、释义或原句" autoComplete="off" onChange={(event) => setQuery(event.target.value)} /></label>
       {filtered.length ? <ul className="word-directory-list" aria-label="收藏单词" ref={list}>
         {filtered.map((card) => <li key={card.id}><button type="button" aria-current={card.id === selectedId ? 'true' : undefined} onFocus={() => { focusedCardId.current = card.id; }} onClick={(event) => onSelect(card.id, event.detail === 0)}>
-          <span className="word-directory-copy"><strong lang="en">{card.word}</strong><span>{card.meaning || card.sentence || card.source.title}</span></span>
+          <span className="word-directory-copy"><strong lang="en">{card.expression?.name ?? card.word}</strong><span>{card.meaning || card.sentence || card.source.title}</span></span>
           {card.id === selectedId && <svg className="word-directory-current" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-label="正在阅读"><path d="m3 8 3.2 3.2L13 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button></li>)}
       </ul> : <p className="word-directory-empty" role="status">没有找到单词</p>}

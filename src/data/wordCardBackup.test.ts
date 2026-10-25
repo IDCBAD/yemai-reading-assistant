@@ -20,6 +20,17 @@ async function emptyBackup() { return createYemaiBackup(setup(), { appVersion: '
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(databases.splice(0).map((database) => database.delete())); });
 
 describe('word card backups', () => {
+  it('round-trips Baidu meanings and sentence translations without credentials', async () => {
+    const database = setup();
+    const word: WordCard = { ...card(), meaning: '难以预测的', meaningSource: 'baidu', sentenceTranslation: '一个难以预测的流程。', sentenceTranslationSource: 'baidu' };
+    await database.wordCards.add(word);
+    const backup = await createYemaiBackup(database, { appVersion: '0.6.1', exportedAt: 100 });
+    const encoded = serializeYemaiBackup(backup);
+    expect(encoded).not.toContain('wordTranslationSettings');
+    const decoded = parseYemaiBackup(encoded).backup;
+    const target = setup(); await importYemaiBackup(target, decoded, 'replace');
+    expect(await target.wordCards.get(word.id)).toEqual(word);
+  });
   it('exports v2 independent words, source sentences and manual meanings', async () => {
     const database = setup();
     const word = { ...card(), meaning: '难以预测的', meaningSource: 'dictionary' as const, sentenceTranslation: '难以预测的流程。', sentenceTranslationSource: 'manual' as const };

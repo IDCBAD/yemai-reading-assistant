@@ -1,0 +1,25 @@
+.translation-settings { padding-top: 20px; }
+.translation-settings fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.translation-settings input:not([type="checkbox"]), .translation-settings select {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--paper, #fff);
+  font: inherit;
+  font-size: 12px;
+}
+.translation-settings input:not([type="checkbox"]) + label { margin-top: 14px; }
+.translation-settings input:focus-visible, .translation-settings select:focus-visible {
+  outline: 2px solid var(--cobalt);
+  outline-offset: 2px;
+}
+.translation-settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0; }
+.translation-settings-toggle label { margin: 0; }
+.translation-settings-toggle input { width: 17px; height: 17px; accent-color: var(--cobalt); }
+.translation-settings details { margin-top: 14px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.translation-settings summary { cursor: pointer; color: var(--ink); }
+.translation-settings fieldset:disabled { opacity: .65; }

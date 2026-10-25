@@ -4,7 +4,11 @@ import type { WordCard, WordMeaningSource, WordMeaningFieldSnapshot, WordSentenc
 import { loadWordCards } from '../../services/wordCardStorage';
 import { lookupWordPronunciation } from '../../services/wordPronunciation';
 import { removeCollectedWord, restoreCollectedWord, updateCollectedWordMeaning, updateCollectedWordSentenceTranslation } from '../../services/wordCollectionClient';
-import { initializeLocalTranslation, localTranslationAvailability, translateLocally } from '../localTranslator';
+import { initializeLocalTranslation, localTranslationAvailability } from '../localTranslator';
+import { canTranslateText } from '../../shared/wordTranslation';
+import type { TranslationPreference } from '../../shared/wordTranslation';
+import { isRemoteManualPreference, manualTranslationLabel, translateManually } from '../manualTranslation';
+import { useTranslationPreference } from '../useTranslationPreference';
 import { startWordEnrichment, type WordEnrichmentPhase } from '../wordEnrichment';
 import { useWordSpeech } from '../useWordSpeech';
 import { KoboyoIcon } from './KoboyoIcon';
@@ -15,6 +19,19 @@ import { CollectionHeaderActions, useCollectionEscape } from './CollectionSurfac
 import '../wordCards.css';
 
 export interface WordCardsPanelProps { open: boolean; onClose: () => void; onShowAnswers: () => void; embedded?: boolean; onCountChange?: (count: number) => void }
+
+/** A click translates one field only; late replies must not reach a different card or service. */
+export async function requestWordCardReferenceTranslation(card: WordCard, field: 'meaning' | 'sentence', preference: TranslationPreference,
+  isCurrent: () => boolean, onDownloadProgress?: (progress: number) => void) {
+  const text = field === 'sentence' ? card.sentence : card.word;
+  if (!canTranslateText(text)) throw new Error('请选择不超过 5000 字符的英文内容。');
+  // This call runs before the first await, preserving native browser user activation.
+  const result = await translateManually(text, { preference, onDownloadProgress });
+  if (!isCurrent()) return null;
+  const translation = result.translation.trim();
+  if (!translation || translation.length > (field === 'sentence' ? 4_000 : 2_000)) throw new Error('译文为空或超过当前字段的长度限制，请手动编辑。');
+  return { ...result, translation };
+}
 
 function sourceUrl(card: WordCard) {
   try { const url = new URL(card.source.url ?? ''); return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined; } catch { return undefined; }
@@ -54,6 +71,10 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
   const [enrichment, setEnrichment] = useState<{ id?: string; meaning: WordEnrichmentPhase; sentence: WordEnrichmentPhase }>({ meaning: 'idle', sentence: 'idle' });
   const [preparingTranslation, setPreparingTranslation] = useState(false);
   const [preparationProgress, setPreparationProgress] = useState<number>();
+  const { preference: translationPreference, issue: translationPreferenceIssue } = useTranslationPreference();
+  const remoteTranslation = Boolean(translationPreference && isRemoteManualPreference(translationPreference));
+  const manualTranslationAvailable = Boolean(translationPreference && (remoteTranslation || translatorAvailable));
+  const translationLabel = manualTranslationLabel(translationPreference);
   const root = useRef<HTMLElement>(null);
   const directoryTrigger = useRef<HTMLButtonElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -67,6 +88,10 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
   const selected = cards.find((card) => card.id === selectedId) ?? cards[0];
   const currentId = useRef(selected?.id);
   currentId.current = selected?.id;
+  const currentCaptureKey = useRef(selected?.captureKey);
+  currentCaptureKey.current = selected?.captureKey;
+  const currentPreference = useRef(translationPreference);
+  currentPreference.current = translationPreference;
   const index = selected ? cards.indexOf(selected) : -1;
   const speech = useWordSpeech(selected?.id, open, autoplay && !editing ? selected?.word : undefined, directoryOpen);
   const ipa = pronunciation?.word === selected?.word ? pronunciation?.ipa : undefined;
@@ -75,7 +100,7 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
   }, []);
   useEffect(() => { if (!loading) onCountChange?.(cards.length); }, [cards.length, loading, onCountChange]);
   useEffect(() => {
-    if (!open || !selected || editing || directoryOpen) return;
+    if (!open || !selected || editing || directoryOpen || translationBusy === selected.id) return;
     const card = selected;
     setEnrichment({ id: card.id, meaning: card.meaning || card.meaningSource === 'manual' ? 'ready' : 'loading', sentence: card.sentenceTranslation || card.sentenceTranslationSource === 'manual' || !card.sentence ? 'ready' : 'loading' });
     let task: ReturnType<typeof startWordEnrichment> | undefined;
@@ -87,7 +112,7 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
       });
     }, 200);
     return () => { clearTimeout(timer); task?.cancel(); };
-  }, [open, selected?.id, selected?.captureKey, editing, directoryOpen, retryEnrichment, receiveEnrichedCard]);
+  }, [open, selected?.id, selected?.captureKey, editing, directoryOpen, translationBusy, retryEnrichment, receiveEnrichedCard]);
   useEffect(() => {
     if (!open || !selected?.word) return;
     let current = true;
@@ -132,6 +157,11 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
     setPreparingTranslation(false); setPreparationProgress(undefined); setDirectoryOpen(false);
   }, [open]);
   useEffect(() => { translationRequest.current++; setTranslationBusy(undefined); setEditing(null); setDraft(''); setIssue(''); }, [selected?.id]);
+  useEffect(() => {
+    translationRequest.current++;
+    setTranslationBusy(undefined); setTranslationProgress(undefined);
+    setPreparingTranslation(false); setPreparationProgress(undefined);
+  }, [translationPreference]);
 
   const navigate = (step: number, keyboard: boolean) => {
     if (cards.length < 2 || editing || busy || directoryOpen) return;
@@ -155,11 +185,15 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
   };
   const cancelEditing = () => { translationRequest.current++; setTranslationBusy(undefined); setEditing(null); };
   const prepareTranslation = () => {
+    if (!translationPreference || remoteTranslation) return;
+    const current = ++translationRequest.current;
+    const preference = translationPreference;
+    const isCurrent = () => mounted.current && translationRequest.current === current && currentPreference.current === preference;
     setPreparingTranslation(true); setPreparationProgress(undefined); setIssue('');
-    const task = initializeLocalTranslation((value) => { if (mounted.current) setPreparationProgress(value); });
-    void task.then(() => { if (mounted.current) setRetryEnrichment((value) => value + 1); })
-      .catch(() => { if (mounted.current) setIssue('本地翻译未准备好，请重试。'); })
-      .finally(() => { if (mounted.current) setPreparingTranslation(false); });
+    const task = initializeLocalTranslation((value) => { if (isCurrent()) setPreparationProgress(value); });
+    void task.then(() => { if (isCurrent()) setRetryEnrichment((value) => value + 1); })
+      .catch(() => { if (isCurrent()) setIssue('本地翻译未准备好，请重试。'); })
+      .finally(() => { if (isCurrent()) setPreparingTranslation(false); });
   };
   const saveMeaning = async () => {
     if (!selected || busy) return;
@@ -167,7 +201,8 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
     translationRequest.current++;
     setBusy(card.id); setIssue('');
     try {
-      if (editing === 'sentence') await updateCollectedWordSentenceTranslation(card.id, draft, editVersion.current ?? card.updatedAt, sentenceSnapshot.current);
+      if (editing === 'sentence') await updateCollectedWordSentenceTranslation(card.id, draft, editVersion.current ?? card.updatedAt, sentenceSnapshot.current,
+        draftSource === 'baidu' || draftSource === 'browser' ? draftSource : 'manual');
       else await updateCollectedWordMeaning(card.id, draft, draftSource, editVersion.current ?? card.updatedAt, meaningSnapshot.current);
       if (currentId.current === card.id) { setEditing(null); setNotice('已保存'); }
       await refresh();
@@ -175,22 +210,33 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
     } catch (error) { setIssue(error instanceof Error ? error.message : '释义未能保存，请重试。'); }
     finally { setBusy(undefined); }
   };
-  const referenceTranslation = async () => {
-    if (!selected || translationBusy) return;
+  const referenceTranslation = async (field: 'meaning' | 'sentence' = editing ?? 'meaning') => {
+    if (!selected || translationBusy || !manualTranslationAvailable || !translationPreference) return;
     const card = selected;
+    const preference = translationPreference;
+    const text = field === 'sentence' ? card.sentence : card.word;
+    if (!canTranslateText(text)) { setIssue('请选择不超过 5000 字符的英文内容。'); return; }
     const current = ++translationRequest.current;
+    const isCurrent = () => mounted.current && translationRequest.current === current && currentId.current === card.id
+      && currentCaptureKey.current === card.captureKey && currentPreference.current === preference;
     setTranslationBusy(card.id); setTranslationProgress(undefined); setIssue('');
-    // Chrome model creation must begin while this click still has user activation.
-    const translation = translateLocally(editing === 'sentence' ? card.sentence : card.word, (value) => { if (translationRequest.current === current) setTranslationProgress(value); });
+    setPreparingTranslation(false); setPreparationProgress(undefined);
+    // Preference is preloaded. The local path must begin inside this click to retain user activation.
+    const translation = requestWordCardReferenceTranslation(card, field, preference, isCurrent,
+      value => { if (isCurrent()) setTranslationProgress(value); });
     try {
-      const meaning = await translation;
-      if (!mounted.current || translationRequest.current !== current || currentId.current !== card.id) return;
-      if (editing) { setDraft(meaning); setDraftSource('browser'); return; }
-      await updateCollectedWordMeaning(card.id, meaning, 'browser', card.updatedAt);
-      if (mounted.current && translationRequest.current === current) { setNotice('参考译文已保存，可随时修改'); await refresh(); }
+      const result = await translation;
+      if (!result || !isCurrent()) return;
+      const value = result.translation;
+      if (editing === field) { setDraft(value); setDraftSource(result.source); return; }
+      if (field === 'sentence') await updateCollectedWordSentenceTranslation(card.id, value, card.updatedAt,
+        { captureKey: card.captureKey, value: card.sentenceTranslation ?? '', source: card.sentenceTranslationSource }, result.source);
+      else await updateCollectedWordMeaning(card.id, value, result.source, card.updatedAt,
+        { captureKey: card.captureKey, value: card.meaning ?? '', source: card.meaningSource });
+      if (isCurrent()) { setNotice('参考译文已保存，可随时修改'); await refresh(); }
     } catch (error) {
-      if (mounted.current && translationRequest.current === current) setIssue(error instanceof Error && error.message !== 'unsupported' ? error.message : '本地翻译暂不可用，可以直接添加释义。');
-    } finally { if (mounted.current && translationRequest.current === current) setTranslationBusy(undefined); }
+      if (isCurrent()) setIssue(error instanceof Error && error.message !== 'unsupported' ? error.message : '翻译暂不可用，可以直接添加释义。');
+    } finally { if (isCurrent()) { setTranslationBusy(undefined); setTranslationProgress(undefined); } }
   };
   const remove = async () => {
     if (!selected || busy) return;
@@ -245,19 +291,24 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
   const Container = embedded ? 'section' : 'aside';
   const autoplayButton = <button className="collection-audio-toggle" type="button" aria-label={autoplay ? '关闭自动发音' : '开启自动发音'} title={autoplay ? '自动发音已开启' : '自动发音已关闭'} aria-pressed={Boolean(autoplay)} disabled={autoplay === undefined} onClick={toggleAutoplay}><WordAudioIcon muted={!autoplay} /></button>;
   const fieldPhase = (field: 'meaning' | 'sentence') => enrichment.id === selected?.id ? enrichment[field] : 'idle';
-  const translationAction = <button className="word-card-translation-action" type="button" disabled={preparingTranslation} onClick={prepareTranslation}>{preparingTranslation ? preparationProgress !== undefined ? `准备翻译 ${preparationProgress}%` : '正在准备翻译…' : '启用翻译'}</button>;
+  const translationAction = !remoteTranslation && <button className="word-card-translation-action" type="button" disabled={!translationPreference || preparingTranslation} onClick={prepareTranslation}>{preparingTranslation ? preparationProgress !== undefined ? `准备本地翻译 ${preparationProgress}%` : '正在准备本地翻译…' : '启用本地补译'}</button>;
+  const manualTranslationAction = (field: 'meaning' | 'sentence') => <button className="word-card-translation-action" type="button"
+    title={translationLabel} disabled={!manualTranslationAvailable || Boolean(translationBusy || busy) || !selected || !canTranslateText(field === 'sentence' ? selected.sentence : selected.word)}
+    onClick={() => void referenceTranslation(field)}>{translationBusy ? translationProgress !== undefined ? `准备翻译 ${translationProgress}%` : '翻译中…' : `用${translationLabel}`}</button>;
+  const translationSourceLabel = (source: WordMeaningSource | undefined) => source === 'baidu' ? '百度参考译文' : source === 'browser' ? '浏览器本地参考译文' : undefined;
   const editor = editing && selected ? <form className="word-card-form" onSubmit={(event) => { event.preventDefault(); void saveMeaning(); }}>
-    <label htmlFor="word-meaning">{editing === 'sentence' ? '原句中文' : '释义'}{draftSource === 'browser' && <span className="word-card-translation-badge" title="浏览器本地参考译文" aria-label="本地参考译文">译</span>}</label>
+    <label htmlFor="word-meaning">{editing === 'sentence' ? '原句中文' : '释义'}{translationSourceLabel(draftSource) && <span className="word-card-translation-badge" title={translationSourceLabel(draftSource)} aria-label={translationSourceLabel(draftSource)}>译</span>}</label>
     <textarea id="word-meaning" value={draft} maxLength={editing === 'sentence' ? 4_000 : 2_000} onChange={(event) => { translationRequest.current++; setTranslationBusy(undefined); setDraft(event.target.value); setDraftSource('manual'); }} autoFocus />
-    <div>{translatorAvailable && !(editing === 'sentence' ? selected.sentenceTranslation : selected.meaning) && <button type="button" disabled={Boolean(translationBusy || busy)} onClick={() => void referenceTranslation()}>{translationBusy ? translationProgress !== undefined ? `准备翻译 ${translationProgress}%` : '翻译中…' : '本地翻译'}</button>}<button type="button" disabled={Boolean(busy)} onClick={cancelEditing}>取消</button><button type="submit" disabled={Boolean(busy)}>{busy ? '保存中…' : '保存'}</button></div>
+    <div>{manualTranslationAction(editing)}<button type="button" disabled={Boolean(busy)} onClick={cancelEditing}>取消</button><button type="submit" disabled={Boolean(busy)}>{busy ? '保存中…' : '保存'}</button></div>
   </form> : null;
   return <Container className={`wordbook-panel${embedded ? ' is-embedded' : ''}`} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="单词收藏" aria-hidden={!open} inert={!open || undefined} ref={root} onKeyDown={handleKeys}>
     {embedded ? open && <CollectionHeaderActions>{autoplayButton}</CollectionHeaderActions> : <CollectionTabs active="words" count={cards.length} onChange={onShowAnswers} onClose={onClose}>{autoplayButton}</CollectionTabs>}
     <div className="wordbook-content" ref={content} inert={directoryOpen || undefined} aria-hidden={directoryOpen || undefined}>
       {issue && <p className="wordbook-issue" role="alert">{issue}<button type="button" onClick={() => void refresh()}>刷新</button></p>}
+      {translationPreferenceIssue && <p className="wordbook-issue" role="status">{translationPreferenceIssue}</p>}
       {loading ? <div className="wordbook-empty" role="status">正在读取…</div> : !selected ? <div className="wordbook-empty"><KoboyoIcon name="bookmark" size={28} /><h3>暂无单词</h3><p>划选网页单词，点击「收藏」。</p></div> : <>
         <div className="wordbook-album"><div className="wordbook-back one" aria-hidden="true" /><div className="wordbook-back two" aria-hidden="true" /><article key={selected.id} className={`word-card${animate ? ' is-arriving' : ''}`}>
-          <h3 className={selected.word.length > 11 ? 'is-long' : ''} lang="en">{selected.word}</h3>
+          <h3 className={(selected.expression?.name ?? selected.word).length > 11 ? 'is-long' : ''} lang="en">{selected.expression?.name ?? selected.word}</h3>
           <div className="word-card-pronunciation">
             {ipa && <span className="word-card-phonetic" lang="en" title="美式英语 · IPA Dict 离线词库"><abbr title="美式英语">US</abbr>{ipa}</span>}
             <button className={`word-card-audio${speech.playing === 'word' ? ' is-playing' : ''}`} type="button" aria-label={speech.playing === 'word' ? '停止发音' : `播放 ${selected.word} 的发音`} title="播放发音" aria-pressed={speech.playing === 'word'} onClick={() => speech.speak(selected.word, 'word')}>
@@ -266,12 +317,12 @@ export function WordCardsPanel({ open, onClose, onShowAnswers, embedded = false,
           </div>
           {speech.issue && <p className="wordbook-issue" role="status">{speech.issue}</p>}
           {editing === 'meaning' ? editor : <div className={`word-card-meaning${selected.meaning ? '' : ' is-empty'}`}>
-            {selected.meaning ? <p title={selected.meaningSource === 'browser' ? '浏览器本地参考译文' : selected.meaningSource === 'dictionary' ? 'ECDICT 英汉词典释义' : undefined}>{selected.meaning}{selected.meaningSource === 'browser' && <span className="word-card-translation-badge" aria-label="本地参考译文">译</span>}</p> : fieldPhase('meaning') === 'loading' ? <span className="word-card-loading" role="status" aria-label="正在补充释义" /> : null}
+            {selected.meaning ? <p title={translationSourceLabel(selected.meaningSource) ?? (selected.meaningSource === 'dictionary' ? 'ECDICT 英汉词典释义' : undefined)}>{selected.meaning}{translationSourceLabel(selected.meaningSource) && <span className="word-card-translation-badge" aria-label={translationSourceLabel(selected.meaningSource)}>译</span>}</p> : fieldPhase('meaning') === 'loading' ? <span className="word-card-loading" role="status" aria-label="正在补充释义" /> : null}
             <button className="word-card-edit" type="button" aria-label={selected.meaning ? '修改释义' : '添加释义'} onClick={() => beginEditing()}><KoboyoIcon name="edit" size={14} />{!selected.meaning && fieldPhase('meaning') !== 'loading' && <span>添加释义</span>}</button>
           </div>}
-          {!selected.sentence && fieldPhase('meaning') === 'setup' && translationAction}
+          {!selected.sentence && !selected.meaning && (remoteTranslation ? manualTranslationAction('meaning') : fieldPhase('meaning') === 'setup' && translationAction)}
           {selected.sentence ? <><div className="word-card-context"><span>原句</span><div className="word-card-context-actions"><button type="button" aria-label={speech.playing === 'sentence' ? '停止朗读原句' : '朗读原句'} title="朗读原句" aria-pressed={speech.playing === 'sentence'} onClick={() => speech.speak(selected.sentence, 'sentence')}><WordAudioIcon /></button><button className="word-card-sentence-edit" type="button" aria-label={selected.sentenceTranslation ? '修改原句中文' : '添加原句中文'} title={selected.sentenceTranslation ? '修改原句中文' : '添加原句中文'} onClick={() => beginEditing('sentence')}><KoboyoIcon name="edit" size={13} /></button></div></div><SourceSentence card={selected} />
-            {editing === 'sentence' ? editor : selected.sentenceTranslation ? <p className="word-card-sentence-translation" lang="zh-CN" title={selected.sentenceTranslationSource === 'browser' ? '浏览器本地参考译文' : undefined}>{selected.sentenceTranslation}</p> : fieldPhase('sentence') === 'loading' ? <span className="word-card-loading is-sentence" role="status" aria-label="正在翻译原句" /> : fieldPhase('sentence') === 'setup' ? translationAction : fieldPhase('sentence') === 'failed' ? <button className="word-card-translation-action" type="button" onClick={() => setRetryEnrichment((value) => value + 1)}>重试译文</button> : fieldPhase('sentence') === 'unavailable' ? <span className="word-card-translation-unavailable">本地翻译不可用</span> : null}
+            {editing === 'sentence' ? editor : selected.sentenceTranslation ? <p className="word-card-sentence-translation" lang="zh-CN" title={translationSourceLabel(selected.sentenceTranslationSource)}>{selected.sentenceTranslation}</p> : remoteTranslation ? manualTranslationAction('sentence') : fieldPhase('sentence') === 'loading' ? <span className="word-card-loading is-sentence" role="status" aria-label="正在翻译原句" /> : fieldPhase('sentence') === 'setup' ? translationAction : fieldPhase('sentence') === 'failed' ? <button className="word-card-translation-action" type="button" onClick={() => setRetryEnrichment((value) => value + 1)}>重试本地补译</button> : fieldPhase('sentence') === 'unavailable' ? <span className="word-card-translation-unavailable">本地翻译不可用</span> : null}
           </> : <p className="word-card-no-context">未取得原句</p>}
           <div className="word-card-footer">
             {sourceUrl(selected) ? <a className="word-card-source" href={sourceUrl(selected)} title={selected.source.title} target="_blank" rel="noopener noreferrer"><KoboyoIcon name="link" size={12} /><span>{sourceLabel(selected)}</span><span>↗</span></a> : <span className="word-card-source">{sourceLabel(selected)}</span>}

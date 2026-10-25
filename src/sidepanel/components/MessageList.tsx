@@ -20,7 +20,9 @@ import { messageDecisionInteractions } from '../agentDecision';
 import { deriveAgentRunSummary, deriveMessageRunNote, deriveMessageStopNotice } from '../agentQueue';
 import { collectionDeliveryState } from '../collectionConversation';
 import { formatRunDuration } from '../runDuration';
-import { canTranslateLocally, translateLocally } from '../localTranslator';
+import { manualTranslationEnabled, manualTranslationLabel, translateManually } from '../manualTranslation';
+import { useTranslationPreference } from '../useTranslationPreference';
+import { canTranslateText } from '../../shared/wordTranslation';
 import { DoubleCtrlShortcut } from '../doubleCtrlShortcut';
 import { captureWordSelection } from '../../content/wordSelection';
 import type { WordCardCapture } from '../../shared/wordCards';
@@ -101,6 +103,7 @@ const MAX_ASSISTANT_QUOTE_LENGTH = 4_000;
 interface AssistantSelectionAction {
   messageId: string;
   text: string;
+  translationText: string | null;
   context: TranslationContext | null;
   wordCapture: WordCardCapture | null;
   left: number;
@@ -113,11 +116,28 @@ interface SelectionTranslation {
   context: TranslationContext | null;
   result: string;
   sentenceResult: string;
+  meaningSource?: 'browser' | 'baidu';
+  sentenceTranslationSource?: 'browser' | 'baidu';
+  serviceLabel: string;
+  error?: string;
   status: 'loading' | 'ready' | 'error';
   sentenceStatus: 'idle' | 'loading' | 'ready' | 'error';
   progress: number | null;
   left: number;
   top: number;
+}
+
+/** Keep quotation limits separate from the exact text the user asked to translate. */
+export function answerTranslationScope(text: string, wordCapture: WordCardCapture | null, context: TranslationContext | null) {
+  return { translationText: canTranslateText(text) ? text : null, context: wordCapture ? context : null };
+}
+
+export function captureAnswerTranslation(translation: SelectionTranslation): WordCardCapture | null {
+  if (!translation.wordCapture || translation.status !== 'ready' || !translation.meaningSource
+    || !translation.result.trim() || translation.result.length > 2000) return null;
+  return { ...translation.wordCapture, meaning: translation.result, meaningSource: translation.meaningSource,
+    ...(translation.sentenceStatus === 'ready' && translation.sentenceTranslationSource && translation.sentenceResult.length <= 4000
+      ? { sentenceTranslation: translation.sentenceResult, sentenceTranslationSource: translation.sentenceTranslationSource } : {}) };
 }
 
 function selectionInsideMessage(selection: Selection, container: HTMLElement) {
@@ -888,6 +908,8 @@ export function MessageList({
   const conversationRailItemsRef = useRef<ConversationPreviewRailItem[]>([]);
   const [selectionAction, setSelectionAction] = useState<AssistantSelectionAction | null>(null);
   const [selectionTranslation, setSelectionTranslation] = useState<SelectionTranslation | null>(null);
+  const { preference: translationPreference } = useTranslationPreference();
+  const translationEnabled = manualTranslationEnabled(translationPreference, localTranslationEnabled);
   const [translationCopyState, setTranslationCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [wordSaveBusy, setWordSaveBusy] = useState(false);
   const [wordSaveNotice, setWordSaveNotice] = useState('');
@@ -1099,22 +1121,27 @@ export function MessageList({
           return;
         }
         const rect = selection.getRangeAt(0).getBoundingClientRect();
-        const toolbarWidth = localTranslationEnabled && canTranslateLocally(text) ? 260 : 184;
+        const wordCapture = captureWordSelection(selection, { kind: 'assistant', title: '页脉回答', messageId: article.dataset.assistantMessageId ?? '' });
+        const scope = answerTranslationScope(text, wordCapture, wordCapture ? selectedSentence(selection, text) : null);
+        const toolbarWidth = translationEnabled && scope.translationText ? 260 : 184;
         const toolbarHeight = 44;
         const toolbarTop = rect.top >= toolbarHeight + 16
           ? rect.top - toolbarHeight - 8
           : rect.bottom + 8;
+        translationRequestRef.current++;
+        setSelectionTranslation(null);
         setSelectionAction({
           messageId: article.dataset.assistantMessageId ?? '',
           text: text.slice(0, MAX_ASSISTANT_QUOTE_LENGTH),
-          context: canTranslateLocally(text) ? selectedSentence(selection, text) : null,
-          wordCapture: wordCollectionEnabled ? captureWordSelection(selection, { kind: 'assistant', title: '页脉回答', messageId: article.dataset.assistantMessageId ?? '' }) : null,
+          ...scope,
+          wordCapture: wordCollectionEnabled ? wordCapture : null,
           left: Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)),
           top: Math.max(8, Math.min(toolbarTop, window.innerHeight - toolbarHeight - 8)),
         });
       });
     };
     const clearSelectionAction = () => {
+      translationRequestRef.current++;
       setSelectionAction(null);
       setSelectionTranslation(null);
     };
@@ -1126,6 +1153,7 @@ export function MessageList({
       const target = event.target;
       if (!(target instanceof Node) || root.contains(target)) return;
       if (target instanceof Element && target.closest('.assistant-selection-action, .assistant-selection-translation')) return;
+      translationRequestRef.current++;
       setSelectionAction(null);
       setSelectionTranslation(null);
     };
@@ -1143,11 +1171,11 @@ export function MessageList({
       document.removeEventListener('pointerdown', clearFromOutside);
       window.removeEventListener('resize', clearSelectionAction);
     };
-  }, [messages, wordCollectionEnabled, localTranslationEnabled]);
+  }, [messages, wordCollectionEnabled, translationEnabled]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectionTranslation(null);
+      if (event.key === 'Escape') { translationRequestRef.current++; setSelectionTranslation(null); }
     };
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
@@ -1169,8 +1197,10 @@ export function MessageList({
   }, [selectionTranslation]);
 
   const translateSelection = () => {
-    if (!selectionAction || !localTranslationEnabled) return;
-    const { text, context, left, top } = selectionAction;
+    if (!selectionAction?.translationText || !translationEnabled || !translationPreference) return;
+    const { context, left, top } = selectionAction;
+    const text = selectionAction.translationText;
+    const preference = translationPreference;
     const requestId = ++translationRequestRef.current;
     setTranslationCopyState('idle');
     setSelectionTranslation({
@@ -1179,6 +1209,7 @@ export function MessageList({
       context,
       result: '',
       sentenceResult: '',
+      serviceLabel: manualTranslationLabel(preference),
       status: 'loading',
       sentenceStatus: context ? 'loading' : 'idle',
       progress: null,
@@ -1187,27 +1218,30 @@ export function MessageList({
     });
     setSelectionAction(null);
     window.getSelection()?.removeAllRanges();
-    // translateLocally creates the translator immediately, while the click still has user activation.
-    const result = translateLocally(text, (progress) => {
+    // A local route still creates the native translator directly within the click.
+    const result = translateManually(text, { preference, onDownloadProgress: (progress) => {
       if (requestId === translationRequestRef.current) {
         setSelectionTranslation((current) => current && { ...current, progress });
       }
-    });
+    } });
     void result.then(async (translated) => {
       if (requestId !== translationRequestRef.current) return;
       setSelectionTranslation((current) => current && {
         ...current,
-        result: translated,
+        result: translated.translation,
+        meaningSource: translated.source,
+        serviceLabel: translated.service === 'browser' ? '浏览器本地翻译' : translated.service === 'baidu-llm' ? '百度 · 大模型翻译' : '百度 · 机器翻译',
         status: 'ready',
         progress: null,
       });
       if (!context) return;
       try {
-        const translatedSentence = await translateLocally(context.text);
+        const translatedSentence = await translateManually(context.text, { preference });
         if (requestId === translationRequestRef.current) {
           setSelectionTranslation((current) => current && {
             ...current,
-            sentenceResult: translatedSentence,
+            sentenceResult: translatedSentence.translation,
+            sentenceTranslationSource: translatedSentence.source,
             sentenceStatus: 'ready',
           });
         }
@@ -1216,9 +1250,10 @@ export function MessageList({
           setSelectionTranslation((current) => current && { ...current, sentenceStatus: 'error' });
         }
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (requestId === translationRequestRef.current) {
-        setSelectionTranslation((current) => current && { ...current, status: 'error', progress: null });
+        setSelectionTranslation((current) => current && { ...current, status: 'error', progress: null,
+          error: error instanceof Error ? error.message : '翻译暂时不可用，请稍后重试。' });
       }
     });
   };
@@ -1226,8 +1261,8 @@ export function MessageList({
   useEffect(() => {
     const selectionKey = (target: EventTarget | null) => {
       if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return null;
-      if (!localTranslationEnabled || !selectionAction || !canTranslateLocally(selectionAction.text)) return null;
-      return `${selectionAction.messageId}:${selectionAction.text}`;
+      if (!translationEnabled || !selectionAction?.translationText) return null;
+      return `${selectionAction.messageId}:${selectionAction.translationText}`;
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (doubleCtrlShortcutRef.current.keyDown(event, selectionKey(event.target))) {
@@ -1247,11 +1282,15 @@ export function MessageList({
       document.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', resetOnBlur);
     };
-  }, [selectionAction, localTranslationEnabled]);
+  }, [selectionAction, translationEnabled, translationPreference]);
 
   useEffect(() => {
-    if (!localTranslationEnabled) { translationRequestRef.current++; setSelectionTranslation(null); doubleCtrlShortcutRef.current.reset(); }
-  }, [localTranslationEnabled]);
+    // Changing service/configuration invalidates pending results even when another route remains available.
+    translationRequestRef.current++;
+    setSelectionTranslation(null);
+    doubleCtrlShortcutRef.current.reset();
+    return () => { translationRequestRef.current++; };
+  }, [translationPreference, translationEnabled]);
   useEffect(() => {
     if (!wordSaveNotice) return;
     const timer = window.setTimeout(() => setWordSaveNotice(''), 5_000);
@@ -1519,12 +1558,12 @@ export function MessageList({
             <KoboyoIcon name="quote" size={12} />
             引用追问
           </button>
-          {localTranslationEnabled && canTranslateLocally(selectionAction.text) && (
+          {translationEnabled && selectionAction.translationText && (
             <button
               className="assistant-selection-action__button pressable"
               type="button"
               onClick={translateSelection}
-              title="双击 Ctrl 也可翻译"
+              title={`${manualTranslationLabel(translationPreference)}；双击 Ctrl 也可翻译`}
             >
               翻译
             </button>
@@ -1537,13 +1576,13 @@ export function MessageList({
           ref={translationPanelRef}
           className="assistant-selection-translation"
           role="region"
-          aria-label="本地翻译"
+          aria-label="翻译"
           data-kind={translationIsTerm ? 'term' : 'text'}
           style={{ left: selectionTranslation.left, top: selectionTranslation.top }}
         >
           <div className="assistant-selection-translation__heading">
-            <span className="assistant-selection-translation__eyebrow">本地翻译 <span>英 → 中</span></span>
-            <button className="assistant-selection-translation__icon-button" type="button" aria-label="关闭翻译" onClick={() => setSelectionTranslation(null)}>
+            <span className="assistant-selection-translation__eyebrow">{selectionTranslation.serviceLabel} <span>英 → 中</span></span>
+            <button className="assistant-selection-translation__icon-button" type="button" aria-label="关闭翻译" onClick={() => { translationRequestRef.current++; setSelectionTranslation(null); }}>
               <KoboyoIcon name="cross" size={14} />
             </button>
           </div>
@@ -1562,11 +1601,11 @@ export function MessageList({
           </div>
           {selectionTranslation.status === 'loading' && (
             <p className="assistant-selection-translation__status" role="status">{selectionTranslation.progress === null
-              ? '正在翻译…首次使用可能需要下载语言包'
+              ? selectionTranslation.serviceLabel === '浏览器本地翻译' ? '正在翻译…首次使用可能需要下载语言包' : '正在翻译…'
               : `正在下载语言包 ${selectionTranslation.progress}%`}</p>
           )}
           {selectionTranslation.status === 'error' && (
-            <p className="assistant-selection-translation__status" role="status">本地翻译暂不可用。请检查 Chrome 版本和语言包下载状态。</p>
+            <p className="assistant-selection-translation__status" role="status">{selectionTranslation.error || '翻译暂时不可用，请稍后重试。'}</p>
           )}
           {selectionTranslation.status === 'ready' && (
             <div className="assistant-selection-translation__result-row" aria-live="polite">
@@ -1585,8 +1624,11 @@ export function MessageList({
               </button>
             </div>
           )}
-          {wordCollectionEnabled && onCollectWord && selectionTranslation.wordCapture && selectionTranslation.status === 'ready' && (
-            <button className="assistant-selection-action__button pressable" type="button" disabled={wordSaveBusy} onClick={() => void saveWordCapture({ ...selectionTranslation.wordCapture!, meaning: selectionTranslation.result, meaningSource: 'browser' })}>
+          {wordCollectionEnabled && onCollectWord && captureAnswerTranslation(selectionTranslation) && (
+            <button className="assistant-selection-action__button pressable" type="button" disabled={wordSaveBusy} onClick={() => {
+              const capture = captureAnswerTranslation(selectionTranslation);
+              if (capture) void saveWordCapture(capture);
+            }}>
               <KoboyoIcon name="bookmark" size={12} />{wordSaveBusy ? '正在收藏…' : '收藏单词和译文'}
             </button>
           )}

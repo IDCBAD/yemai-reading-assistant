@@ -1,19 +1,22 @@
+import { isLearningExpressionName, normalizeLearningExpressionName } from './expressionLearning';
+import { normalizeSourceIdentityUrl } from '../content/pageManifest';
+
 export const WORD_COLLECTION_ENABLED_KEY = 'wordCollectionEnabled';
 export const LOCAL_TRANSLATION_ENABLED_KEY = 'localTranslationEnabled';
 
-export type WordMeaningSource = 'manual' | 'browser' | 'dictionary';
+export type WordMeaningSource = 'manual' | 'browser' | 'dictionary' | 'baidu';
 export interface WordCardFieldSnapshot<Source extends string = WordMeaningSource> {
   captureKey: string;
   value: string;
   source?: Source;
 }
 export type WordMeaningFieldSnapshot = WordCardFieldSnapshot<WordMeaningSource>;
-export type WordSentenceTranslationFieldSnapshot = WordCardFieldSnapshot<'manual' | 'browser'>;
+export type WordSentenceTranslationFieldSnapshot = WordCardFieldSnapshot<'manual' | 'browser' | 'baidu'>;
 export interface WordCardEnrichment {
   meaning?: string;
-  meaningSource?: 'browser' | 'dictionary';
+  meaningSource?: 'browser' | 'dictionary' | 'baidu';
   sentenceTranslation?: string;
-  sentenceTranslationSource?: 'browser';
+  sentenceTranslationSource?: 'browser' | 'baidu';
 }
 
 export interface WordCardSource {
@@ -34,7 +37,9 @@ export interface WordCardCapture {
   meaning?: string;
   meaningSource?: WordMeaningSource;
   sentenceTranslation?: string;
-  sentenceTranslationSource?: 'manual' | 'browser';
+  sentenceTranslationSource?: 'manual' | 'browser' | 'baidu';
+  /** Learning name may be a reusable template; word remains the exact source instance. */
+  expression?: { name: string };
 }
 
 export interface WordCard extends WordCardCapture {
@@ -56,12 +61,28 @@ export function normalizeWord(word: string) {
 }
 
 export function isCollectibleWord(value: string): boolean {
+  // Accept reusable English expressions and technical names, not arbitrary page text.
+  // Validate before normalizing so pasted paragraphs cannot become a single expression.
+  if (/[\r\n\t\f\v\u2028\u2029]/u.test(value)) return false;
   const text = value.trim();
-  return text.length > 0 && text.length <= 80
-    && /^[a-z]+(?:['’\-][a-z]+)*(?:\s+[a-z]+(?:['’\-][a-z]+)*){0,4}$/iu.test(text);
+  if (!text || text.length > 240 || !/[a-z]/iu.test(text)
+    || !/^[a-z0-9 '’+.#:()\-]+$/iu.test(text)
+    || /(?:https?:\/\/|www\.|\.(?:com|org|net|io|ai|dev|app)(?:\s|$))/iu.test(text)) return false;
+  const tokens = text.split(/ +/u);
+  if (tokens.length > 16) return false;
+  let parentheses = 0;
+  for (const token of tokens) {
+    for (const char of token) {
+      if (char === '(' && ++parentheses > 1) return false;
+      if (char === ')' && --parentheses < 0) return false;
+    }
+    if (!/^\(?[a-z0-9]+(?:['’:\-][a-z0-9]+|\.[a-z0-9]+)*(?:\+{1,2}|#|:)?\)?$/iu.test(token)) return false;
+  }
+  return parentheses === 0;
 }
 
 export function wordCaptureKey(capture: WordCardCapture) {
+  if (capture.expression) return JSON.stringify(['expression', normalizeSourceIdentityUrl(capture.source.url ?? ''), normalizeLearningExpressionName(capture.expression.name)]);
   return JSON.stringify([
     normalizeWord(capture.word), capture.source.kind,
     capture.source.url ?? '', capture.source.conversationId ?? '', capture.source.messageId ?? '',
@@ -81,11 +102,11 @@ function isFieldSnapshot(value: unknown, maxLength: number, sources: string[]): 
 }
 
 export function isWordMeaningFieldSnapshot(value: unknown): value is WordMeaningFieldSnapshot {
-  return isFieldSnapshot(value, 2_000, ['manual', 'browser', 'dictionary']);
+  return isFieldSnapshot(value, 2_000, ['manual', 'browser', 'dictionary', 'baidu']);
 }
 
 export function isWordSentenceTranslationFieldSnapshot(value: unknown): value is WordSentenceTranslationFieldSnapshot {
-  return isFieldSnapshot(value, 4_000, ['manual', 'browser']);
+  return isFieldSnapshot(value, 4_000, ['manual', 'browser', 'baidu']);
 }
 
 export function isWordCardCapture(value: unknown): value is WordCardCapture {
@@ -101,10 +122,13 @@ export function isWordCardCapture(value: unknown): value is WordCardCapture {
   }
   if (source.conversationId !== undefined && typeof source.conversationId !== 'string') return false;
   if (source.messageId !== undefined && typeof source.messageId !== 'string') return false;
+  if (value.expression !== undefined && (!record(value.expression) || source.kind !== 'page'
+    || typeof value.expression.name !== 'string' || !isLearningExpressionName(value.expression.name)
+    || Object.keys(value.expression).some((key) => key !== 'name'))) return false;
   if (value.meaning !== undefined && (typeof value.meaning !== 'string' || value.meaning.length > 2_000)) return false;
-  if (value.meaningSource !== undefined && (typeof value.meaningSource !== 'string' || !['manual', 'browser', 'dictionary'].includes(value.meaningSource))) return false;
+  if (value.meaningSource !== undefined && (typeof value.meaningSource !== 'string' || !['manual', 'browser', 'dictionary', 'baidu'].includes(value.meaningSource))) return false;
   if (value.sentenceTranslation !== undefined && (typeof value.sentenceTranslation !== 'string' || value.sentenceTranslation.length > 4_000)) return false;
-  if (value.sentenceTranslationSource !== undefined && value.sentenceTranslationSource !== 'manual' && value.sentenceTranslationSource !== 'browser') return false;
+  if (value.sentenceTranslationSource !== undefined && value.sentenceTranslationSource !== 'manual' && value.sentenceTranslationSource !== 'browser' && value.sentenceTranslationSource !== 'baidu') return false;
   if (value.highlightStart !== undefined || value.highlightEnd !== undefined) {
     if (!Number.isInteger(value.highlightStart) || !Number.isInteger(value.highlightEnd)) return false;
     const start = value.highlightStart as number;
@@ -120,8 +144,8 @@ export function isWordCardEnrichment(value: unknown): value is WordCardEnrichmen
   const hasMeaning = value.meaning !== undefined;
   const hasSentence = value.sentenceTranslation !== undefined;
   return (hasMeaning || hasSentence)
-    && (hasMeaning ? typeof value.meaning === 'string' && value.meaning.length <= 2_000 && (value.meaningSource === 'browser' || value.meaningSource === 'dictionary') : value.meaningSource === undefined)
-    && (hasSentence ? typeof value.sentenceTranslation === 'string' && value.sentenceTranslation.length <= 4_000 && value.sentenceTranslationSource === 'browser' : value.sentenceTranslationSource === undefined);
+    && (hasMeaning ? typeof value.meaning === 'string' && value.meaning.length <= 2_000 && (value.meaningSource === 'browser' || value.meaningSource === 'dictionary' || value.meaningSource === 'baidu') : value.meaningSource === undefined)
+    && (hasSentence ? typeof value.sentenceTranslation === 'string' && value.sentenceTranslation.length <= 4_000 && (value.sentenceTranslationSource === 'browser' || value.sentenceTranslationSource === 'baidu') : value.sentenceTranslationSource === undefined);
 }
 
 export function isWordCard(value: unknown): value is WordCard {

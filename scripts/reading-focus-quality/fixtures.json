@@ -1,0 +1,536 @@
+[
+  {
+    "id": "p1",
+    "text": "Use an agent when the task requires flexibility and decision-making. Use an API when available, or a script when the workflow is predictable.",
+    "required": [
+      {
+        "text": "Use an agent",
+        "kind": "core"
+      },
+      {
+        "text": "when the task requires flexibility and decision-making",
+        "kind": "condition"
+      },
+      {
+        "text": "Use an API",
+        "kind": "core"
+      },
+      {
+        "text": "when available",
+        "kind": "condition"
+      },
+      {
+        "text": "or a script",
+        "kind": "core"
+      },
+      {
+        "text": "when the workflow is predictable",
+        "kind": "condition"
+      }
+    ],
+    "separate": [
+      [
+        "Use an API",
+        "when available"
+      ],
+      [
+        "or a script",
+        "when the workflow is predictable"
+      ]
+    ],
+    "source": "user-provided-article",
+    "referenceGroups": [
+      {
+        "text": "Use an agent",
+        "kind": "core"
+      },
+      {
+        "text": "when the task requires flexibility and decision-making",
+        "kind": "condition"
+      },
+      {
+        "text": "Use an API",
+        "kind": "core"
+      },
+      {
+        "text": "when available",
+        "kind": "condition"
+      },
+      {
+        "text": "or a script",
+        "kind": "core"
+      },
+      {
+        "text": "when the workflow is predictable",
+        "kind": "condition"
+      }
+    ]
+  },
+  {
+    "id": "p5",
+    "text": "How Does a Browser Agent Work?",
+    "required": [],
+    "separate": [],
+    "expectEmpty": true,
+    "source": "user-provided-article",
+    "referenceGroups": []
+  },
+  {
+    "id": "p12",
+    "text": "The model chooses what to do next based on the task and the current page. Browser tools provide that page information as text, structured data, or screenshots.",
+    "required": [
+      {
+        "text": "The model chooses what to do next",
+        "kind": "core"
+      },
+      {
+        "text": "based on the task and the current page",
+        "kind": "detail"
+      },
+      {
+        "text": "Browser tools provide that page information",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "The model chooses what to do next",
+        "based on the task and the current page"
+      ]
+    ],
+    "source": "user-provided-article",
+    "referenceGroups": [
+      {
+        "text": "The model chooses what to do next",
+        "kind": "core"
+      },
+      {
+        "text": "based on the task and the current page",
+        "kind": "detail"
+      },
+      {
+        "text": "Browser tools provide that page information",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "p24",
+    "text": "Use an API if the service provides one that supports your task. For example, you can fetch orders directly without navigating a dashboard.",
+    "required": [
+      {
+        "text": "Use an API",
+        "kind": "core"
+      },
+      {
+        "text": "if the service provides one that supports your task",
+        "kind": "condition"
+      }
+    ],
+    "separate": [
+      [
+        "Use an API",
+        "if the service provides one that supports your task"
+      ]
+    ],
+    "source": "user-provided-article",
+    "referenceGroups": [
+      {
+        "text": "Use an API",
+        "kind": "core"
+      },
+      {
+        "text": "if the service provides one that supports your task",
+        "kind": "condition"
+      }
+    ]
+  },
+  {
+    "id": "p49",
+    "text": "Because browser agents run on LLMs, their costs are hard to predict. You can't be sure whether a task will take one step, two steps, or many more. With usage-based billing, additional model calls and browser time increase the cost.",
+    "required": [
+      {
+        "text": "Because browser agents run on LLMs",
+        "kind": "reason"
+      },
+      {
+        "text": "their costs are hard to predict",
+        "kind": "core"
+      },
+      {
+        "text": "additional model calls and browser time increase the cost",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "Because browser agents run on LLMs",
+        "their costs are hard to predict"
+      ]
+    ],
+    "source": "user-provided-article",
+    "referenceGroups": [
+      {
+        "text": "Because browser agents run on LLMs",
+        "kind": "reason"
+      },
+      {
+        "text": "their costs are hard to predict",
+        "kind": "core"
+      },
+      {
+        "text": "additional model calls and browser time increase the cost",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "p55",
+    "text": "If you already use a coding agent, adding browser tools may be enough. Its existing runtime can manage the reasoning loop. A remote browser on its own only provides the browser environment; your agent or script still needs to control it.",
+    "required": [
+      {
+        "text": "If you already use a coding agent",
+        "kind": "condition"
+      },
+      {
+        "text": "adding browser tools may be enough",
+        "kind": "core"
+      },
+      {
+        "text": "Its existing runtime can manage the reasoning loop",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "If you already use a coding agent",
+        "adding browser tools may be enough"
+      ]
+    ],
+    "source": "user-provided-article",
+    "referenceGroups": [
+      {
+        "text": "If you already use a coding agent",
+        "kind": "condition"
+      },
+      {
+        "text": "adding browser tools may be enough",
+        "kind": "core"
+      },
+      {
+        "text": "Its existing runtime can manage the reasoning loop",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "transfer-only-when",
+    "text": "Only when all checks pass should the extension display the analysis.",
+    "required": [
+      {
+        "text": "Only when all checks pass",
+        "kind": "condition"
+      },
+      {
+        "text": "should the extension display the analysis",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "Only when all checks pass",
+        "should the extension display the analysis"
+      ]
+    ],
+    "source": "authored-transfer",
+    "referenceGroups": [
+      {
+        "text": "Only when all checks pass",
+        "kind": "condition"
+      },
+      {
+        "text": "should the extension display the analysis",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "transfer-negation",
+    "text": "If the request fails, the extension must not delete the cached result.",
+    "required": [
+      {
+        "text": "If the request fails",
+        "kind": "condition"
+      },
+      {
+        "text": "the extension must not delete the cached result",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "If the request fails",
+        "the extension must not delete the cached result"
+      ]
+    ],
+    "source": "authored-transfer",
+    "referenceGroups": [
+      {
+        "text": "If the request fails",
+        "kind": "condition"
+      },
+      {
+        "text": "the extension must not delete the cached result",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "transfer-complement",
+    "text": "The main drawbacks are slow responses and unpredictable costs.",
+    "required": [
+      {
+        "text": "The main drawbacks are slow responses and unpredictable costs",
+        "kind": "core"
+      }
+    ],
+    "separate": [],
+    "source": "authored-transfer",
+    "referenceGroups": [
+      {
+        "text": "The main drawbacks are slow responses and unpredictable costs",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "transfer-short",
+    "text": "Keep the original page intact.",
+    "required": [
+      {
+        "text": "Keep the original page intact",
+        "kind": "core"
+      }
+    ],
+    "separate": [],
+    "source": "authored-transfer",
+    "referenceGroups": [
+      {
+        "text": "Keep the original page intact",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "p0",
+    "text": "A browser agent is software that uses an AI model to operate a web browser toward a goal. You describe the task, and the agent automatically opens the page, navigates, chooses actions, and checks the results before continuing. Agents are especially useful for unpredictable workflows because they can adapt to unexpected changes and recover from errors.",
+    "required": [
+      {
+        "text": "A browser agent is software",
+        "kind": "core"
+      },
+      {
+        "text": "that uses an AI model",
+        "kind": "detail"
+      },
+      {
+        "text": "to operate a web browser toward a goal",
+        "kind": "reason"
+      }
+    ],
+    "separate": [
+      [
+        "A browser agent is software",
+        "that uses an AI model"
+      ],
+      [
+        "that uses an AI model",
+        "to operate a web browser toward a goal"
+      ]
+    ],
+    "source": "user-provided-article",
+    "maxCoverage": 0.75,
+    "maxCoreWords": 18,
+    "referenceGroups": [
+      {
+        "text": "A browser agent is software",
+        "kind": "core"
+      },
+      {
+        "text": "that uses an AI model",
+        "kind": "detail"
+      },
+      {
+        "text": "to operate a web browser toward a goal",
+        "kind": "reason"
+      }
+    ]
+  },
+  {
+    "id": "p37",
+    "text": "Each share is the number of runs assigned to that category divided by all runs in the dataset, including the 15% left unclassified. The breakdown includes both end tasks, such as extraction, and supporting steps, such as login handling. These figures describe what people run, not how often the tasks succeed.",
+    "required": [
+      {
+        "text": "The breakdown includes both end tasks",
+        "kind": "core"
+      },
+      {
+        "text": "such as extraction",
+        "kind": "detail"
+      },
+      {
+        "text": "and supporting steps",
+        "kind": "core"
+      },
+      {
+        "text": "such as login handling",
+        "kind": "detail"
+      },
+      {
+        "text": "These figures describe what people run, not how often the tasks succeed",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "The breakdown includes both end tasks",
+        "such as extraction"
+      ],
+      [
+        "and supporting steps",
+        "such as login handling"
+      ]
+    ],
+    "source": "user-provided-article",
+    "maxCoverage": 0.75,
+    "maxCoreWords": 18,
+    "referenceGroups": [
+      {
+        "text": "The breakdown includes both end tasks",
+        "kind": "core"
+      },
+      {
+        "text": "such as extraction",
+        "kind": "detail"
+      },
+      {
+        "text": "and supporting steps",
+        "kind": "core"
+      },
+      {
+        "text": "such as login handling",
+        "kind": "detail"
+      },
+      {
+        "text": "These figures describe what people run, not how often the tasks succeed",
+        "kind": "core"
+      }
+    ]
+  },
+  {
+    "id": "transfer-description-purpose",
+    "text": "A backup service is software that stores encrypted copies to restore files after a disk failure. The dashboard lists recent jobs and records their completion times. Operators can inspect the history without opening every backup.",
+    "required": [
+      {
+        "text": "A backup service is software",
+        "kind": "core"
+      },
+      {
+        "text": "that stores encrypted copies",
+        "kind": "detail"
+      },
+      {
+        "text": "to restore files after a disk failure",
+        "kind": "reason"
+      }
+    ],
+    "separate": [
+      [
+        "A backup service is software",
+        "that stores encrypted copies"
+      ],
+      [
+        "that stores encrypted copies",
+        "to restore files after a disk failure"
+      ]
+    ],
+    "source": "authored-transfer",
+    "maxCoverage": 0.75,
+    "maxCoreWords": 18,
+    "referenceGroups": [
+      {
+        "text": "A backup service is software",
+        "kind": "core"
+      },
+      {
+        "text": "that stores encrypted copies",
+        "kind": "detail"
+      },
+      {
+        "text": "to restore files after a disk failure",
+        "kind": "reason"
+      }
+    ]
+  },
+  {
+    "id": "transfer-parallel-examples",
+    "text": "The report covers both operational checks, such as cache validation, and user actions, such as saving a word card. Engineers can inspect individual records in a separate dashboard. The summary describes activity, not whether every action succeeded.",
+    "required": [
+      {
+        "text": "The report covers both operational checks",
+        "kind": "core"
+      },
+      {
+        "text": "such as cache validation",
+        "kind": "detail"
+      },
+      {
+        "text": "and user actions",
+        "kind": "core"
+      },
+      {
+        "text": "such as saving a word card",
+        "kind": "detail"
+      },
+      {
+        "text": "The summary describes activity, not whether every action succeeded",
+        "kind": "core"
+      }
+    ],
+    "separate": [
+      [
+        "The report covers both operational checks",
+        "such as cache validation"
+      ],
+      [
+        "and user actions",
+        "such as saving a word card"
+      ]
+    ],
+    "source": "authored-transfer",
+    "maxCoverage": 0.75,
+    "maxCoreWords": 18,
+    "referenceGroups": [
+      {
+        "text": "The report covers both operational checks",
+        "kind": "core"
+      },
+      {
+        "text": "such as cache validation",
+        "kind": "detail"
+      },
+      {
+        "text": "and user actions",
+        "kind": "core"
+      },
+      {
+        "text": "such as saving a word card",
+        "kind": "detail"
+      },
+      {
+        "text": "The summary describes activity, not whether every action succeeded",
+        "kind": "core"
+      }
+    ]
+  }
+]

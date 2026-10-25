@@ -380,6 +380,22 @@ export default function App() {
     requestId: number;
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    const openTranslationSettings = () => {
+      void browser.storage.session.get('wordTranslationSettingsRequested').then(stored => {
+        if (stored.wordTranslationSettingsRequested) {
+          setSettingsOpen(true);
+          void browser.storage.session.remove('wordTranslationSettingsRequested');
+        }
+      }).catch(() => undefined);
+    };
+    const onOpen = (message: { type?: string }) => {
+      if (message?.type === 'word-translation:settings-open') { setSettingsOpen(true); openTranslationSettings(); }
+    };
+    openTranslationSettings();
+    browser.runtime.onMessage.addListener(onOpen);
+    return () => browser.runtime.onMessage.removeListener(onOpen);
+  }, []);
   const [wordCardsOpen, setWordCardsOpen] = useState(false);
   const [wordCardsLoaded, setWordCardsLoaded] = useState(false);
   const [wordCardCount, setWordCardCount] = useState(0);

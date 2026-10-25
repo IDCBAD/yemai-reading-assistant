@@ -29,6 +29,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon, type KoboyoIconName } from './KoboyoIcon';
 import type { QaDirectoryState } from '../../services/obsidianQaBrowser';
+import { TranslationSettings } from './TranslationSettings';
 
 interface HistoryPopoverProps {
   open: boolean;
@@ -702,6 +703,8 @@ export function SettingsDrawer({
               </button>
             )}
           </form>
+
+          <TranslationSettings />
 
           <section className="settings-section agent-template-section">
             <div className="agent-template-heading">

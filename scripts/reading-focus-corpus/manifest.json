@@ -1,0 +1,92 @@
+[
+  {
+    "id": "openai-hallucinations",
+    "url": "https://openai.com/index/why-language-models-hallucinate/",
+    "category": "openai-research-html",
+    "reasons": ["连续论证、类比与反例", "目录与正文边界", "表格不应被拼接成普通段落"]
+  },
+  {
+    "id": "openai-sparse-circuits",
+    "url": "https://openai.com/index/understanding-neural-networks-through-sparse-circuits/",
+    "category": "openai-research-html",
+    "reasons": ["技术长文与多级解释", "图注、代码和折叠控件", "检查正文遗漏与重复"]
+  },
+  {
+    "id": "openai-frontierscience",
+    "url": "https://openai.com/index/frontierscience/",
+    "category": "openai-research-html",
+    "reasons": ["嵌套目录和样例问题", "评测说明与限制", "列表和独立卡片的段落边界"]
+  },
+  {
+    "id": "openai-adversarial-robustness",
+    "url": "https://openai.com/index/trading-inference-time-compute-for-adversarial-robustness/",
+    "category": "openai-research-html",
+    "reasons": ["实验结果、例外与限制", "多图和重复图注", "因果、让步和条件关系"]
+  },
+  {
+    "id": "openai-mle-bench",
+    "url": "https://openai.com/index/mle-bench/",
+    "category": "openai-research-html",
+    "reasons": ["较短且信息密集的研究介绍", "正文与作者及全站导航的边界", "避免把短文误判为输入缺失"]
+  },
+  {
+    "id": "openai-learning-to-reason",
+    "url": "https://openai.com/index/learning-to-reason-with-llms/",
+    "category": "openai-historical-research-html",
+    "reasons": ["长页面、图表与加载占位", "历史发布正文和后续更新提示", "目录与正文重复"]
+  },
+  {
+    "id": "openai-accelerating-science",
+    "url": "https://openai.com/index/accelerating-science-gpt-5/",
+    "category": "openai-research-html",
+    "reasons": ["多领域案例长文", "摘要与展开内容可能重复", "案例的主张、依据与限制"]
+  },
+  {
+    "id": "openai-gpt4o-system-card-pdf",
+    "url": "https://cdn.openai.com/gpt-4o-system-card.pdf",
+    "category": "pdf-support-boundary",
+    "reasons": ["独立检查 PDF 支持边界", "脚注、分页、表格和阅读顺序", "不与 HTML 正文质量混合评分"]
+  },
+  {
+    "id": "openai-introducing-dots",
+    "url": "https://openai.com/index/introducing-dots/",
+    "category": "openai-user-observed-html",
+    "reasons": ["用户当前关注的 OpenAI 页面", "需采集实际 DOM 后确认结构", "对照正文输入与模型返回"]
+  },
+  {
+    "id": "openai-research-index",
+    "url": "https://openai.com/research/",
+    "category": "article-detection-boundary",
+    "reasons": ["研究目录页而非单篇文章", "检查卡片、导航是否误作正文", "无合适正文时应明确反馈"]
+  },
+  {
+    "id": "arxiv-mercury-abstract",
+    "url": "https://arxiv.org/abs/2506.17298",
+    "category": "user-captured-abstract",
+    "reasons": ["已有用户输入与模型返回", "摘要与论文全文应区分", "检查学科标签、工具标题等非正文混入"]
+  },
+  {
+    "id": "github-textfold",
+    "url": "https://github.com/chenxiachan/textfold/tree/main",
+    "category": "user-reported-no-reaction",
+    "reasons": ["用户报告点击阅读没有反应", "Markdown 正文与仓库界面边界", "入口或正文识别应先于模型质量排查"]
+  },
+  {
+    "id": "openclaw-focus-weeks",
+    "url": "https://openclaw.ai/blog/openclaw-focus-weeks",
+    "category": "user-captured-blog",
+    "reasons": ["已有用户输入与模型返回", "口语化多句段落与短标题", "检查标点保留及图片操作提示混入"]
+  },
+  {
+    "id": "openrouter-principles",
+    "url": "https://openrouter.ai/docs/guides/overview/principles",
+    "category": "user-reported-no-reaction",
+    "reasons": ["用户报告点击阅读没有反应", "技术文档正文与导航边界", "入口或正文识别应先于模型质量排查"]
+  },
+  {
+    "id": "browser-use-browser-agents",
+    "url": "https://browser-use.com/posts/browser-agents",
+    "category": "existing-regression-article",
+    "reasons": ["已有多轮用户真实试用反馈", "段落、列表与多种关系", "保留现有已改善体验的回归样本"]
+  }
+]

@@ -18,8 +18,18 @@ import type {
 import type { QuoteReference } from '../src/sidepanel/types';
 import { readWorkosLoginCredentials } from '../src/shared/workosCredentials';
 import { captureWordSelection, isWordSelectionBlocked } from '../src/content/wordSelection';
-import { collectWord } from '../src/services/wordCollectionClient';
+import { collectWord, collectExpression, getCollectedExpressions } from '../src/services/wordCollectionClient';
 import { WORD_COLLECTION_ENABLED_KEY, type WordCardCapture } from '../src/shared/wordCards';
+import { createReadingFocus, type ReadingFocusStatus } from '../src/content/readingFocus';
+import { createReadingFocusToolbar } from '../src/content/readingFocus/toolbar';
+import { createReadingFocusSetupStart } from '../src/content/readingFocus/setup';
+import { DEFAULT_READING_FOCUS_PREFERENCES, READING_FOCUS_PREFERENCES_KEY, normalizeReadingFocusPreferences, type ReadingFocusPreferences } from '../src/shared/readingFocusPreferences';
+import type { ReadingExpression } from '../src/shared/readingExpressions';
+import { createReadingWordPopover, type ReadingWordPopover } from '../src/content/readingWordPopover';
+import type { PageReadingTaskView } from '../src/shared/pageReadingFocus';
+import { translateLocallyWhenReady } from '../src/sidepanel/localTranslator';
+import { translationInputFromCapture, type WordTranslationResult, type TranslationService } from '../src/shared/wordTranslation';
+import { startWordSpeechPlayback } from '../src/sidepanel/wordSpeechPlayback';
 
 const MIN_SELECTION_LENGTH = 2;
 const MAX_SELECTION_LENGTH = 8_000;
@@ -81,9 +91,8 @@ export default defineContentScript({
       .selection-bubble:focus-visible { outline-offset: -3px; }
       button:focus-visible { outline: 2px solid #315eea; outline-offset: 2px; }
       .selection-mark { color: #315eea; font-size: 15px; font-weight: 700; }
-      .word-save { width: 96px; flex-basis: 96px; color: #28624b; border-right: 1px solid rgba(32, 33, 36, .1); }
-      .word-save[hidden] { display: none; }
-      .word-save:disabled { cursor: default; }
+      .selection-bubble[hidden] { display: none; }
+      .selection-lookup { border-right: 1px solid rgba(32, 33, 36, .1); }
 
       .smart-layer {
         position: fixed;
@@ -179,12 +188,12 @@ export default defineContentScript({
     selectionButton.type = 'button';
     selectionButton.setAttribute('aria-label', '引用所选文字到页脉');
     selectionButton.innerHTML = '<span class="selection-mark">“</span><span>引用</span>';
-    const wordButton = document.createElement('button');
-    wordButton.className = 'selection-bubble word-save';
-    wordButton.type = 'button';
-    wordButton.textContent = '收藏单词';
-    wordButton.setAttribute('aria-live', 'polite');
-    selectionToolbar.append(wordButton, selectionButton);
+    const lookupButton = document.createElement('button');
+    lookupButton.className = 'selection-bubble selection-lookup';
+    lookupButton.type = 'button';
+    lookupButton.textContent = '查词';
+    lookupButton.hidden = true;
+    selectionToolbar.append(lookupButton, selectionButton);
 
     const smartLayer = document.createElement('div');
     smartLayer.className = 'smart-layer';
@@ -207,6 +216,144 @@ export default defineContentScript({
     const smartOutline = smartLayer.querySelector('.smart-outline') as HTMLDivElement;
     shadow.append(style, selectionToolbar, smartLayer);
     document.documentElement.append(host);
+
+    let wordPopover: ReadingWordPopover | null = null;
+    let wordSpeech: ReturnType<typeof startWordSpeechPlayback> | null = null;
+    ctx.onInvalidated(() => wordSpeech?.cancel());
+    const getWordPopover = () => wordPopover ??= createReadingWordPopover(shadow, {
+      lookup: async (word) => {
+        const response = await browser.runtime.sendMessage({ type: 'reading-focus:lookup', word }) as { ok?: boolean; meaning?: string | null; error?: string };
+        if (!response?.ok) throw new Error(response?.error || '词库暂时不可用。');
+        return response.meaning ?? null;
+      },
+      save: async (capture) => {
+        const result = capture.expression ? await collectExpression(capture) : await collectWord(capture);
+        if (capture.expression) void focusToolbar?.refreshSavedExpressions();
+        return result;
+      },
+      translate: translateLocallyWhenReady,
+      pronunciation: async (word) => {
+        const response = await browser.runtime.sendMessage({ type: 'reading-focus:lookup', word }) as { pronunciation?: string | null };
+        return response.pronunciation ?? null;
+      },
+      speak: (word) => new Promise<void>((resolve, reject) => {
+        wordSpeech?.cancel();
+        if (typeof speechSynthesis === 'undefined') { reject(new Error('英语语音暂不可用。')); return; }
+        wordSpeech = startWordSpeechPlayback({ engine: speechSynthesis, createUtterance: text => new SpeechSynthesisUtterance(text), text: word, rate: .9,
+          voice: speechSynthesis.getVoices().find(voice => voice.lang === 'en-US' && voice.localService) ?? null,
+          isCurrent: () => !ctx.isInvalid, onStart: () => undefined,
+          onFinish: issue => issue ? reject(new Error(issue)) : resolve(),
+        });
+      }),
+      enrich: async (capture, service) => {
+        const response = await browser.runtime.sendMessage({ type: 'word-translation:lookup', input: translationInputFromCapture(capture, service) }) as { ok?: boolean; result?: WordTranslationResult; error?: string };
+        if (!response?.ok || !response.result) throw new Error(response?.error || '翻译暂时不可用。');
+        return response.result;
+      },
+      getService: async () => {
+        const response = await browser.runtime.sendMessage({ type: 'word-translation:preference' }) as { service?: TranslationService };
+        return response?.service ?? 'auto';
+      },
+      openSettings: () => { void browser.runtime.sendMessage({ type: 'word-translation:settings' }); },
+    });
+    let focusPreferences = { ...DEFAULT_READING_FOCUS_PREFERENCES };
+    let latestFocusStatus: ReadingFocusStatus = { enabled: false, count: 0, phase: 'off' };
+    let focusToolbar: ReturnType<typeof createReadingFocusToolbar> | undefined;
+    let preferenceSave: Promise<void> = Promise.resolve();
+    let toggleRevision = 0;
+    const preferencesReady = browser.runtime.sendMessage({ type: 'reading-focus:preferences-get' }).then((stored: { ok?: boolean; preferences?: unknown }) => {
+      if (stored?.ok) focusPreferences = normalizeReadingFocusPreferences(stored.preferences);
+    }).catch(() => undefined);
+    const saveFocusPreferences = (preferences: ReadingFocusPreferences) => {
+      const value = normalizeReadingFocusPreferences(preferences);
+      preferenceSave = preferenceSave.catch(() => undefined).then(async () => {
+        const result = await browser.runtime.sendMessage({ type: 'reading-focus:preferences-set', preferences: value }) as { ok?: boolean; error?: string };
+        if (!result?.ok) throw new Error(result?.error || '阅读设置未能保存。');
+      });
+      return preferenceSave;
+    };
+    const publishFocusStatus = (status: ReadingFocusStatus) => {
+      latestFocusStatus = status;
+      focusToolbar?.update(status, focusPreferences);
+      if (!status.enabled) { wordPopover?.destroy(); wordPopover = null; }
+      void browser.runtime.sendMessage({ type: 'reading-focus:changed' }).catch(() => undefined);
+    };
+    const showReadingExpression = (expression: ReadingExpression, index: number, range: Range) => {
+      if (!readingFocus.enabled) return;
+      const occurrence = expression.occurrences[index];
+      if (!occurrence || range.toString() !== occurrence.text) return;
+      hideSelectionButton();
+      getWordPopover().show({ word: occurrence.text, sentence: occurrence.sentence,
+        highlightStart: occurrence.highlightStart, highlightEnd: occurrence.highlightEnd,
+        meaning: expression.meaning, expression: { name: expression.text },
+        source: { kind: 'page', title: (document.title || location.hostname).slice(0, 500), url: location.href },
+      }, range.getBoundingClientRect());
+    };
+    const readingFocus = createReadingFocus({
+      prepare: async (snapshot, retry, mode) => {
+        const response = await browser.runtime.sendMessage({ type: 'reading-focus:page-prepare', snapshot, retry, mode }) as { ok?: boolean; task?: PageReadingTaskView; error?: string };
+        if (!response?.ok || !response.task) throw new Error(response?.error || '无法开始文章分析，请重试。');
+        return response.task;
+      },
+      getTask: async (id) => {
+        const response = await browser.runtime.sendMessage({ type: 'reading-focus:page-status', id }) as { ok?: boolean; task?: PageReadingTaskView; error?: string };
+        if (!response?.ok || !response.task) throw new Error(response?.error || '暂时无法读取分析状态，请重新开启。');
+        return response.task;
+      },
+      stopTask: async (id) => {
+        const response = await browser.runtime.sendMessage({ type: 'reading-focus:page-stop', id }) as { ok?: boolean; task?: PageReadingTaskView; error?: string };
+        if (!response?.ok || !response.task) throw new Error(response?.error || '无法确认分析是否停止，请检查 WorkOS。');
+        return response.task;
+      },
+      onStatus: publishFocusStatus,
+      onExpressions: (items) => focusToolbar?.setExpressions(items),
+      onGroupHover: (value) => focusToolbar?.groupHint(value),
+      onExpressionClick: (expression, index) => {
+        hideSelectionButton(); wordPopover?.hide();
+        focusToolbar?.openExpression(expression.id, index);
+      },
+      onGroupClick: (group) => focusToolbar?.groupDetails(group),
+    });
+    focusToolbar = createReadingFocusToolbar(shadow, {
+      onExit: () => { toggleRevision++; readingFocus.disable(); wordPopover?.hide(); hideSelectionButton(); },
+      onStart: createReadingFocusSetupStart({
+        revision: () => toggleRevision,
+        url: () => location.href,
+        save: saveFocusPreferences,
+        activate: (preferences) => {
+          focusPreferences = preferences;
+          readingFocus.setPreferences(preferences);
+          readingFocus.enable();
+        },
+      }),
+      onPreferences: (preferences) => {
+        focusPreferences = preferences;
+        readingFocus.setPreferences(preferences);
+        void saveFocusPreferences(preferences).catch(() => focusToolbar?.update({ ...latestFocusStatus, message: '设置未能保存，请重新调整。' }, preferences));
+      },
+      onStop: () => { void readingFocus.stop(); },
+      onRetry: () => { void readingFocus.retry(); },
+      onScan: (retry) => { void readingFocus.scanExpressions(retry); },
+      onStopExpressions: () => { void readingFocus.stopExpressions(); },
+      onLocate: (id, index) => { readingFocus.locateExpression(id, index); },
+      getSavedExpressions: (names) => getCollectedExpressions(location.href, names),
+      onSaveExpression: async (id, index) => {
+        const expression = readingFocus.expressions.find(item => item.id === id);
+        const occurrence = expression?.occurrences[index];
+        const range = readingFocus.getExpressionRange(id, index);
+        if (!expression || !occurrence || !range || range.toString() !== occurrence.text) throw new Error('正文已变化，请重新开启辅助阅读。');
+        return collectExpression({ word: occurrence.text, sentence: occurrence.sentence,
+          highlightStart: occurrence.highlightStart, highlightEnd: occurrence.highlightEnd,
+          meaning: expression.meaning, expression: { name: expression.text },
+          source: { kind: 'page', title: (document.title || location.hostname).slice(0, 500), url: location.href },
+        });
+      },
+      onLookup: (id, index) => {
+        const range = readingFocus.locateExpression(id, index);
+        const expression = readingFocus.expressions.find((item) => item.id === id);
+        if (range && expression) showReadingExpression(expression, index, range);
+      },
+    });
 
     let currentQuote: QuoteReference | null = null;
     let currentCapture: WordCardCapture | null = null;
@@ -233,7 +380,7 @@ export default defineContentScript({
     const showSelectionButton = (rect: DOMRect, quote: QuoteReference, capture: WordCardCapture | null = null) => {
       currentQuote = quote;
       currentCapture = capture;
-      const width = Math.min(capture ? 162 : 66, Math.max(0, window.innerWidth - 16));
+      const width = Math.min(capture ? 130 : 66, Math.max(0, window.innerWidth - 16));
       const height = 34;
       const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
       const preferredTop = rect.bottom + 8;
@@ -243,10 +390,7 @@ export default defineContentScript({
       selectionToolbar.style.width = `${width}px`;
       selectionToolbar.style.left = `${Math.round(left)}px`;
       selectionToolbar.style.top = `${Math.round(top)}px`;
-      wordButton.textContent = '收藏单词';
-      wordButton.title = '保存单词和当前原句';
-      wordButton.disabled = false;
-      wordButton.hidden = !capture;
+      lookupButton.hidden = !capture;
       selectionToolbar.dataset.visible = 'true';
     };
 
@@ -388,6 +532,10 @@ export default defineContentScript({
     };
 
     const startSmartSelection = () => {
+      toggleRevision++;
+      focusToolbar?.cancelSetup();
+      readingFocus.disable();
+      wordPopover?.hide();
       hideSelectionButton();
       window.getSelection()?.removeAllRanges();
       smartSelectionPhase = transitionSmartSelectionPhase(smartSelectionPhase, 'start');
@@ -435,7 +583,7 @@ export default defineContentScript({
       const capture = captureWordSelection(selection, { kind: 'page', title: quote.pageTitle, url: quote.pageUrl });
       const status = await browser.runtime.sendMessage<ExtensionRequest, PanelStatusResponse>({ type: 'panel:status' }).catch(() => ({ open: false, bubbleEnabled: true, wordCollectionEnabled: true }));
       if (revision !== selectionRevision) return;
-      if (capture && status?.wordCollectionEnabled !== false) {
+      if (capture && (status?.wordCollectionEnabled !== false || readingFocus.enabled)) {
         showSelectionButton(rect, quote, capture);
         return;
       }
@@ -491,6 +639,7 @@ export default defineContentScript({
       softNavigationPending = false;
       const page = getPageMetadata();
       if (!shouldPublishPageChange(lastPageSignature, page, forcedByNavigation)) return;
+      if (forcedByNavigation) { toggleRevision++; focusToolbar?.cancelSetup(); readingFocus.disable(); wordPopover?.hide(); hideSelectionButton(); }
       lastPageSignature = pageChangeSignature(page);
       const event: ExtensionEvent = { type: 'page:changed', page };
       void browser.runtime.sendMessage(event).catch(() => undefined);
@@ -535,21 +684,12 @@ export default defineContentScript({
     }
 
     selectionToolbar.addEventListener('pointerdown', (event) => event.preventDefault());
-    wordButton.addEventListener('click', () => {
+    lookupButton.addEventListener('click', () => {
+      if (!currentCapture) return;
       const capture = currentCapture;
-      if (!capture || wordButton.disabled) return;
-      wordButton.disabled = true;
-      wordButton.textContent = '收藏中…';
-      void collectWord(capture).then((result) => {
-        if (capture !== currentCapture) return;
-        wordButton.textContent = result.alreadySaved ? '已收藏' : '收藏成功';
-        wordButton.title = '已保存到页脉单词本';
-      }).catch((error: unknown) => {
-        if (capture !== currentCapture) return;
-        wordButton.disabled = false;
-        wordButton.textContent = '重试收藏';
-        wordButton.title = error instanceof Error ? error.message : '收藏失败，请重试';
-      });
+      const rect = window.getSelection()?.rangeCount ? window.getSelection()!.getRangeAt(0).getBoundingClientRect() : selectionToolbar.getBoundingClientRect();
+      hideSelectionButton();
+      getWordPopover().show(capture, rect);
     });
     selectionButton.addEventListener('click', () => {
       const quote = currentQuote;
@@ -606,6 +746,28 @@ export default defineContentScript({
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     const messageListener = (message: ContentRequest, _sender: unknown, sendResponse: (response: unknown) => void) => {
+      if (message?.type === 'reading-focus:toggle') {
+        if (smartSelectionPhase !== 'inactive') finishSmartSelection('cancelled');
+        hideSelectionButton();
+        const revision = ++toggleRevision;
+        if (readingFocus.enabled) { sendResponse(readingFocus.disable()); return false; }
+        void preferencesReady.then(() => {
+          if (revision !== toggleRevision) { sendResponse({ ...latestFocusStatus }); return; }
+          readingFocus.setPreferences(focusPreferences);
+          if (!focusPreferences.initialized) {
+            focusToolbar?.openSettings(true, focusPreferences);
+            sendResponse({ ...latestFocusStatus, message: '请先设置阅读偏好。' });
+          } else {
+            const status = readingFocus.enable();
+            sendResponse({ ...status, error: !status.enabled && status.phase !== 'off' ? status.message : undefined });
+          }
+        });
+        return true;
+      }
+      if (message?.type === 'reading-focus:status') {
+        sendResponse({ ...latestFocusStatus, enabled: readingFocus.enabled });
+        return false;
+      }
       if (message?.type === 'page:get-metadata') {
         sendResponse({ page: getPageMetadata() });
         return false;
@@ -642,10 +804,20 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener(messageListener);
     const onSelectionSettingsChanged = (changes: Record<string, unknown>, area: string) => {
       if (area === 'local' && (WORD_COLLECTION_ENABLED_KEY in changes || 'selectionBubbleEnabled' in changes)) scheduleInspection();
+      if (area === 'local' && READING_FOCUS_PREFERENCES_KEY in changes) {
+        const change = changes[READING_FOCUS_PREFERENCES_KEY] as { newValue?: unknown };
+        focusPreferences = normalizeReadingFocusPreferences(change.newValue);
+        readingFocus.setPreferences(focusPreferences);
+        focusToolbar?.update(latestFocusStatus, focusPreferences);
+      }
     };
     browser.storage.onChanged.addListener(onSelectionSettingsChanged);
 
     ctx.onInvalidated(() => {
+      toggleRevision++;
+      readingFocus.destroy();
+      focusToolbar?.destroy();
+      wordPopover?.destroy();
       browser.runtime.onMessage.removeListener(messageListener);
       browser.storage.onChanged.removeListener(onSelectionSettingsChanged);
       hideSelectionButton();

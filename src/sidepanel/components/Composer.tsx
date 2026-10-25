@@ -8,6 +8,7 @@ import { finishUiPerformanceMeasure } from '../performanceTelemetry';
 import { ContextWorkbench } from './ContextWorkbench';
 import { IconTooltipButton } from './IconTooltipButton';
 import { KoboyoIcon } from './KoboyoIcon';
+import { ReadingFocusButton } from './ReadingFocusButton';
 
 interface ComposerProps {
   tabs: OpenConversationTab[];
@@ -470,6 +471,7 @@ export function Composer({
               >
                 <KoboyoIcon name="selection" size={17} />
               </IconTooltipButton>
+              <ReadingFocusButton />
               {onOpenBatchReading && <IconTooltipButton className="composer-tool pressable" type="button"
                 aria-haspopup="dialog" aria-label="批量阅读" tooltip="批量阅读"
                 onClick={() => { inputBuffer.flush((latest) => inputCommitCallbackRef.current(latest)); onOpenBatchReading(); }}>

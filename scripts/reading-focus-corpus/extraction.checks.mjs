@@ -1,0 +1,21 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { resolve, join } from 'node:path';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+test('production extractor reads MDX paragraph spans once and leaves controls outside', {timeout:180000}, async()=>{
+  const child=spawn(process.execPath,['scripts/capture-reading-focus-corpus.mjs','--url','https://reading-quality.invalid/mdx-regression','--id','mdx-span-regression','--html','scripts/reading-focus-corpus/mdx-spans.html','--browser-channel','chrome'],{cwd:root,stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='';child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);
+  const code=await new Promise((resolveCode,reject)=>{child.on('error',reject);child.on('exit',resolveCode);});
+  assert.equal(code,0,stderr);
+  const result=JSON.parse(stdout.trim().split('\n').at(-1));
+  const snapshot=JSON.parse(await readFile(join(result.output,'snapshot.json'),'utf8'));
+  assert.equal(result.state,'captured');assert.equal(snapshot.paragraphs.length,3);
+  assert.equal(snapshot.paragraphs[0].text,'Read a document without changing the original links.');
+  assert.equal(snapshot.paragraphs[2].text,'A list introduction. This nested explanation belongs to the same list item.');
+  assert.ok(snapshot.paragraphs.every(p=>!p.text.includes('helpful')&&!p.text.includes('hidden')&&!p.text.includes('button')&&!p.text.includes('unrelated')));
+  const capture=JSON.parse(await readFile(resolve(result.output,'capture.json'),'utf8'));
+  assert.equal(capture.evidence,'saved-rendered-html-replay');assert.equal(capture.selectedRoot.domId,'content');
+});

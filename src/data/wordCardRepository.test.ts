@@ -19,6 +19,48 @@ const capture: WordCardCapture = {
 afterEach(async () => { await Promise.all(databases.splice(0).map((database) => database.delete())); });
 
 describe('word card repository', () => {
+  it('preserves Baidu sentence source on explicit acceptance and still protects later manual clearing', async () => {
+    const { repository } = setup();
+    const { card } = await repository.saveCapture(capture);
+    const translated = await repository.updateSentenceTranslation(card.id, '代理处理难以预测的流程。', card.updatedAt, undefined, 'baidu');
+    expect(translated.sentenceTranslationSource).toBe('baidu');
+    const cleared = await repository.updateSentenceTranslation(card.id, '', translated.updatedAt);
+    expect(cleared.sentenceTranslationSource).toBe('manual');
+    expect(await repository.enrich(card.id, card.captureKey, { sentenceTranslation: '不能覆盖手动清空', sentenceTranslationSource: 'baidu' })).toEqual(cleared);
+  });
+  it('saves one learning expression across concurrent instances and keeps the first selected example', async () => {
+    const { database, repository } = setup();
+    const secondDatabase = new YemaiDatabase(database.name);
+    try {
+      const second = new WordCardRepository(secondDatabase);
+      const expression = { ...capture, expression: { name: 'BE responsible for' }, meaning: 'first meaning', meaningSource: 'manual' as const };
+      const otherInstance = { ...expression, sentence: 'A different unpredictable example.', meaning: 'replacement', source: { ...capture.source, url: `${capture.source.url}#details` }, expression: { name: 'be responsible for' } };
+      const results = await Promise.all([repository.saveExpressionCapture(expression), second.saveExpressionCapture(otherInstance)]);
+      expect(results.filter((result) => !result.alreadySaved)).toHaveLength(1);
+      expect(results[0]!.card.id).toBe(results[1]!.card.id);
+      const first = results.find((result) => !result.alreadySaved)!.card;
+      expect((await repository.saveExpressionCapture(otherInstance)).card).toEqual(first);
+      expect(await database.wordCards.count()).toBe(1);
+      expect(await repository.getCollectedExpressions(capture.source.url!, ['be responsible for', 'not saved'])).toEqual(['be responsible for']);
+      expect(await repository.getCollectedExpressions('https://other.example/article', ['be responsible for'])).toEqual([]);
+      await repository.saveExpressionCapture({ ...expression, source: { ...capture.source, url: 'https://other.example/article' } });
+      expect(await database.wordCards.count()).toBe(2);
+    } finally { secondDatabase.close(); }
+  });
+
+  it('keeps ordinary captures separate and never adopts or rewrites a legacy word card', async () => {
+    const { database, repository } = setup();
+    const ordinary = await repository.saveCapture(capture);
+    const expression = await repository.saveExpressionCapture({ ...capture, expression: { name: 'unpredictable' } });
+    expect(expression.card.id).not.toBe(ordinary.card.id);
+    expect(await database.wordCards.get(ordinary.card.id)).toEqual(ordinary.card);
+    await repository.saveCapture({ ...capture, sentence: 'This unpredictable case is another sentence.' });
+    expect(await database.wordCards.count()).toBe(3);
+    const cleared = await repository.updateMeaning(expression.card.id, '', 'manual');
+    const later = await repository.saveExpressionCapture({ ...capture, sentence: 'Another unpredictable example.', meaning: 'cannot replace', expression: { name: 'UNPREDICTABLE' } });
+    expect(later).toEqual({ alreadySaved: true, card: cleared });
+  });
+
   it('upgrades a real v4 database without replacing existing tables or content', async () => {
     const { database } = setup();
     const legacy = new Dexie(database.name);

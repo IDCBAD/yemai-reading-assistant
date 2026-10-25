@@ -32,6 +32,15 @@ function selection(word: string, start: TreeNode, startOffset: number, end = sta
 }
 
 describe('word selection capture', () => {
+  it('captures a long technical expression with its actual sentence offsets', () => {
+    const expression = 'at least one complete MPEG frame';
+    const node = text(`The output needs ${expression} to qualify.`);
+    new TreeNode('p').append(node);
+    const result = captureWordSelection(selection(expression, node, 17), source)!;
+    expect(result).toMatchObject({ word: expression, sentence: node.textContent, highlightStart: 17,
+      highlightEnd: 17 + expression.length });
+    expect(isWordCardCapture(result)).toBe(true);
+  });
   it('keeps the second occurrence highlighted and preserves inline words', () => {
     const before = text('Agents run tasks. Agents ');
     const selected = text('run');

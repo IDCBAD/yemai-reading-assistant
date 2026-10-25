@@ -14,13 +14,14 @@ export default defineConfig({
       minimum_chrome_version: '116',
       permissions: ['sidePanel', 'storage', 'favicon', 'notifications'],
       host_permissions: [
+        'https://fanyi-api.baidu.com/*',
         'https://workos.yingdao.com/*',
         'https://power-api.yingdao.com/*',
         'https://workos-api.yingdao.com/*',
         'https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com/*',
       ],
       content_security_policy: {
-        extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://power-api.yingdao.com https://workos-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
+        extension_pages: "script-src 'self'; object-src 'self'; connect-src 'self' https://fanyi-api.baidu.com https://power-api.yingdao.com https://workos-api.yingdao.com https://winrobot-ai-power.oss-cn-hangzhou.aliyuncs.com; img-src 'self' data: blob: https:",
         sandbox: "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
       },
       action: {

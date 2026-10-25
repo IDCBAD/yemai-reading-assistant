@@ -27,6 +27,7 @@ export type KoboyoIconName =
   | 'paperclip'
   | 'plus'
   | 'quote'
+  | 'reading'
   | 'search'
   | 'send'
   | 'selection'

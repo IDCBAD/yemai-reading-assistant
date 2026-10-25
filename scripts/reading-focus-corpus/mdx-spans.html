@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><head><title>MDX paragraph regression fixture</title></head><body>
+<main><header><div class="prose"><p>Documentation heading summary should stay outside the article.</p></div></header>
+<div id="content" class="mdx-content prose">
+<span data-as="p">Read a <a href="https://example.org">document</a> without changing the original links.</span>
+<span data-as="p">If the provider is unavailable, keep the original text visible.</span>
+<span data-as="li">A list introduction. <span data-as="p">This nested explanation belongs to the same list item.</span></span>
+<span data-as="p" hidden>This hidden paragraph must never become reading input.</span>
+<span data-as="p">A control container <button>Do not send this button paragraph</button></span>
+</div><div class="feedback-toolbar"><p>Was this page helpful?</p><button>Yes</button></div>
+<span data-as="p">An unrelated span outside MDX should not be considered a paragraph.</span>
+</main></body></html>
